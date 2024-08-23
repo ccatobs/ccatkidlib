@@ -9,7 +9,15 @@ import rfsoc_io
 import plot_utils
 
 class Timestream:
-    def __init__(self, stream_file, tone_num, cfg_file = None, cfg_io_file = None):
+    def __init__(self, stream_file, tone_num, cfg_file, cfg_io_file = None, **kwargs):
+        '''
+        '''
+
+        self.output = True
+        for key, value in kwargs.items():
+            if key  == 'output':
+                self.output = value
+
         # Load timestream file
         # --------------------
         data = np.load(stream_file, allow_pickle=True) 
@@ -17,28 +25,25 @@ class Timestream:
 
         # Try to load cfg file(s)
         # -----------------------
-        if cfg_file:
-            self.cfg = rfsoc_io.load_config(cfg_file)
-        else:
-            self.cfg = None
+        self.cfg = rfsoc_io.load_config(cfg_file)
 
         if cfg_io_file:
             self.cfg_io = rfsoc_io.load_config(cfg_io_file)
         else:
             self.cfg_io = None
 
-        #print(self.cfg)
-
-        # Try to get tone information
-        # ---------------------------
+        # Define commonly used parameters
+        # ----------------------------
         try:
-            self.tone_freq = self.cfg['rfsoc_tones']['tone_freqs'][tone_num]
-            self.tone_power = self.cfg['rfsoc_tones']['tone_powers'][tone_num]
-            self.tone_phi = self.cfg['rfsoc_tones']['tone_phis'][tone_num]
+            self.output = self.cfg_io['io']['terminal_output']
         except:
-            self.tone_freq = None
-            self.tone_power = None
-            self.tone_phi = None
+            self.output = True
+
+        # Get tone information
+        # ---------------------------
+        self.tone_freq = self.cfg['rfsoc_tones']['tone_freqs'][tone_num]
+        self.tone_power = self.cfg['rfsoc_tones']['tone_powers'][tone_num]
+        self.tone_phi = self.cfg['rfsoc_tones']['tone_phis'][tone_num]
 
         # Determine stream times based on sampling freq
         # ---------------------------------------------
