@@ -52,7 +52,7 @@ def main():
 
     # Rotate grid and take timestream data
     rfsoc_io.send_msg('INFO', '========================Starting Data Acquisition==============================', output)
-    acquire_data(P, R, args)
+    #acquire_data(P, R, args)
 
 def tune_detectors(R, cfg, cfg_io, args):
     # Find detectors and set tones

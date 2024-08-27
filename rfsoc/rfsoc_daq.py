@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 import numpy as np
 import time
+
 import rfsoc_io
 import utils
 
@@ -19,8 +20,11 @@ class R:
         RFSoC PCS agent.
         '''
 
-        # Create session id from first five digits of current time
-        self.sess_id = str(time.time())[:5] 
+        # Current date in yyyy/mm/dd
+        curr_date = time.strftime('%Y%m%d', time.gmtime())
+
+        # Create session id from first ten digits of current time
+        self.sess_id = str(time.time())[:10]
 
         # Create a global timestamp used for file naming and pairing
         self.timestamp = str(time.time()).split('.')[0]
@@ -43,21 +47,12 @@ class R:
         self.data_dir = Path(self.cfg_io['file_paths']['base_data_dir'])
         self.tmp_data_dir = Path(self.cfg_io['file_paths']['tmp_data_dir'])
 
-        # Check if session ID is unique
-        sess_folder = self.data_dir / 'timestream' / self.sess_id
-        curr_it = 1
-        curr_id = self.sess_id
-        while sess_folder.exists():
-            curr_id = self.sess_id + f'.{curr_it}'
-            sess_folder = self.data_dir / 'timestream' / curr_id
-            curr_it += 1
-
         # Save session ID to config files
         self.edit_config(self.cfg, 'sess_id', self.sess_id)
         self.edit_config(self.cfg_io, 'sess_id', self.sess_id)
 
         # Create book directories inside data_dir
-        new_dir_paths = rfsoc_io.create_book(self.sess_id, self.com_to, self.data_dir, output = self.output)
+        new_dir_paths = rfsoc_io.create_book(curr_date, self.sess_id, self.com_to, self.data_dir, output = self.output)
         self.rfsoc_dir, self.targ_dir, self.timestream_dir, self.vna_dir = new_dir_paths
 
         # Setup logger
@@ -139,7 +134,7 @@ class R:
 
         # Set timestamp to current time and save config
         self.timestamp = str(time.time()).split('.')[0]
-        self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"config_vna_{self.timestamp}.yaml", self.cfg, self.save_cfg)
+        self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"{self.timestamp}_vna_config.yaml", self.cfg, self.save_cfg)
         
         if self.save_data:
             fname = self.cfg_io["file_names"]["vna_fname"]
@@ -195,7 +190,7 @@ class R:
         
         # Set timestamp to current time and save config
         self.timestamp = str(time.time()).split('.')[0]
-        self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"config_targ_{self.timestamp}.yaml", self.cfg, self.save_cfg)
+        self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"{self.timestamp}_targ_config.yaml", self.cfg, self.save_cfg)
         
         if self.save_data:
             fname = self.cfg_io["file_names"]["targ_fname"]
@@ -254,7 +249,7 @@ class R:
         
         # Set timestamp to current time and save config
         self.timestamp = str(time.time()).split('.')[0]
-        self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"config_stream_{self.timestamp}.yaml", self.cfg, self.save_cfg)
+        self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"{self.timestamp}_stream_config.yaml", self.cfg, self.save_cfg)
 
         if self.save_data:
             return self.save_timestream(s21z)
@@ -587,6 +582,15 @@ class R:
     ###################
     # Getters/Setters #
     ###################
+    def reload_config(self, cfg_path = "./config.yaml"):
+        cfg = rfsoc_io.load_config(cfg_path)
+        try:
+            self.cfg, self.cfg_io = cfg
+        except:
+            self.cfg = cfg
+            self.cfg_io = None
+        return self.cfg, self.cfg_io
+
     def get_main_config(self):
         return self.cfg
     

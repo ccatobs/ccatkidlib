@@ -11,23 +11,30 @@ import yaml
 # Directory IO Functions #
 ##########################
 
-def create_book(sess_id, com_to, data_dir, output = False):
+def create_book(curr_date, sess_id, com_to, data_dir, output = False):
     '''
     Create book for storage of timestream, sweep, and other (e.g., config) data.
 
     Parameters:
         sess_id (int): ID of current observing session
-        com_to (int): Board and drone ID of RFSoC in form board.drone
+        com_to (float): Board and drone ID of RFSoC in form board.drone
         data_dir (str): Path of directory in which to store data
     '''
+
+    # Try to split com_to into board and drone
+    try:
+        board, drone = com_to.split('.')
+        com_str = f'B{board}D{drone}'
+    # If can't split com_to, assume com_to is just the a board id
+    except:
+        com_str = com_to
+
+    # Define data directories
     data_dir = Path(data_dir)
-    timestream_dir = data_dir / 'timestream' / sess_id / com_to
-    vna_dir = data_dir / 'vna' / sess_id / com_to
-    targ_dir = data_dir / 'targ' / sess_id / com_to
-    rfsoc_dir = data_dir / 'rfsoc'  / sess_id / com_to
-    
-    sess_id = str(sess_id)
-    com_to = str(com_to)
+    timestream_dir = data_dir / 'timestream' / curr_date / com_str / sess_id
+    vna_dir = data_dir / 'vna' / curr_date / com_str / sess_id
+    targ_dir = data_dir / 'targ' / curr_date / com_str / sess_id
+    rfsoc_dir = data_dir / 'rfsoc'  / curr_date / com_str / sess_id
 
     # Create timestream directory
     create_dir(timestream_dir, output = output)
