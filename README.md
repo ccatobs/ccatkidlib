@@ -94,11 +94,11 @@ All output files can be found in the `/data` directory whose location is specifi
 - `/fig` - Stores output figures
 
 All directories except `/tmp` have the following additional substructure:
-- `/20240828` - Current date
-    - `/B1D1`- RFSoC Board number, drone number
+- `/20240828` - Current date in yyyymmdd format
+    - `/B1D1`- RFSoC board number, drone number
         - `/1724940799` - 10 digit UNIX timestamp when `R` was initialized
 
-The output filenames for VNA sweeps, target sweeps, and timestreams can be specified in the config file, but the time the operation was performed is always appended to the filename. After each of these three operations, a snapshot of the configuration file is saved with the filename containing an identical timestamp as the output data file.
+The output filenames for VNA sweeps, target sweeps, and timestreams can be specified in the config file, but the time the operation was performed is always appended to the filename. After each of these three operations, a snapshot of the configuration file is saved with the filename containing an identical timestamp as the output data filename.
 
 The output data is stored as follows for the three operations.
 
