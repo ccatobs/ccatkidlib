@@ -73,9 +73,13 @@ class R:
         self.rfsoc = OCSClient(self.cfg_io['pcs_agents']['rfsoc_agent'], args=[])
         rfsoc_io.send_msg('INFO', f'Initialized RFSoC agent. Communicating with drone: {self.com_to}', self.output)
 
-        # Initialize timestream client
-        self.streamer = TimeStream(self.cfg_io['rfsoc_io']['udp_ip'], 
+        # Attempt Initialize timestream client
+        try:
+            self.streamer = TimeStream(self.cfg_io['rfsoc_io']['udp_ip'], 
                                    self.cfg_io['rfsoc_io']['udp_port'])
+        except:
+            rfsoc_io.send_msg('INFO', 'Another instance of rfsoc_daq.py is already running! Please close this instance and try again.', self.output)
+            sys.exit()
 
         # Set NCLO frequency of RFSoC
         rtn = self.rfsoc.setNCLO(com_to = self.com_to, f_lo = self.cfg['rfsoc_tones']['drone_NCLO'])
@@ -84,8 +88,8 @@ class R:
         rfsoc_io.send_msg('INFO', f"Set NCLO to {self.cfg['rfsoc_tones']['drone_NCLO']} MHz!", self.output)
 
         # Save init config
-        rfsoc_io.save_config(self.rfsoc_dir / 'init_config.yaml', self.cfg, self.save_cfg)
-        rfsoc_io.save_config(self.rfsoc_dir / 'init_config_io.yaml', self.cfg_io, self.save_cfg)
+        rfsoc_io.save_config(self.rfsoc_dir / f'{self.timestamp}_init_config.yaml', self.cfg, self.save_cfg)
+        rfsoc_io.save_config(self.rfsoc_dir / f'{self.timestamp}_init_config_io.yaml', self.cfg_io, self.save_cfg)
 
     ##############################
     # Data Acquisition Functions #
@@ -221,15 +225,16 @@ class R:
         '''
 
         write_tones = True
+        save_data = self.save_data
         for key, value in kwargs.items():
             if key == 'write_tones':
                 write_tones = value
-
+            elif key == 'save_data':
+                save_data = value
 
         # Write new tones
         if write_tones:
             self.write_config_tones(**kwargs)
-        time.sleep(1) # Wait before taking timestream
 
         rfsoc_io.send_msg('INFO', f'Taking {t_sec} seconds of timestream data!', self.output)
 
@@ -246,12 +251,12 @@ class R:
         
         # Cast to an numpy array
         s21z = np.array(s21z)
-        
+
         # Set timestamp to current time and save config
         self.timestamp = str(time.time()).split('.')[0]
-        self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"{self.timestamp}_stream_config.yaml", self.cfg, self.save_cfg)
 
-        if self.save_data:
+        if save_data:
+            self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"{self.timestamp}_stream_config.yaml", self.cfg, self.save_cfg)
             return self.save_timestream(s21z)
         else:
             return s21z
@@ -367,6 +372,7 @@ class R:
         # Write target comb from target sweep
         rtn = self.rfsoc.writeTargCombFromTargSweep(com_to = self.com_to)
         rfsoc_io.send_msg('DEBUG', f'{rtn}', self.output)
+        self.write_config_tones(**kwargs) # Write custom tone powers and phis if provided
 
         rfsoc_io.send_msg('DEBUG', 'Creating custom comb using target comb!', output = self.output)
         # Write target comb to custom comb files

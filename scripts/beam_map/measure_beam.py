@@ -16,7 +16,7 @@ from Sweep import Sweep
 
 def main():
     '''
-    Main method run when 'measure_pol.py' is called directly
+    Main method run when 'measure_beam.py' is called directly
     '''
     
     # Import RFSoC control module
@@ -46,7 +46,7 @@ def main():
 
     # Tune detectors before taking data
     rfsoc_io.send_msg('INFO', '=======================Tuning Detectors=========================', output)
-    tune_detectors(R, cfg, cfg_io, args)
+    #tune_detectors(R, cfg, cfg_io, args)
     rfsoc_io.send_msg('INFO', 'Finished tuning detectors', output)
     rfsoc_io.send_msg('INFO', f"Final Tone Frequencies set to {R.cfg['rfsoc_tones']['tone_freqs']} MHz", output)
 
@@ -58,29 +58,11 @@ def main():
     
     # take one last target sweep for data analysis purposes
     rfsoc_io.send_msg('INFO', '========================Taking Calibration Sweep==============================', output)
-    R.take_target_sweep(write_tones=True)
+    #R.take_target_sweep(write_tones=True)
 
     # Rotate grid and take timestream data
     rfsoc_io.send_msg('INFO', '========================Starting Data Acquisition==============================', output)
     acquire_data(P, R, args)
-
-def determine_shifts(R):
-    output = R.get_io_config()['io']['terminal_output']
-    rfsoc_io.send_msg('INFO', '=======================Determining Tone Shifts=========================', output)
-    targ_dir = R.targ_dir
-    sweep = sorted(targ_dir.glob('*.npy'), key = get_sweep_id)[0]
-    dets = get_dets(sweep, R.rfsoc_dir, dets=R.cfg['rfsoc_tones']['num_tones'])
-    shifts = []
-    for det in dets:
-        s21z_fit = det.fit_sweep(asymm = False, nonlinear = True)
-        f_0 = det.get_fit_params().summary()['best_values']['f_0']
-        Q = det.get_fit_params().summary()['best_values']['Q']
-        a = det.get_fit_params().summary()['best_values']['a']
-        shift = -f_0/Q/2/1e6 * R.cfg['pol_config']['shift_factor']
-        shifts.append(shift)
-    
-    rfsoc_io.send_msg('INFO', f"Tone Shifts Set to: {shifts} MHz", output)
-    return np.array(shifts)
     
 def tune_detectors(R, cfg, cfg_io, args):
     # Find detectors and set tones
@@ -90,10 +72,6 @@ def tune_detectors(R, cfg, cfg_io, args):
     
     # Makes sure that the correct number of resonators are found
     assert len(det_freqs) == cfg['rfsoc_tones']['num_tones'], 'Number of found detectors do not match nominal number of detectors'
-    
-    shifts = cfg['pol_config']['shifts']
-    if shifts == 'None': shifts = determine_shifts(R) * 1e6
-    else: shifts = np.array(shifts) * 1e6
     
     ## Removed shifts for now. 
     # Write a tone at all det_freqs
@@ -114,7 +92,32 @@ def tune_detectors(R, cfg, cfg_io, args):
     R.edit_main_config('tone_freqs', tone_freqs.tolist())
     R.edit_main_config('tone_powers', tone_powers.tolist())
     R.edit_main_config('tone_phis', tone_phis.tolist())
-    R.edit_main_config('shifts', shifts.tolist())
+
+def generate_sweep(args):
+    # generates a list of coordinates for map making
+    center = args.center
+    resolution = args.res
+    num_pixels = args.size
+    coordinates = []
+
+    if args.beamtype == 'rect':
+        center_x, center_y = center
+        num_pixels_x, num_pixels_y = num_pixels
+        
+        # Calculate the starting points
+        start_x = center_x - (num_pixels_x * resolution) / 2
+        start_y = center_y - (num_pixels_y * resolution) / 2
+        
+        for i in range(num_pixels_x):
+            for j in range(num_pixels_y):
+                x = start_x + i * resolution
+                y = start_y + j * resolution
+                coordinates.append((x, y))
+    
+        return coordinates
+    
+    if args.beamtype == 'radial':
+        pass
 
 def acquire_data(P, R, args):
     '''
@@ -125,30 +128,30 @@ def acquire_data(P, R, args):
         t: Length of timestreams in seconds
     '''
 
-    # Create list of angles to iterate over
+    # Create list of positions to create map over
     # -------------------------------------
-    angles = None
-    start, end, num = args.angles
-    if args.num:
-        angles = np.linspace(start, end, num)
-    else:
-        angles = np.arange(start, end + 2*num, num)
+    positions = generate_sweep(args)
+    P.changeStageSpeed(speed=6000)
+
+    # Edit rfsoc config with the arguments inputed
+    # -------------------------------------
+    R.edit_main_config('center', args.center)
+    R.edit_main_config('beam_type', args.beamtype)
+    R.edit_main_config('beam_size', args.res)
 
     # Iterate over angles and take timestream at each angle
     # -----------------------------------------------------
-    with tqdm(range(len(angles) - 1), desc = f'DAQ:') as pbar:
+    with tqdm(range(len(positions)), desc = f'DAQ:') as pbar:
         for i in pbar:
             # Update/add angle to config file
-            R.edit_main_config('angle', float(angles[i]), append = True)
-            pbar.set_postfix_str(f'Current Angle: {angles[i]}')
+            R.edit_main_config('position', positions[i], append = True)
+            pbar.set_postfix_str(f'Position {positions[i]}')
 
-            # Take timestream data (also saves config file)
-            for i in tqdm(range(args.trials), desc = "Trial"):
-                R.take_timestream(args.t, write_tones = False)
+            R.take_timestream(args.t, write_tones = False)
 
-            # Rotate polarizing grid to next angle
-            dtheta = angles[i+1] - angles[i]
-            P.moveStepper(deg=dtheta)
+            # Move xy stage to next position
+            if i == len(positions) - 1: pass
+            else: P.moveStageTo(x=positions[i+1][0], y=positions[i+1][1])
 
             # Wait before taking next timestream
             time.sleep(args.wait)
@@ -156,19 +159,22 @@ def acquire_data(P, R, args):
 def eval_args():
     # Initialize arg parser
     parser = argparse.ArgumentParser(prog='measure_pol',
-                                     description='''Perform polarization measurements on 
-                                     microwave kinetic inductance detectors (MKID) using a rotating
-                                     polarizing grid.''')
+                                     description='''Perform beam mapping on 
+                                     microwave kinetic inductance detectors (MKID) using a automatic
+                                     XY stage''')
     parser.add_argument('t', type = float, help='Length of timestreams in seconds')
-    parser.add_argument('-a', "--angles", nargs = 3, type = float,
-                         default = (0, 360, 1), metavar=('Start', 'End', 'Spacing/Num'), 
-                         help='Angles for which to collect data.')
-    parser.add_argument('-n', "--num", action = 'store_true', 
-                        help='Last value in -a argument is number of angles')
+    parser.add_argument('-T', "--beamtype", default='rect', type = str, help='type of beam map')
+    parser.add_argument('-c', "--center", nargs = 2, type = float,
+                         default = (0, 0), metavar=('X', 'Y'), 
+                         help='Center of Map')
+    parser.add_argument('-s', "--size", nargs = 2, type = float,
+                         default = (4, 4), metavar=('X/R', 'Y/Theta'), 
+                         help='how many pixals in each direction')
+    parser.add_argument('-r', "--res", type= float, default = 1,
+                         help = 'resolution of beam map in mm. If radial beam map then applied in radial direction')
     parser.add_argument('-w', "--wait", type= float, default = 1,
-                         help = 'Time to wait after moving grid before taking timestream.')
-    parser.add_argument('-c', "--cfg", type = str, default='./pol_config.yaml', help='Path of a custom config file.')
-    parser.add_argument('-t', "--trials", type = int, default=1, help='Number of timestreams to take per angle.')
+                         help = 'Time to wait after moving xy stage before taking timestream.')
+    parser.add_argument('-C', "--cfg", type = str, default='./beam_config.yaml', help='Path of a custom config file.')
     return parser.parse_args()
 
 def get_dets(sweep, rfsoc_dir, dets=6):

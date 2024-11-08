@@ -129,7 +129,7 @@ def full_fit(freqs, real, imag, nonlinear = False, asymm = False, fix_cable = Fa
     a_guess = 0.1
     
     if fix_cable:
-        print("Fixing cable...")
+        #print("Fixing cable...")
         A_mag = fix_cable.params['A_mag'].value;
         A_mag_slope = fix_cable.params['A_slope'].value;
         phi_offset = fix_cable.params['phi'].value;
@@ -145,7 +145,7 @@ def full_fit(freqs, real, imag, nonlinear = False, asymm = False, fix_cable = Fa
     #make our model
     if nonlinear:
         #print("Using nonlinear model...")
-        totalmodel = Model(nonlinear_resonator_cable)
+        totalmodel = Model(nonlinear_resonator_cable, nan_policy = 'omit')
         params = totalmodel.make_params(f_0=f_0_guess,
                                 Q=Q_guess,
                                 Q_e_real=Q_e_real_guess,
@@ -213,15 +213,20 @@ def fine_s21_model(freqs_fine, fit_params, asymm = False, cable = False):
 
     if cable:
         totalmodel = Model(general_cable)
+    elif a:
+       totalmodel = Model(nonlinear_resonator_cable, nan_policy = 'omit')
+       #print("Using nonlinear resonator model")
     elif asymm:
         totalmodel = Model(asymm_resonator_cable)
     else:
         totalmodel = Model(resonator_cable)
 
+    '''
     if a:
         totalmodel = Model(nonlinear_resonator_cable)
-        #print("Using nonlinear resonator model")
-
+        print("Using nonlinear resonator model")
+    '''
+    
     params = totalmodel.make_params(**fit_params)
     fine_model = totalmodel.eval(params, f=freqs_fine)
     return fine_model

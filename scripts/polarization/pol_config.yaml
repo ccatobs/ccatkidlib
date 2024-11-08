@@ -8,7 +8,7 @@ rfsoc_tones:
   bandwidth: 5 # Bandwidth of target sweep in MHz
   N_steps: 300 # Number of points per tone
   dB: True # True if tone powers are in dB
-  tone_powers: [61, 62, 69, 76, 66, 65]
+  tone_powers: [61, 62, 69, 75, 66, 65]
   tone_freqs: []
   tone_phis: []
 
@@ -32,7 +32,8 @@ sys_config:
 pol_config:
   centered_dets: None # Which pair of detectors are centered
   angle: None # Current angle of the polarized grid
-  shifts: [-0.07, -0.07, -0.135, 0, -0.15, -0.15] # Shift from detector min frequency in MHz
+  shifts: None # Shift from detector min frequency in MHz. None if wish to use FWHM which shifts by FWHM/2
+  shift_factor: 1.6 # If use FWHM/2, determines what factor of FWHM/2 to shift by. Pos to shift left, Neg to shift right
   source_on: True # Whether the IR source is on
   source_freq: 10 # Frequency of the IR source in Hz
   source_voltage: 8 # Voltage of the IR source in Volts

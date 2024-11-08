@@ -11,6 +11,8 @@ import plot_utils
 class Timestream:
     def __init__(self, stream_file, tone_num, cfg_file, cfg_io_file = None, **kwargs):
         '''
+        Class representing a single timestream taken with a radio frequency system on a chip (RFSoC). Includes 
+        analysis functions for a timestreams of a single microwave kinetic inductance detector (MKID).
         '''
 
         self.output = True
@@ -22,6 +24,8 @@ class Timestream:
         # --------------------
         data = np.load(stream_file, allow_pickle=True) 
         self.s21z = data[tone_num] # Get the stream data of specified tone
+        self.fs = None
+        self.phis = None
 
         # Try to load cfg file(s)
         # -----------------------
@@ -57,6 +61,10 @@ class Timestream:
         self.ts = np.linspace(0, final_t, len(self.s21z))
 
         self.remove_outliers()
+
+        # Some flags to see how processed the timestreams is
+        self.removed_cable = False  # flag for whether removed cable
+        self.centered = False       # flaf for whether centered at origin
         
     ##################
     # Analysis Funcs #
@@ -66,8 +74,15 @@ class Timestream:
         self.ts = self.ts[50:]
         self.s21z = self.s21z[50:]
 
-    def remove_cable_delay():
-        pass
+    def remove_cable_delay(self):
+       pass
+
+    def remove_cable(self, term):
+        '''
+        divides out cable term using the term provided
+        '''
+        self.s21z = self.s21z / term
+        self.removed_cable = True
 
     def fft_stream(self):
         from scipy.fft import fft, fftfreq, fftshift

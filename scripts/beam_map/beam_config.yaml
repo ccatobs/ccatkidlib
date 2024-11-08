@@ -6,17 +6,17 @@ rfsoc_tones:
   drone_NCLO: 625 # Center local oscillator frequency of drone in MHz
   num_tones: 6
   bandwidth: 5 # Bandwidth of target sweep in MHz
-  N_steps: 200 # Number of points per tone
+  N_steps: 300 # Number of points per tone
   dB: True # True if tone powers are in dB
-  tone_powers: [61.0, 61.0, 68.0, 72.0, 66.0, 67.0]
+  tone_powers: [61, 62, 69, 75, 66, 65]
   tone_freqs: []
   tone_phis: []
+
 # Configuration parameters of MKID detectors
 det_config:
   detector_type: "TiN" # Material of detectors
   nominal_num_detectors: 6
   nominal_detector_freqs: [] # Units of Hz
-
   found_num_detectors: None # None if unknown
   found_detector_freqs: None # Array of frequencies in Hz, None if unknown
 
@@ -25,12 +25,22 @@ sys_config:
   cable_delay: None # Units of seconds, None if unknown
   pre_warm_amp_atten: 12 # In dB
   post_warm_amp_atten: 10 # In dB
-
-  nominal_bath_temp: 69.98 # In mK
+  nominal_bath_temp: 80 # In mK
   actual_bath_temp: None # None if unknown
+  
+# Polarization Grid Config
+beam_config:
+  centered_dets: None # Which pair of detectors are centered
+  center: None # Center Coordinates of beam map
+  position: None # Current Position of the Beam Mapper
+  beam_type: None # Type of map that the data produces
+  beam_size: None # resolution of each pixal of the beam map
+  source_on: True # Whether the IR source is on
+  source_freq: 10 # Frequency of the IR source in Hz
+  source_voltage: 8 # Voltage of the IR source in Volts
+  source_duty_cycle: 50 # Duty-cycle of the IR source square wave as a percent 
 
 ---
-
 sess_id: None
 
 # Config of RFSoC IO
@@ -39,12 +49,12 @@ rfsoc_io:
   board_ip: "192.168.2.98"
   udp_ip: "192.168.3.40"
   udp_port: 4096
-  sampling_freq: 512e6/(2**20) # Sampling frequency of RFSoC timestream
+  sampling_freq: '512e6/(2**20)' # Sampling frequency of RFSoC timestream
 
 # File paths
 file_paths:
-  analysis_code_dir: "./../analysis/"
-  base_data_dir: "/home/rfsoc/rfsoc_result/Darshan/data/"
+  analysis_code_dir: "./../../analysis/"
+  base_data_dir: "/home/rfsoc/rfsoc_result/beammap/data/"
   tmp_data_dir: "/home/rfsoc/primecam_readout/src/tmp"
   primecam_readout: "/home/rfsoc/primecam_readout/src/"
   rfsoc_data_dir: "xilinx@192.168.2.98:/home/xilinx/primecam_readout/drones/drone1/"
@@ -59,6 +69,7 @@ file_names:
 # PCS agent IDs
 pcs_agents:
   rfsoc_agent: "queenagent"
+  pol_agent: "PBM"
 
 # Runtime IO config
 io:

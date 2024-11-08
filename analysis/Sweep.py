@@ -2,9 +2,10 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import lmfit
+from scipy import stats
 
 # Local imports
-sys.path.append('./../rfsoc/') 
+sys.path.append('/home/rfsoc/ccatkidlib/rfsoc/') 
 import rfsoc_io
 import plot_utils
 import resonator_model_v3 as rm
@@ -45,6 +46,14 @@ class Sweep:
 
         # Define other sweep parameters
         self.fitparams = None # Best fit parameters of resonator
+        self.cablefine = None
+        self.s21fine = None
+        self.finefs = None
+
+        # Fit S21 right away if needed
+        if 'normalize' in kwargs.keys() and kwargs['normalize'] == True:
+            self.normalize_sweep()
+
 
     ######################
     # Analysis Functions #
@@ -52,7 +61,7 @@ class Sweep:
 
     def fit_sweep(self, nonlinear = True, asymm = False, **kwargs):
         '''
-        Fit resonator using either a nonliner or asymettric model (not both!). 
+        Fit resonator using either a nonliner or asymetric model (not both!). 
         Parameters:
             nonlinear (bool): Whether to use nonlinear model
             asymm (bool): Whether to use aysmmetric model.
@@ -106,6 +115,7 @@ class Sweep:
         s21z_fit_norm = s21z_fit/cable_fit
 
         return s21z_norm, s21z_fit_norm, cable_fit
+
 
     ######################
     # Plotting Functions #
