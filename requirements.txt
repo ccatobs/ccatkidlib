@@ -1,0 +1,6 @@
+pyyaml
+numpy
+scipy
+matplotlib
+functools
+tqdm
