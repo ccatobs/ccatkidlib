@@ -1,3 +1,8 @@
+#=================================#
+# rfsoc_daq.py               2024 #
+# Darshan Patel dp649@cornell.edu #
+#=================================#
+
 # Import Python modules
 import os
 import sys
@@ -5,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import time
 
+# Import local modules
 import rfsoc_io
 import utils
 
@@ -16,7 +22,7 @@ class R:
 
     def __init__(self, cfg_path = "./config.yaml"):
         '''
-        Constructor for RFSoC_DAQ. Creates directories for data storage, configures logger, and starts
+        Constructor for R. Creates directories for data storage, configures logger, and starts
         RFSoC PCS agent.
         '''
 
@@ -40,7 +46,7 @@ class R:
         # Assign commonly used parameters to variables
         self.com_to = self.cfg_io['rfsoc_io']['com_to'] # Which RFSoC board and drone to send commands
         self.output = self.cfg_io['io']['terminal_output']
-        
+
         self.save_cfg = self.cfg_io['io']['save_config_copy']
         self.save_data = self.cfg_io['io']['save_data']
 
@@ -73,13 +79,8 @@ class R:
         self.rfsoc = OCSClient(self.cfg_io['pcs_agents']['rfsoc_agent'], args=[])
         rfsoc_io.send_msg('INFO', f'Initialized RFSoC agent. Communicating with drone: {self.com_to}', self.output)
 
-        # Attempt Initialize timestream client
-        try:
-            self.streamer = TimeStream(self.cfg_io['rfsoc_io']['udp_ip'], 
-                                   self.cfg_io['rfsoc_io']['udp_port'])
-        except:
-            rfsoc_io.send_msg('INFO', 'Another instance of rfsoc_daq.py is already running! Please close this instance and try again.', self.output)
-            sys.exit()
+        # Initialize None instance of TimeStream class
+        self.streamer = None
 
         # Set NCLO frequency of RFSoC
         rtn = self.rfsoc.setNCLO(com_to = self.com_to, f_lo = self.cfg['rfsoc_tones']['drone_NCLO'])
@@ -97,11 +98,11 @@ class R:
 
     def take_vna_sweep(self, **kwargs):
         '''
-        Take a vector network analyzer (VNA) sweep using RFSoC. 
+        Take a vector network analyzer (VNA) sweep using RFSoC.
 
         Parameters:
-            bandwidth (int): Bandwidth of the sweep in MHz. 
-            N_steps (int): Number of points per tone 
+            bandwidth (int): Bandwidth of the sweep in MHz.
+            N_steps (int): Number of points per tone
         Keyword Arguments:
             NCLO (int): Numerically controlled local oscillator frequency in MHz. Center frequency of VNA sweep.
         Returns:
@@ -128,18 +129,23 @@ class R:
 
         # Take VNA sweep
         rfsoc_io.send_msg('INFO', 'Taking VNA sweep!', self.output)
-        rtn = self.rfsoc.vnaSweep(com_to = self.com_to, N_steps = N_steps)
+        rtn = self.rfsoc.vnaSweep(com_to = self.com_to)
         rfsoc_io.send_msg('DEBUG', f'{rtn}', self.output)
         rfsoc_io.send_msg('INFO', 'Finished taking VNA sweep!', self.output)
 
 
         # Save VNA sweep
-        vna_file = rfsoc_io.get_most_recent_file(self.tmp_data_dir, 's21_vna*', self.output)
+        bid, drid = self.com_to.split('.')
+        vna_file = rfsoc_io.get_most_recent_file(self.tmp_data_dir, f's21_vna*{bid}_{drid}*', self.output)
+
+        if not vna_file.exists():
+            rfsoc_io.send_msg('ERROR', "VNA sweep was unsuccessful! No files saved.",self.output)
+            return None
 
         # Set timestamp to current time and save config
         self.timestamp = str(time.time()).split('.')[0]
         self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"{self.timestamp}_vna_config.yaml", self.cfg, self.save_cfg)
-        
+
         if self.save_data:
             fname = self.cfg_io["file_names"]["vna_fname"]
             fname = eval(f"f'{fname}'") + '.npy'
@@ -175,27 +181,30 @@ class R:
                 self.cfg['rfsoc_tones']['N_steps'] = value
             elif key == 'write_tones':
                 write_tones = value
-        
+
         # Write new target sweep comb
         if write_tones:
             self.write_config_tones(**kwargs)
             time.sleep(1) # Wait before taking sweep (not waiting can affect sweep quality)
-        
+
         rfsoc_io.send_msg('INFO', 'Taking target sweep!', output = self.output)
         # Take target sweep
-        rtn = self.rfsoc.targetSweep(com_to = self.com_to, 
-                               chan_bandwidth = self.cfg['rfsoc_tones']['bandwidth'], 
-                               N_steps = self.cfg['rfsoc_tones']['N_steps'])
+        rtn = self.rfsoc.targetSweep(com_to = self.com_to)
         rfsoc_io.send_msg('DEBUG', f'{rtn}', self.output)
         rfsoc_io.send_msg('INFO', 'Finished taking target sweep!', output = self.output)
-        
+
         # Save target sweep
-        target_file = rfsoc_io.get_most_recent_file(self.tmp_data_dir, 's21_targ*', output = self.output)
-        
+        bid, drid = self.com_to.split('.')
+        target_file = rfsoc_io.get_most_recent_file(self.tmp_data_dir, f's21_targ*{bid}_{drid}', output = self.output)
+
+        if not target_file.exists():
+            rfsoc_io.send_msg('ERROR', "Target sweep was unsuccesful! No files saved.",self.output)
+            return None
+
         # Set timestamp to current time and save config
         self.timestamp = str(time.time()).split('.')[0]
         self.cfg = rfsoc_io.save_config(self.rfsoc_dir / f"{self.timestamp}_targ_config.yaml", self.cfg, self.save_cfg)
-        
+
         if self.save_data:
             fname = self.cfg_io["file_names"]["targ_fname"]
             fname = eval(f"f'{fname}'") + '.npy'
@@ -208,7 +217,7 @@ class R:
             return self.targ_dir / fname
         else:
             return target_file
-    
+
     def take_timestream(self, t_sec, **kwargs):
         '''
         Take timestream data using RFSoC.
@@ -217,12 +226,27 @@ class R:
             time (int): Length of timestream in seconds
             tone_freqs: Frequencies at which to place tones
             tone_powers: Readout power of tones
-            tone_phis: Phase of tones 
+            tone_phis: Phase of tones
+            toggle: Whether to toggle the timestream off once data collection is finished
         Return:
             output (list of str): Timestream file paths if save_data = True
         Returns:
             output: Return complex S21 timestream data in array
         '''
+
+        # Attempt to initialize timestream client
+        while streamer is None:
+            exit = False
+            try:
+                self.streamer = TimeStream(self.cfg_io['rfsoc_io']['udp_ip'],
+                                    self.cfg_io['rfsoc_io']['udp_port'])
+            except:
+                if exit:
+                    rfsc_ioo.send_msg('CRITICAL', 'The currently running process was not terminated. Safely exiting!', self.output)
+                    sys.exit()
+                rfsc_io.send_msg('CRITICAL', 'A process is already bound to the timestream UDP port! Would you like to terminate this process?', self.output)
+                os.system(f"fuser -ki -n udp {self.cfg_io['udp_port']}")
+                exit = True
 
         write_tones = True
         save_data = self.save_data
@@ -231,6 +255,8 @@ class R:
                 write_tones = value
             elif key == 'save_data':
                 save_data = value
+            elif key == 'toggle':
+                toggle = value
 
         # Write new tones
         if write_tones:
@@ -242,13 +268,13 @@ class R:
         N_packets = int(eval(self.cfg_io['rfsoc_io']['sampling_freq'])*t_sec)
         I, Q = self.streamer.getTimeStreamChunk(N_packets)
         rfsoc_io.send_msg('INFO', 'Finished taking timestream data!', self.output)
-        
+
         # Combine I, Q data into complex S21 data and discard data from unused tones
         s21z = list([])
         for i, data in enumerate(zip(I, Q)):
             if i == self.cfg['rfsoc_tones']['num_tones']: break
             s21z.append(data[0] + 1j*data[1])
-        
+
         # Cast to an numpy array
         s21z = np.array(s21z)
 
@@ -264,8 +290,8 @@ class R:
     ####################
     # Tuning Functions #
     ####################
-    
-    def find_detectors(self, new_sweep = True, peak_prom_db = 0.1, peak_prom_std = 0, peak_dis = 17000, peak_width_min = 100, peak_width_max=300, **kwargs):
+
+    def find_detectors(self, new_sweep = True, peak_prom_db = 0.1, peak_prom_std = 0, peak_dis = 17000, width_min = 100, width_max=300, **kwargs):
         '''
         Find detectors and place tones at their minima. Length of bins is 500,000 Hz / N_steps.
         Default parameters work well for N_steps = 500 and should be scaled appropriately if N_steps is changed.
@@ -305,22 +331,22 @@ class R:
                 remove_noise = value
             elif key == 'noise_wn':
                 noise_wn = value
-        
+
         # Take VNA sweep if new_sweep = True or if one does not already exist
-        vna_file = rfsoc_io.get_most_recent_file(self.vna_dir, f"{self.cfg_io['file_names']['vna_fname'][0]}*", self.output)
+        vna_file = rfsoc_io.get_most_recent_file(self.vna_dir, f"{self.cfg_io['file_names']['vna_fname'][0]}*", self.output, time_past=24*3600)
         if not vna_file.exists() or new_sweep:
             self.take_vna_sweep(**kwargs)
 
         rfsoc_io.send_msg('INFO', "Finding detectors from VNA sweep!", output = self.output)
         # Find resonators from VNA sweep
         rtn = self.rfsoc.findVnaResonators(com_to = self.com_to, peak_prom_db = peak_prom_db, peak_prom_std = peak_prom_std,
-                                           peak_dis = int(peak_dis), peak_width_min = int(peak_width_min), peak_width_max = int(peak_width_max),
-                                           stitch = stitch, stitch_bw = N_steps, stitch_sw = int(N_steps/5),
+                                           peak_dis = int(peak_dis), width_min = int(width_min), width_max = int(width_max),
+                                           stitch = stitch, stitch_sw = int(N_steps/5),
                                            remove_cont = remove_cont, continuum_wn = continuum_wn,
                                            remove_noise=remove_noise, noise_wn = noise_wn)
         rfsoc_io.send_msg('DEBUG', f'{rtn}', self.output)
         rfsoc_io.send_msg('INFO', "Writing target comb using found resonators!", output = self.output)
-        
+
         # Write target comb from VNA sweep
         rtn = self.rfsoc.writeTargCombFromVnaSweep(com_to = self.com_to)
         rfsoc_io.send_msg('DEBUG', f'{rtn}', self.output)
@@ -344,7 +370,7 @@ class R:
     def find_detectors_fine(self, new_sweep = True, **kwargs):
         '''
         Find detectors and place tones at their minima. Length of bins is 500,000 Hz / N_steps.
-        
+
         Parameters:
             new_sweep (bool): Whether or not to take a new target sweep
             N_steps (int): Number of bins per tone
@@ -357,7 +383,7 @@ class R:
         for key, value in kwargs.items():
             if key == 'N_steps':
                 N_steps = value
-        
+
         # Take VNA sweep if new_sweep = True or if one does not already exist
         targ_file = rfsoc_io.get_most_recent_file(self.targ_dir, f"{self.cfg_io['file_names']['targ_fname'][0]}*", self.output)
         if not targ_file.exists() or new_sweep:
@@ -368,7 +394,7 @@ class R:
         rtn = self.rfsoc.findTargResonators(com_to = self.com_to, stitch_bw = N_steps)
         rfsoc_io.send_msg('DEBUG', f'{rtn}', self.output)
         rfsoc_io.send_msg('INFO', "Writing target comb using found resonators!", output = self.output)
-        
+
         # Write target comb from target sweep
         rtn = self.rfsoc.writeTargCombFromTargSweep(com_to = self.com_to)
         rfsoc_io.send_msg('DEBUG', f'{rtn}', self.output)
@@ -389,18 +415,18 @@ class R:
         self.edit_config(self.cfg, 'found_detector_freqs', det_freqs)
 
         return det_freqs
-    
+
     def bias_detectors(self):
         pass
 
     def get_cable_delay(self, **kwargs):
         '''
-        Get the cable delay of the readout chain using specified tones. 
+        Get the cable delay of the readout chain using specified tones.
         '''
 
         # Take target sweep
         targ_file = self.take_target_sweep(**kwargs)
-        
+
     ####################
     # Helper Functions #
     ####################
@@ -410,7 +436,7 @@ class R:
         Write custom tone power(s), frequency(ies), and/or phase(s) of tones.
         Parameters:
             tone_freqs: Float, array or file path of array containing custom tone frequencies
-            tone_powers: Float, array or file path of array containing custom tone powers 
+            tone_powers: Float, array or file path of array containing custom tone powers
             tone_phis: Float, array or file path of array containing custom tone phases
         '''
 
@@ -420,22 +446,22 @@ class R:
         # ----------------------------------
         for key, value in kwargs.items():
             # Check if value is a file path
-            try: 
+            try:
                 value = Path(value)
                 # If value is a file path, ensure that it is a valid path
                 if not value.exists():
                     rfsoc_io.send_msg('WARNING', f"{value} is not a valid file path!", self.output)
-                    continue 
+                    continue
             # If not file path, assume value is a number or an array of numbers
             except:
-                try: 
+                try:
                     # Assume an array is passed and check if its non-empty and if length equals num_tones
                     if len(value) == 0:
                         rfsoc_io.send_msg('WARNING', f"'{value}' is an empty array, not writing to custom comb files!", self.output)
                         continue
                     elif not len(value) == self.cfg['rfsoc_tones']['num_tones']:
                         rfsoc_io.send_msg('WARNING', f"Length of '{value}' does not match number of tones specified!", self.output)
-                        # continue 
+                        # continue
                 except TypeError:
                     try:
                         # Assume an number is passed and use the same number for all tones
@@ -443,7 +469,7 @@ class R:
                     except:
                         rfsoc_io.send_msg('WARNING', f"{value} is not a file path, array, or number!")
                         continue
-                
+
                 # Save the passed array
                 np.save(self.data_dir / 'tmp' / key, value)
 
@@ -468,7 +494,7 @@ class R:
                 rfsoc_io.send_msg('INFO', 'Modified tone phases!', self.output)
             else:
                 return
-            
+
             # Copy the array with custom parameters onto the rfsoc board
             os.system(cmd)
             rfsoc_io.send_msg('DEBUG', f">>> Ran command: {cmd}", self.output)
@@ -482,7 +508,7 @@ class R:
         self.edit_config(self.cfg, 'tone_freqs', np.load(self.data_dir / "tmp" / "f_rf_tones_comb_cust.npy").tolist())
         self.edit_config(self.cfg, 'tone_powers', np.load(self.data_dir / "tmp" / "a_tones_comb_cust.npy").tolist())
         self.edit_config(self.cfg, 'tone_phis', np.load(self.data_dir / "tmp" / "p_tones_comb_cust.npy").tolist())
-         
+
         # Write sweep comb based on custom parameters
         # -------------------------------------------
         rtn = self.rfsoc.writeCombFromCustomList(com_to = self.com_to)
@@ -495,12 +521,12 @@ class R:
 
     def write_config_tones(self, **kwargs):
         '''
-        Write custom comb using comb parameters from config file. Config file parameters are 
+        Write custom comb using comb parameters from config file. Config file parameters are
         superseceded by key word argument parameters.
 
         Parameters:
             tone_freqs: Float, array or file path of array containing custom tone frequencies
-            tone_powers: Float, array or file path of array containing custom tone powers 
+            tone_powers: Float, array or file path of array containing custom tone powers
             tone_phis: Float, array or file path of array containing custom tone phases
         '''
         # Get tone frequencies, powers, and phis from config file
@@ -516,7 +542,7 @@ class R:
                 tone_powers = value
             elif key == 'tone_phis':
                 tone_phis = value
-        
+
         # Write custom comb
         self.write_custom_tones(tone_freqs = tone_freqs, tone_powers = tone_powers, tone_phis = tone_phis)
 
@@ -540,7 +566,7 @@ class R:
         Save array of timestream data by breaking it into smaller files specified by max_size.
         '''
         from math import ceil
-        
+
         max_file_size = eval(self.cfg_io['io']['max_file_size'])
         for key, value in kwargs.items():
             if key == 'max_file_size':
@@ -550,7 +576,7 @@ class R:
         tstream_size = sys.getsizeof(s21z) # Get file size in bytes
         tstream_len = np.shape(s21z)[1]
         trimmed_len = ceil(tstream_len/ceil(tstream_size/max_file_size))
-        
+
         rfsoc_io.send_msg('DEBUG', f'Timestream size is {tstream_size/1e6} MB!', self.output)
 
         # Save Timestream
@@ -563,12 +589,12 @@ class R:
             np.save(tstream_file , s21z[:, j:j+trimmed_len])
             tstream_files.append(tstream_file)
             rfsoc_io.send_msg('DEBUG', f'Successfully saved timestream {i+1}!', self.output)
-        
+
         return tstream_files
-    
+
     def edit_config(self, cfg, key, value, append = False):
         '''
-        Update key in specified configuration file with the specified value. Preferred method for internal 
+        Update key in specified configuration file with the specified value. Preferred method for internal
         updates to config file. For external updates to config file, see "edit_main_config".
 
         Parameters:
@@ -578,11 +604,11 @@ class R:
         done = utils.edit_dic(cfg, key, value)
         if done:
             rfsoc_io.send_msg('DEBUG', f'Updated key "{key}" with value "{value}" in config file"!')
-        elif append:   
+        elif append:
             cfg[key] = value
             rfsoc_io.send_msg('DEBUG', f'Added key "{key}" with value "{value}" to config file!')
         else:
-            rfsoc_io.send_msg('DEBUG', f'Failed to update key "{key}" with value "{value}" in config file!')        
+            rfsoc_io.send_msg('DEBUG', f'Failed to update key "{key}" with value "{value}" in config file!')
         return done
 
     ###################
@@ -599,13 +625,13 @@ class R:
 
     def get_main_config(self):
         return self.cfg
-    
+
     def get_io_config(self):
         return self.cfg_io
 
     def edit_main_config(self, key, value, append = False):
         '''
-        Update key in main configuration file with the specified value. For use by 
+        Update key in main configuration file with the specified value. For use by
         scripts implementing RFSoC_DAQ to update main config file without the need for it be passed
         between programs. For internal updates to config file, see "edit_config"
         '''

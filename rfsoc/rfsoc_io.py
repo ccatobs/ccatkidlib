@@ -1,3 +1,8 @@
+#=================================#
+# rfsoc_io.py               2024 #
+# Darshan Patel dp649@cornell.edu #
+#=================================#
+
 '''
 Helper functions for file and directory read/write operations as well as logging.
 '''
@@ -7,6 +12,8 @@ from tqdm import tqdm
 from functools import partial, partialmethod
 import logging
 import yaml
+import time
+
 
 ##########################
 # Directory IO Functions #
@@ -106,18 +113,23 @@ def save_config(cfg_path, cfg_dic, save = True):
     else:
         return cfg_dic
     
-def get_most_recent_file(dir, file_identifier, output = False):
+def get_most_recent_file(dir, file_identifier, output = False, time_past = 60):
     '''
     Fetch the most recent file in a directory with the desired file identifier.
 
     Parameters:
         dir (Path): Directory in which the file is located 
         file_identifier (str): Substring included in the file name
+        time_past (float): How far in the past to look for files (in seconds)
     '''
 
     try:
         dir = Path(dir)
-        return Path(sorted(dir.glob(file_identifier), key = get_creation_time, reverse = True)[0])
+        file = Path(sorted(dir.glob(file_identifier), key = get_creation_time, reverse = True)[0])
+        if abs(get_creation_time(file) - time.time()) < time_past:
+            return file
+        else:
+            raise Exception("No files found within specified time range!")
     except:
         send_msg('WARNING', f"Failed to fetch most recent file in {dir} with identifier '{file_identifier}'", output = output)
         return Path("invalid/path")
