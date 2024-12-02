@@ -10,6 +10,7 @@ Helper functions for file and directory read/write operations as well as logging
 from pathlib import Path
 from tqdm import tqdm
 from functools import partial, partialmethod
+from fabric import Connection
 import logging
 import yaml
 import time
@@ -24,42 +25,52 @@ def create_book(curr_date, sess_id, com_to, data_dir, output = False):
     Create book for storage of timestream, sweep, and other (e.g., config) data.
 
     Parameters:
+        curr_date (str): Current date
         sess_id (int): ID of current observing session
-        com_to (float): Board and drone ID of RFSoC in form board.drone
+        com_to: List of board and drone IDs of RFSoC in form board.drone
         data_dir (str): Path of directory in which to store data
+        output (bool): Whether to print logging output to terminal
+    Returns:
+        rfsoc_dirs (str): Directories where log and config files are saved
+        targ_dirs (str): Directories where target sweeps are saved
+        timestream_dirs (str): Directories where timestreams are saved
+        vna_dirs (str): Directories where VNA sweeps are saved
     '''
 
-    # Try to split com_to into board and drone
-    try:
-        board, drone = com_to.split('.')
+    rfsoc_dirs = []
+    targ_dirs = []
+    timestream_dirs = []
+    vna_dirs = []
+
+    for com in com_to:
+        # Split into board id, drone id
+        board, drone = com.split('.')
         com_str = f'B{board}D{drone}'
-    # If can't split com_to, assume com_to is just the a board id
-    except:
-        com_str = com_to
 
-    # Define data directories
-    data_dir = Path(data_dir)
-    timestream_dir = data_dir / 'timestream' / curr_date / com_str / sess_id
-    vna_dir = data_dir / 'vna' / curr_date / com_str / sess_id
-    targ_dir = data_dir / 'targ' / curr_date / com_str / sess_id
-    rfsoc_dir = data_dir / 'rfsoc'  / curr_date / com_str / sess_id
+        # Define data directories
+        data_dir = Path(data_dir)
+        timestream_dir = data_dir / 'timestream' / curr_date / sess_id /  com_str 
+        vna_dir = data_dir / 'vna' / curr_date / sess_id / com_str
+        targ_dir = data_dir / 'targ' / curr_date / sess_id / com_str 
+        rfsoc_dir = data_dir / 'rfsoc'  / curr_date / sess_id / com_str
 
-    # Create timestream directory
-    create_dir(timestream_dir, output = output)
+        # Create timestream directory
+        create_dir(timestream_dir, output = output)
+        timestream_dirs.append(timestream_dir)
 
-    # Create vna sweep directory
-    create_dir(vna_dir, output = output)
+        # Create vna sweep directory
+        create_dir(vna_dir, output = output)
+        vna_dirs.append(vna_dir)
 
-    # Create targ sweep directory
-    create_dir(targ_dir, output = output )
+        # Create targ sweep directory
+        create_dir(targ_dir, output = output)
+        targ_dirs.append(targ_dir)
 
-    # Create rfsoc directory
-    create_dir(rfsoc_dir, output = output)
+        # Create rfsoc directory
+        create_dir(rfsoc_dir, output = output)
+        rfsoc_dirs.append(rfsoc_dir)
 
-    # Create tmp directory
-    create_dir(data_dir / 'tmp')
-
-    return rfsoc_dir, targ_dir, timestream_dir, vna_dir
+    return rfsoc_dirs, targ_dirs, timestream_dirs, vna_dirs
 
 def create_dir(dir_path, output = False):
     '''
@@ -67,6 +78,7 @@ def create_dir(dir_path, output = False):
 
     Parameters:
         dir_path (str): Path of the directory that is to be created
+        output (bool): Whether to print logging output to terminal
     '''
 
     # Attempt to make the directory
@@ -78,7 +90,7 @@ def create_dir(dir_path, output = False):
             send_msg('INFO', f"The directory '{dir_path}' was successfully created!", output = output)
         else:
             send_msg('INFO', f"The directory '{dir_path}' already exists! Directory was not overwritten.", output = output)
-    except:
+    except FileNotFoundError:
         send_msg('ERROR', f"The directory '{dir_path}' could not be created! Ensure that the file path is valid.", output = output)
 
 #####################
@@ -86,6 +98,14 @@ def create_dir(dir_path, output = False):
 #####################
 
 def load_config(config):
+    '''
+    Load config file.
+
+    Parameters:
+        config (str): File path of config file to load
+    Returns:
+        cfg (dict): List of dictionaries loaded from config file
+    '''
     cfg_path = Path(config)
     assert cfg_path.exists(), "Could not find config file!" # Check that config file exists
     
@@ -93,19 +113,32 @@ def load_config(config):
     with open(cfg_path, 'r') as config:
         cfg = [file for file in yaml.safe_load_all(config)]
     
-    if len(cfg)  == 1:
-        return cfg[0]
+    # Return loaded dictionary(ies)
+    if len(cfg) == 1:
+        return cfg[0] # If only one dictionary, do not return array
     else:
         return cfg
 
-def save_config(cfg_path, cfg_dic, save = True):
+def save_config(cfg_path, cfg_dic, save = True, output = False):
     '''
     Save configuration file.
+
+    Parameters:
+        cfg_path (str): File path where the config file should be saved
+        cfg_dic (dict): Dictionary to save as config file
+        save (bool): Whether to save config file
+        output (bool): Whether to print logging output to terminal 
+    Returns:
+        cfg_dic (dict): Returns dictionary that was saved to config file
     '''
+
     if save:
         # Save config file
         with open(cfg_path, 'w') as config:
             yaml.safe_dump(cfg_dic, config, sort_keys=False, default_flow_style=None)
+        
+        send_msg('INFO', f"Saved configuration file '{cfg_path}'!", output = output)
+        send_msg('DEBUG', f'Configuration file contents: {cfg_dic}', output = output)
 
         # Load new config file
         with open(cfg_path, 'r') as config:
@@ -113,25 +146,32 @@ def save_config(cfg_path, cfg_dic, save = True):
     else:
         return cfg_dic
     
-def get_most_recent_file(dir, file_identifier, output = False, time_past = 60):
+def get_most_recent_file(dir, file_identifier, output = False, time_past = 5*60):
     '''
     Fetch the most recent file in a directory with the desired file identifier.
 
     Parameters:
         dir (Path): Directory in which the file is located 
         file_identifier (str): Substring included in the file name
+        output (bool): Whether to print logging output to terminal
         time_past (float): How far in the past to look for files (in seconds)
+    Returns:
+        file (str): File path of most recent file (returns "invalid/path" if no valid files found)
     '''
 
     try:
         dir = Path(dir)
+        # Attempt to get most recent file in directory using glob
         file = Path(sorted(dir.glob(file_identifier), key = get_creation_time, reverse = True)[0])
+
+        # Check if creation time is within the specified time_past 
         if abs(get_creation_time(file) - time.time()) < time_past:
+            send_msg('DEBUG', f"Found most recent file '{file}' in {dir}.", output = output)
             return file
         else:
             raise Exception("No files found within specified time range!")
     except:
-        send_msg('WARNING', f"Failed to fetch most recent file in {dir} with identifier '{file_identifier}'", output = output)
+        send_msg('WARNING', f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}'", output = output)
         return Path("invalid/path")
 
 def get_creation_time(file_path, output = False):
@@ -140,11 +180,16 @@ def get_creation_time(file_path, output = False):
 
     Parameters:
         file_path (str): Path of the file of which to get creation time
+        output (bool): Whether to print logging output to terminal
+    Returns:
+        creation_time (float): Creation time of file (returns -1 if creation time could not be determined)
     '''
     try:
-        # Get and return creation time of the file
         file = Path(file_path)
-        return file.stat().st_ctime
+        # Get creation time of file
+        creation_time = file.stat().st_ctime
+        send_msg('DEBUG', f"Creation time of file '{file_path}' is {creation_time}.")
+        return creation_time
     except:
         send_msg('WARNING', f"Error getting creation time of file: '{file_path}'", output=output)
         return -1
@@ -213,4 +258,112 @@ def send_msg(level, msg, output = True, name = __name__):
         if output:
             tqdm.write("WARNING | Error logging message. Ensure that the message is a string!")
 
+def wait(t_sec, output = True, desc = ""):
+    '''
+    Wait for t_sec seconds with progress bar.
 
+    Parameters:
+        t_sec (int): Number of seconds to wait
+        output (bool): Whether to print progress bar to terminal
+    '''
+
+    # If terminal output is True, use tqdm progress bar
+    iterator = range(int(t_sec))
+    if output:
+        iterator = tqdm(iterator, desc = desc)
+
+    for t in iterator:
+        time.sleep(1)
+
+#######################
+# Remote IO Functions #
+#######################
+
+def get_connection(ip, key, output = False):
+    '''
+    Create Fabric Connection to RFSoC board with specified IP address. 
+
+    Parameters:
+        ip (str): IP address to connect to
+        key (str): File path of private RSA key
+        output (bool): Whether to print logging output to terminal
+    Returns:
+        connection: Fabric Connection object to specified IP address
+    '''
+
+    # Get Fabric Connection to RFSoC board
+    connect = Connection(f'xilinx@{ip}', connect_kwargs = {'key_filename': key})
+    send_msg('DEBUG', f'Created Fabric Connection to {ip}.', output = output)
+    return connect
+
+def load_array_board(c, path, output = False):
+    '''
+    Load numpy array from RFSoC board.
+
+    Parameters:
+        c: Fabric Connection object of RFSoC board
+        path (str): File path of numpy array on RFSoC board
+        output (bool): Whether to print logging output to terminal
+    Returns:
+        array: Loaded numpy array
+    '''
+
+    cmd = f'python3 -c \'import numpy as np; print(np.load(\"{path}\").tolist())\''
+    loaded_array = eval(c.run(cmd, hide = 'out').stdout)
+    send_msg('DEBUG', f"Loaded array {loaded_array} from '{path}'.", output = output)
+    return loaded_array
+
+def save_array_board(c, path, saved_array, output = False):
+    '''
+    Save numpy array to RFSoC board.
+
+    Parameters:
+        c: Fabric Connection object of RFSoC board
+        path (str): File path where numpy array should be saved on RFSoC board
+        saved_array: Numpy array to save to RFSoC board
+        output (bool): Whether to print logging output to terminal
+    Returns:
+        array: Numpy array saved to RFSoC board
+    ''' 
+
+    cmd = f'python3 -c \'import numpy as np; np.save(\"{path}\", {saved_array})\''
+    result = c.run(cmd, hide = 'out').stdout
+    send_msg('DEBUG', f"Saved array {saved_array} to '{path}'.", output = output)
+    return load_array_board(c, path)
+
+def get_most_recent_file_board(c, dir, file_identifier = "*", output = False):
+    '''
+    Get most recent file in directory on RFSoC board.
+
+    Parameters:
+        c: Fabric Connection object of RFSoC board
+        dir: Directory in which the file is located
+        file_identifier: Substring included in the file name 
+    Returns:
+        file (str): File path of most recent file (returns "invalid/path" if no valid files found)
+    '''
+
+    # Use grep to get most recent file
+    cmd = f'find {dir}/* -type f | grep {file_identifier} | xargs ls -rt | tail -1'
+    try:
+        file = c.run(cmd, hide = 'out').stdout
+        file = file.rstrip('\r\n')
+        send_msg('DEBUG', f"Found most recent file '{file}' in {dir}.", output = output)
+        return file
+    except:
+        send_msg('WARNING', f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}'", output = output)
+        return "invalid/path"
+
+def path_exists(c, path):
+    '''
+    Check if path exists on RFSoC board.
+
+    Parameters:
+        c: Fabric Connection object of RFSoC board
+        path (str): File path to check existence of
+    Returns:
+        exists (bool): Whether the file path exists
+    '''
+
+    cmd = f"[ -f {path} ] && echo True || echo False"
+    return eval(c.run(cmd, hide = 'out').stdout)

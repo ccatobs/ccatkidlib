@@ -3,18 +3,18 @@ sess_id: None
 
 # Config of output tones
 rfsoc_tones:
-  drone_NCLO: 625 # Center local oscillator frequency of drone in MHz
-  num_tones: 6
-  bandwidth: 5 # Bandwidth of target sweep in MHz
-  N_steps: 200 # Number of points per tone
+  drone_NCLO: 850 # Center local oscillator frequency of drone in MHz
+  num_tones: 500
+  bandwidth: 3 # Bandwidth of target sweep in MHz
+  N_steps: 500 # Number of points per tone
   dB: True # True if tone powers are in dB
-  tone_powers: [61.0, 61.0, 68.0, 72.0, 66.0, 67.0]
+  tone_powers: []
   tone_freqs: []
   tone_phis: []
 # Configuration parameters of MKID detectors
 det_config:
   detector_type: "TiN" # Material of detectors
-  nominal_num_detectors: 6
+  nominal_num_detectors: 500
   nominal_detector_freqs: [] # Units of Hz
 
   found_num_detectors: None # None if unknown
@@ -23,8 +23,8 @@ det_config:
 # Configuration parameters of readout system
 sys_config:
   cable_delay: None # Units of seconds, None if unknown
-  pre_warm_amp_atten: 12 # In dB
-  post_warm_amp_atten: 10 # In dB
+  drive_atten: 12 # In dB
+  sense_atten: 10 # In dB
 
   nominal_bath_temp: 69.98 # In mK
   actual_bath_temp: None # None if unknown
@@ -35,8 +35,8 @@ sess_id: None
 
 # Config of RFSoC IO
 rfsoc_io:
-  com_to: '1.1' # Board.Drone of RFSoC to use 
-  board_ip: "192.168.2.98"
+  com_to: '1.2' # Board.Drone of RFSoC to use 
+  board_ip: "192.168.2.99"
   udp_ip: "192.168.3.40"
   udp_port: 4096
   sampling_freq: 512e6/(2**20) # Sampling frequency of RFSoC timestream
@@ -44,17 +44,17 @@ rfsoc_io:
 # File paths
 file_paths:
   analysis_code_dir: "./../analysis/"
-  base_data_dir: "/home/rfsoc/rfsoc_result/Darshan/data/"
+  base_data_dir: "/mnt/md0/TEMP_DATA"
   tmp_data_dir: "/home/rfsoc/primecam_readout/src/tmp"
   primecam_readout: "/home/rfsoc/primecam_readout/src/"
-  rfsoc_data_dir: "xilinx@192.168.2.98:/home/xilinx/primecam_readout/drones/drone1/"
-  pcs_dir: "/home/rfsoc/ocs-site-configs/cornell/pisco/clients/"
+  rfsoc_data_dir: "xilinx@192.168.2.99:/home/xilinx/primecam_readout/drones/drone1/"
+  pcs_dir: "/home/rfsoc/ocs-site-configs/"
 
 # File names
 file_names:
-  stream_fname: 'tstream_{self.timestamp}'
-  targ_fname: 'targ_{self.timestamp}'
-  vna_fname: 'vna_{self.timestamp}'
+  stream_fname: 'TEST_tstream_{self.timestamp}'
+  targ_fname: 'TEST_targ_{self.timestamp}'
+  vna_fname: 'TEST_vna_{self.timestamp}'
 
 # PCS agent IDs
 pcs_agents:

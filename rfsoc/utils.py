@@ -4,6 +4,23 @@ Various utility functions for MKID data collection and analysis.
 
 import numpy as np
 
+def dict_get(dic, keys):
+    '''
+    Get value from dictionary using provided dictionary keys.
+
+    Parameters:
+        dic: Dictionary to pull value from
+        keys: Dictionary keys
+    Returns:
+        value: Value corresponding to dictionary keys (returns None if invalid key is encountered)
+    '''
+    for key in keys:
+        try:
+            dic = dic[key]
+        except KeyError:
+            return None
+    return dic
+
 def edit_dic(dic, key, value):
     '''
     Recursively edit value in dictionary using specified key.
