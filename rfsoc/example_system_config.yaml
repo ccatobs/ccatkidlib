@@ -17,6 +17,7 @@ sess_id: None
 
 drone_list: ['1.1', '1.2', '1.3', '1.4'] # List of boards/drones to use
 
+initialize: True
 parallel: True # Whether to send commands to all drones in parallel (will stop all drones not in drone_list)
 restart: False # Whether to restart already running drones
 
@@ -26,11 +27,11 @@ udp_port: 4096
 boards:
   b1: 
     board_ip: '192.168.2.99'
-    sampling_freq: 512e6/(2**20) # Timestream sampling frequency
+    sampling_freq: 488.28 # Timestream sampling frequency
     drone_cfg: "/home/rfsoc/ccatkidlib/rfsoc/drones_config_1.yaml"
   b2:
     board_ip: '192.168.2.98'
-    sampling_freq: 512e6/(2**20) # Timestream sampling frequency
+    sampling_freq: 488.28 # Timestream sampling frequency
     drone_cfg: "/home/rfsoc/ccatkidlib/rfsoc/drones_config_2.yaml"
 
 ##################
@@ -50,12 +51,12 @@ file_paths:
 
 # File names
 file_names:
-  stream_fname: 'TEST_tstream_{self.timestamp}' # Timestream file name
-  targ_fname: 'TEST_targ_{self.timestamp}'      # Target sweep file name
-  vna_fname: 'TEST_vna_{self.timestamp}'        # VNA sweep file name
-  cust_comb_freq: 'f_rf_tones_comb_cust.npy'
-  cust_comb_amp: 'a_tones_comb_cust.npy'
-  cust_comb_phi: 'p_tones_comb_cust.npy'
+  stream_fname: 'TEST_tstream' # Timestream file name
+  targ_fname: 'TEST_targ'      # Target sweep file name
+  vna_fname: 'TEST_vna'        # VNA sweep file name
+  comb_freq: 'f_rf_tones_comb*.npy'
+  comb_amp: 'a_tones_comb*.npy'
+  comb_phi: 'p_tones_comb*.npy'
 
 # PCS agent IDs
 pcs_agents:
@@ -68,5 +69,5 @@ io:
   terminal_output: True  # Whether to print logs to terminal
   save_data: True        # Whether to save data
   save_config_copy: True # Whether to sawe copy of config (Recommended to use True)
-  max_file_size: 5e7     # Max file size of timestreams in bytes
+  max_file_size: 50     # Max file size of timestreams in Megabytes
 ...

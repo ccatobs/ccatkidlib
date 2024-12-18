@@ -8,7 +8,7 @@ class Streamer:
     '''
     def __init__(self, udp_ip, udp_port):
         '''
-        Initialize Streamer object by creating a socket and binding it to the timestream UDP IP & port.
+        Initialize Streamer object by creating udp_ip, udp_port, and timestamp attributes.
         
         Parameters:
             udp_ip (str): UDP IP address
@@ -19,6 +19,9 @@ class Streamer:
 
         # Create socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        # Allow multiple clients to bind to socket
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         # Bind socket to timestream UDP IP & port
         self.sock.bind((udp_ip, udp_port))
