@@ -8,15 +8,14 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 871                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 0.5               # Bandwidth of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
+  NCLO: 871                  # Numerically controlled oscillator frequency (in MHz)
+  bandwidth: 0.5              # Bandwidth of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
   N_step: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
-  dB: False                    # True if tone powers are given in dB
+  dB: True                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
   tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
-  gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
 
 # Attenuator configuration
 atten:
@@ -26,10 +25,6 @@ atten:
 # Detector configuration
 det_config:
   network: 1.1 # Array.Network
-  network_in: 1.1 # 
-  network_out: 1.1 # 
-  LNA_in_on: True
-  LNA_out_on: True
   detector_type: "Al" # Material of detectors
   nominal_num_detectors: 570
   nominal_detector_freqs: [] # Units of Hz
@@ -63,18 +58,16 @@ tones:
   NCLO: 871                    # Numerically controlled oscillator frequency (in MHz)
   bandwidth: 0.5                 # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone 
-  dB: False                     # True if tone powers are given in dB
+  dB: True                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
   tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
-  gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-
 
 # Attenuator configuration
 atten:
-  drive: 15 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 6 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 10  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
@@ -113,18 +106,16 @@ tones:
   NCLO: 871                    # Numerically controlled oscillator frequency (in MHz)
   bandwidth: 0.5                 # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone
-  dB: False                     # True if tone powers are given in dB
+  dB: True                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
   tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
-  gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-
 
 # Attenuator configuration
 atten:
-  drive: 15 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 6 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 10  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
@@ -159,20 +150,18 @@ udp_source_port: 4096
 # Tone configuration
 tones:
   NCLO: 871                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 0.5               # Bandwidth of each target sweep tone
+  bandwidth: 0.5                 # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone
-  dB: False                     # True if tone powers are given in dB
+  dB: True                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep (in Hz)
   tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
-  gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-
 
 # Attenuator configuration
 atten:
-  drive: 15 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 6 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 10  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:

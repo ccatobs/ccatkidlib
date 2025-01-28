@@ -1,5 +1,8 @@
-# Dont want images from scripts
+=# Dont want images from scripts
 *.png
+
+# Drone List
+*override_drone_list*
 
 
 # Byte-compiled / optimized / DLL files

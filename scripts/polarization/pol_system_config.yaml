@@ -7,7 +7,15 @@ sess_id: null
 
 # Add external system parameters that change over the course of data acquisiton here
 avail_space: null # Available space on board in GB
+array_temp: null
 bath_temp: null
+
+###########################
+# Polarization Parameters #
+###########################
+
+pol:
+  angle: []
 
 ---
 sess_id: null
@@ -16,7 +24,7 @@ sess_id: null
 # Drone/Board List Config #
 ###########################
 
-drone_list: ['1.1'] # List of boards/drones to use
+drone_list: ['1.4'] # List of boards/drones to use
 
 initialize: True
 parallel: False # Whether to send commands to all drones in parallel (will stop all drones not in drone_list)
@@ -28,14 +36,12 @@ udp_port: 4096
 boards:
   b1: 
     board_ip: '192.168.2.100'
-    sampling_freq: 488.28 # Timestream sampling frequency (in Hz)
-    max_power: 32767
-    drone_cfg: "/home/pcs/ccatkidlib/rfsoc/drones_config_1.yaml"
+    sampling_freq: 488.28 # Timestream sampling frequency (Hz)
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/polarization/pol_drone_config_1.yaml"
   b2:
     board_ip: '192.168.2.101'
     sampling_freq: 488.28 # Timestream sampling frequency
-    max_power: 32767
-    drone_cfg: "/home/pcs/ccatkidlib/rfsoc/drones_config_2.yaml"
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/beam_map/beam_map_modcam_drone_config_2.yaml"
 
 ##################
 # File IO Config #
@@ -43,29 +49,28 @@ boards:
 
 # File paths
 file_paths:
-  analysis_dir: "/home/pcs/ccatkidlib/analysis/"                                           # Analysis code directory
-  data_dir: "/mnt/md0/cooldown_dec/cust_comb"                                           # Directory to save data in
+  analysis_dir: "/home/pcs/ccatkidlib/analysis/"                         # Analysis code directory
+  data_dir: "/mnt/md0/cooldown_dec/polarization"                                # Directory to save data in
   tmp_data_dir: "/home/pcs/primecam_readout/src/tmp"                     # Temp data directory in which primecam_readout saves files
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
-  pcs_dir: "/home/ocs/pcs-site-configs/"                                 # PCS directory
-  RSA_key: "/home/pcs/.ssh/id_ecdsa"                                       # Path to RSA key (null if no key)
+  pcs_dir: "/home/ocs/ocs-site-configs/"                                 # PCS directory
+  RSA_key: "/home/pcs/.ssh/id_ecdsa"                                       # Path to RSA key (None if no key)
   drone_dir: "/home/xilinx/primecam_readout/drones"                        # Drone directory on the boards
 
 # File names
 file_names:
-  stream_fname: 'cust_tstream' # Timestream file name
-  targ_fname: 'cust_targ'      # Target sweep file name
-  vna_fname: 'cust_vna'        # VNA sweep file name
-  vna_res_fname: 'f_res_vna'
-  targ_res_fname: 'f_res_targ'
-  comb_freq: 'f_rf_tones_comb'
-  comb_amp: 'a_tones_comb'
-  comb_phi: 'p_tones_comb'
+  stream_fname: 'pol_tstream' # Timestream file name
+  targ_fname: 'pol_targ'      # Target sweep file name
+  vna_fname: 'pol_vna'        # VNA sweep file name
+  comb_freq: 'f_rf_tones_comb'     # File head of comb frequency array
+  comb_amp: 'a_tones_comb'         # File head of comb power array
+  comb_phi: 'p_tones_comb'         # File head of comb phi array
 
 # PCS agent IDs
 pcs_agents:
   rfsoc_agent: "det-queenagent" # RFSoC agent ID 
+  beam_map_agent: "det-beam-mapper"
 
 # Runtime IO config
 io:
@@ -74,5 +79,20 @@ io:
   terminal_output: True  # Whether to print logs to terminal
   save_data: True        # Whether to save data
   save_config_copy: True # Whether to sawe copy of config (Recommended to use True)
-  max_file_size: 2000     # Max file size of timestreams in Megabytes
+  max_file_size: 1000     # Max file size of timestreams in Megabytes
+
+######################
+# Beam Mapper Config #
+######################
+
+pol:
+  # Angles
+  angles: []
+
+  # Hawkeye IR-55 source parameters
+  source_on: True # Whether the IR source is on
+  source_freq: 10 # Frequency of the IR source in Hz
+  source_voltage: 8 # Voltage of the IR source in Volts
+  source_duty_cycle: 50 # Duty-cycle of the IR source square wave as a percent 
+
 ...

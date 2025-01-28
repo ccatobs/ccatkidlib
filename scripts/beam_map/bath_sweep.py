@@ -5,7 +5,7 @@ import time
 import sys
 import yaml
 
-#Watch the array temp and take some sweeps when they are above 700 mK.
+#Script for taking bath temperature sweep data.
 
 def main():
     # Local imports
@@ -16,19 +16,20 @@ def main():
     # Intialize RFSoC control object
     R = R(cfg_path = "./bath_sweep_system_config.yaml")
 
-    drive_attens = [0,6]# DAC attenuations
+    bath_temps = [65, 105, 130, 165, 190, 215, 240 ] # String of bath temperatures to servo on (in mK)
+    
+    drive_attens = [0,3,6,9, 12, 15, 18]# DAC attenuations
     sense_attens = [0] # ADC attenuations
+    drive_attens_noise = [0, 3]# DAC attenuations to be used when taking noise
+    sense_attens_noise = [0] # ADC attenuations to be used when taking noise
 
     attens = (drive_attens, sense_attens)
-
-    low_T = .75 #Temp to start taking sweeps
-    cutoff = 1.6 # Temp to stop
-    timeout = 8*3600 # Time to stop
+    noise_attens = (drive_attens_noise, sense_attens_noise)
 
     # Run bath sweep
-    bath_sweep(R, low_T, cutoff, attens, timeout)
+    bath_sweep(R, bath_temps, attens, noise_attens)
 
-def bath_sweep(R, low_T, cutoff, attens, timeout):
+def bath_sweep(R, bath_temps, attens, noise_attens):
     '''
     Step the bath temperature and then take sweeps and noise
 
@@ -42,36 +43,43 @@ def bath_sweep(R, low_T, cutoff, attens, timeout):
     #Initialize lakeshore PCS agents
     coldload_agent = OCSClient('LSA291F')
     fp_agent = OCSClient('LSA29EX')
-    mxc_agent = OCSClient('LSA25RH')
+    mxc_agent = OCSClient('LSA25RH',args=[])
 
-    R = atten_sweep(R, attens, coldload_agent, fp_agent, mxc_agent, rewrite=True)
+    # Set the heater to the lower range to start out  
+    mxc_agent.set_heater_range(heater='sample',range=3.16e-3, wait=2)
 
-    array_temps = update_logs(R, fp_agent, coldload_agent, mxc_agent)
-    start_time = time.time()
-
-    # First block to wait and check the array_temps every 20 seconds
+    # Iterate over currents and take attuenuation sweep and then noise data at each.
     # -----------------------------------------------------
-    while array_temps[0]<low_T:
-        time.sleep(20)
-        array_temps, coldload_temp, mxc_temp = update_temps(fp_agent, coldload_agent, mxc_agent)
-        if time.time() - start_time>600:
-            print("Still going...", time.time())#time.sleep(20)
-            start_time = time.time()
+    with tqdm(range(len(bath_temps)), desc = f'MXC Temp:') as pbar:
+        for i in pbar:
+            temp = bath_temps[i]
+            
+            # Set the bath temperature
+            if temp>180:
+                 mxc_agent.set_heater_range(heater='sample',range=10e-3, wait=2) # Set higher heater range
 
-    start_time = time.time()
-    #Second block to take an attenuator sweep every 10 minutes until the array temp passes the cutoff
-    while array_temps[0]<cutoff and time.time() - start_time<timeout:
-        timestamp =time.time()
-        # ----------------------
-        atten_sweep(R, attens, coldload_agent, fp_agent, mxc_agent)
-        #if time.time()
-        array_temps, coldload_temp, mxc_temp = update_temps(fp_agent, coldload_agent, mxc_agent)
-        while time.time()-timestamp<600 and array_temps[0]<cutoff:
-            time.sleep(20)
-            array_temps, coldload_temp, mxc_temp = update_temps(fp_agent, coldload_agent, mxc_agent)
+            mxc_agent.servo_to_temperature(temperature = temp/1000.0)
+            pbar.set_postfix_str(f'Set point: {temp/1000.0}')
 
+            # Wait for 20 minutes except for the first step.
+            if temp>65:
+                time.sleep(1200)
+            else:
+                time.sleep(60)
 
-def atten_sweep(R, attens,coldload_agent, fp_agent, mxc_agent, rewrite = False, with_noise = False):
+            # Update logs and configs
+            array_temps = update_logs(R, fp_agent, coldload_agent, mxc_agent)
+            pbar.set_postfix_str(f'Set point: {temp/1000.0}, Array temps: {array_temps}')
+            
+            # Take attenuation sweep
+            # ----------------------
+            atten_sweep(R, attens, coldload_agent, fp_agent, mxc_agent)
+
+            # Take noise data
+            # ----------------------
+            atten_sweep(R, noise_attens, coldload_agent, fp_agent, mxc_agent, with_noise = True)
+
+def atten_sweep(R, attens,coldload_agent, fp_agent, mxc_agent, with_noise = False):
     '''
     Sweep over different drive (DAC) and sense (ADC) attenuations and take sweeps and (optionally) timestreams at each. 
 
@@ -117,7 +125,7 @@ def atten_sweep(R, attens,coldload_agent, fp_agent, mxc_agent, rewrite = False, 
                         update_logs(R, fp_agent, coldload_agent, mxc_agent)
 
                         # Take VNA sweep
-                        if rewrite == True:
+                        if j==0:
                             #If its the first sweep, generate a new vna comb, but otherwise just repeat the sweep process.
                             R.take_vna_sweep()
                         else:
@@ -144,7 +152,7 @@ def update_temps(fp_agent, coldload_agent, mxc_agent):
         cl_temps.append(coldload_temp)
     coldload_temp = round(np.mean(cl_temps),3)
     
-    return [array_temp1, array_temp2], coldload_temp, mxc_temp
+    return [array_temp1, array_temp2], mxc_temp, coldload_temp 
 
 def update_logs(R, fp_agent, coldload_agent, mxc_agent):
     array_temps, coldload_temp, mxc_temp = update_temps(fp_agent, coldload_agent, mxc_agent)

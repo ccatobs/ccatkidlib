@@ -7,13 +7,15 @@ import argparse
 import sys
 import numpy as np
 import time
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from functools import partial
 
+matplotlib.use('qt5agg')
+
 # Local imports
 sys.path.append('./../../rfsoc/') # Append path with RFSoC_DAQ.py
-sys.path.append('./../../analysis')  # Append path with Sweep Timestream Resonator
 
 import rfsoc_io
 
@@ -21,57 +23,54 @@ def main():
     '''
     Main method run when 'live_plotting.py' is called directly
     '''
-    
+
+
     # Import RFSoC control module
     from rfsoc_daq import R
 
     # Parse command line arguments
     args = eval_args()
-
-    # Read configuration file
-    cfg = rfsoc_io.load_config(args.cfg)
-
-    # Check if cfg_io is also passed
-    try:
-        cfg, cfg_io = cfg
-    except:
-        cfg_io = None
-
-    # Store common variables
-    output = cfg_io['io']['terminal_output']
    
     # Initialize RFSoC data acquisition object
     # ----------------------------------------
     R = R(args.cfg)
 
+    sys.path.append(R.io_cfg['file_paths']['analysis_dir'])
+
+    # Store common variables
+    output = R.io_cfg['io']['terminal_output']
+
     # Tune detectors before taking data
     if args.tune: 
-        rfsoc_io.send_msg('INFO', '=======================Tuning Detectors=========================', output)
-        tune_detectors(R, cfg, cfg_io, args)
+        rfsoc_io.send_msg('INFO', 'Tuning Detectors', output)
+        tune_detectors(R, args)
         rfsoc_io.send_msg('INFO', 'Finished tuning detectors', output)
 
     # Live plot data
-    rfsoc_io.send_msg('INFO', '========================Starting Live Plot==============================', output)
-    live_plot(R, cfg, cfg_io, args)
+    rfsoc_io.send_msg('INFO', 'Starting Live Plot', output)
+    live_plot(R, args)
 
 ###########################
 # General Live Plotting Functions #
 ###########################
 
-def live_plot(R, cfg, cfg_io, args):
-    save = cfg['live_plot_config']['save_data']
-    save_interval = cfg['live_plot_config']['save_interval']
+def live_plot(R, args):
+    save = R.io_cfg['live_plot_config']['save_data']
+    save_interval = R.io_cfg['live_plot_config']['save_interval']
     save_params = (save, save_interval)
 
     if save:
         global save_data
-        save_data = np.array(cfg['rfsoc_tones']['num_tones']*[[]])
+
+        # save_data = np.array(cfg['rfsoc_tones']['num_tones']*[[]])
     
     # Get autoscale from config
-    autoscale = cfg['live_plot_config']['autoscale']
+    autoscale = R.io_cfg['live_plot_config']['autoscale']
 
     # Get sampling frequency of RFSoC
-    sampling_freq = eval(cfg_io['rfsoc_io']['sampling_freq'])
+    #sampling_freq = eval(R.io_cfg['rfsoc_io']['sampling_freq'])
+
+    sampling_freq = 488.28
 
     # Number of points to plot to achieve the specified plot time
     num_points = int(args.time*sampling_freq)
@@ -115,8 +114,11 @@ def live_plot(R, cfg, cfg_io, args):
     update = partial(update_artists, artists=artists, figax = figax, R = R, func = func, save_params = save_params, autoscale = autoscale, args = args, **kwargs)
     
     global last_frame
-    last_frame = 0
 
+    last_frame = 0
+    
+    # Turn on timestreaming
+    R.take_timestream(1, write_tones = False, save_data = False, reset=True, turn_off = False)
     anim = FuncAnimation(fig, func = update, init_func=init, frames = max_its, interval = 0, repeat = False, blit = True)
     plt.show()
 
@@ -128,10 +130,10 @@ def update_artists(frames, artists, figax, R, func, save_params, autoscale, args
     for key, value in kwargs.items():
         if key == 'num_points':
             num_points = value
-
+ 
     # Take a timestream
-    s21z = R.take_timestream(args.time_per_it, write_tones = False, save_data = False)
-
+    s21z = R.take_timestream(args.time_per_it, write_tones = False, save_data = False, reset=False, turn_off = False)
+    print(s21z)
     # Run if data is to be saved
     if save_params[0]:
         # Define global variables
@@ -142,7 +144,7 @@ def update_artists(frames, artists, figax, R, func, save_params, autoscale, args
 
         # If it has been 'interval' time since last save, save the data to disk
         if (frames - last_frame)*args.time_per_it > save_params[1]:
-            R.save_timestream(save_data) # Save data to disk
+            R._save_timestream(save_data) # Save data to disk
             save_data = np.array(len(save_data)*[[]]) # Reset list of saved data (to save memory)
             last_frame = frames # Reset time since last save        
 
@@ -155,7 +157,7 @@ def update_artists(frames, artists, figax, R, func, save_params, autoscale, args
     ymin = np.inf
     ymax = -np.inf
 
-    # Loop over each resonator
+    # Loop over each resonator (parallelize?)
     for i in range(len(data)):
         data[i].extend(s21z[args.resonators[i]])
         while len(data[i]) > num_points:
@@ -182,7 +184,7 @@ def update_artists(frames, artists, figax, R, func, save_params, autoscale, args
             if currymax > ymax: ymax = currymax
         
     if autoscale and frames % 100 == 0: 
-        autoscale_plot(figax, (xmin, xmax), (ymin, ymax), sf)
+        rescale = autoscale_plot(figax, (xmin, xmax), (ymin, ymax), sf)
 
     if rescale: fig.canvas.draw_idle()
 
@@ -204,10 +206,10 @@ def autoscale_plot(figax, xparams, yparams, sf):
     xlims = list(ax.get_xlim())
     ylims = list(ax.get_ylim()) 
 
-    if abs(xlims[0] - sxmin) > abs(sxmin)*sf or abs(xlims[1] - sxmax) > abs(sxmax)*sf:
+    if xlims[0] > sxmin or xlims[1] < sxmax:
         ax.set_xlim(sxmin, sxmax)
         rescale = True
-    if abs(ylims[0] - symin) > abs(symin)*sf or abs(ylims[1] - symax) > abs(symax)*sf:
+    if ylims[0] > sxmin or ylims[1] < sxmax:
         ax.set_ylim(symin, symax)
         rescale = True
 
@@ -239,11 +241,7 @@ def setup_S21(figax, artists, args, **kwargs):
     return artists
 
 def S21(s21z, args, **kwargs):
-    for key, value in kwargs.items():
-        if key == 'num_points':
-            num_points = value
-    ts = np.linspace(-args.time, 0, num_points)
-    return ts, np.abs(np.array(s21z))
+    return s21z[0], np.abs(np.array(s21z)[1:])
 
 def setup_FFT(figax, artists, args, **kwargs):
     fig, axs = figax
@@ -297,40 +295,20 @@ def setup_IQ(figax, artists, args, **kwargs):
     return artists    
 
 def IQ(s21z, args, **kwargs):
-    return np.real(s21z), np.imag(s21z)
+    return np.real(s21z[1:]), np.imag(s21z[1:])
 
 ###################
 # Other Functions #
 ###################
 
-def tune_detectors(R, cfg, cfg_io):
+
+def tune_detectors(R, args):
     # Find detectors and set tones
     # ----------------------------
-    R.find_detectors(new_sweep = True, N_steps = 400, peak_prom_db = 0.07, peak_dis = 8800, peak_width_min = 25, peak_width_max = 400)
-    det_freqs = R.find_detectors_fine(N_steps = 300, bandwidth = 4)
-    
-    # Makes sure that the correct number of resonators are found
-    assert len(det_freqs) == cfg['rfsoc_tones']['num_tones'], 'Number of found detectors do not match nominal number of detectors'    
-
-    # Write a tone at all det_freqs + shifts 
-    # --------------------------------------
-    tone_freqs = det_freqs
-    tone_powers = np.array(cfg['rfsoc_tones']['tone_powers'])
-    tone_phis = np.array(cfg['rfsoc_tones']['tone_phis'])
-    
-    data_dir = Path(cfg_io['file_paths']['base_data_dir'])
-
-    # Use tone powers and phis found from VNA sweep custom parameters not provided 
-    if len(tone_powers) == 0 or len(tone_powers) != len(det_freqs):
-        tone_powers = np.load(data_dir / "tmp" / "a_tones_comb_cust.npy")
-    if len(tone_phis) == 0 or len(tone_phis) != len(det_freqs):
-        tone_phis = np.load(data_dir / "tmp" / "p_tones_comb_cust.npy")
-
-    # Edit tones in RFSoC main config file
-    R.edit_main_config('tone_freqs', tone_freqs.tolist())
-    R.edit_main_config('tone_powers', tone_powers.tolist())
-    R.edit_main_config('tone_phis', tone_phis.tolist())
-
+    R.find_detectors(new_sweep = True)
+    det_freqs = R.find_detectors_fine(new_sweep = True)
+    R.take_target_sweep(write_tones = False)
+      
 def eval_args():
     # Initialize arg parser
     parser = argparse.ArgumentParser(prog='live_plotting',
@@ -342,7 +320,7 @@ def eval_args():
     parser.add_argument('-u', '--uptime', type = float, default = 2*60, help = 'Length of time to keep the live plotter running.')
     parser.add_argument('-p', '--time_per_it', type = float, default = 1, help = 'Amount of time per refresh (1/refresh rate).')
     parser.add_argument('--tune', action = 'store_true', help = 'Flag indicating detectors should be tuned.')
-    parser.add_argument('-c', "--cfg", type = str, default='./live_plot_config.yaml', help='Path of a custom config file.')
+    parser.add_argument('-c', "--cfg", type = str, default='./live_plotting_system_config.yaml', help='Path of system config file.')
 
 
     return parser.parse_args()

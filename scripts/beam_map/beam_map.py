@@ -51,9 +51,9 @@ def main():
 
     # Start beam mapping
     # ------------------
-    rfsoc_io.send_msg('INFO', 'Starting Polarization Data Collection', output)
+    rfsoc_io.send_msg('INFO', 'Starting Beam Map', output)
     acquire_data(P, R, output, args)
-
+   
 def acquire_data(P, R, output, args):
     '''
     Move beam mapper to specified coordinates and collect timestream data.
@@ -62,19 +62,19 @@ def acquire_data(P, R, output, args):
         R: RFSoC data acquisition object
         t: Length of timestreams in seconds
     '''
-    
-    # Create list of angles to iterate over
+
+    # Generate map 
     # -------------------------------------
-    angles = None
-    start, end, num = args.angles
-    if args.num:
-        angles = np.linspace(start, end, num)
-    else:
-        angles = np.arange(start, end + 2*num, num)
-    
-    R.edit_config(R.io_cfg, "angles", angles.tolist())
-    rfsoc_io.save_config(R.log_dir / f"pol_config_io_{R.timestamp}.yaml", R.io_cfg, R.save_cfg)
-    
+    map, mesh = generate_map(output, args)
+    rfsoc_io.send_msg('INFO', f'Generated Beam Map:\n{map}', output)
+
+    R.edit_config(R.io_cfg, "map", map.tolist())
+    if mesh is not None:
+        R.edit_config(R.io_cfg, "mesh_X", mesh[0].tolist())
+        R.edit_config(R.io_cfg, "mesh_Y", mesh[1].tolist())
+    rfsoc_io.save_config(R.log_dir / f"beammap_config_io_{R.timestamp}.yaml", R.io_cfg, R.save_cfg)
+    coords = map.reshape(-1, 2)
+
     # Take initial timestream to initialize drones
     # --------------------------------------------
     R.parallel = True
@@ -83,24 +83,26 @@ def acquire_data(P, R, output, args):
     # Iterate over positions and take timestreams
     # -------------------------------------------
     # P.changeStageSpeed(speed=4000) # Set beam mapper speed
-    with tqdm(range(len(angles) - 1), desc = f'Taking Polarization Data:') as pbar:
+    with tqdm(range(len(coords)), desc = f'Beam Mapping:') as pbar:
         for i in pbar:
-            print(angles[i])
-            R.edit_config(R.ext_cfg, "angle", float(angles[i]))
-            pbar.set_postfix_str(f'Current Angle: {angles[i]}')
-            
-            # Take timestream data (also saves config file)
-            for i in tqdm(range(args.trials), desc = "Trial"):
-                if args.t > 0: R.take_timestream(args.t, write_tones = False, reset = False, turn_off = False, setup = False)
+            x, y = coords[i]
 
-            # Rotate polarizing grid to next angle
-            dtheta = angles[i+1] - angles[i]
-            P.moveStepper(deg=dtheta)
-            
-            rfsoc_io.send_msg('INFO', f'Finished moving grid to {angles[i]} degrees!', output)
+            # Move xy stage to next position
+            P.moveStageTo(x=x,y=y)
+            if i == 0:
+                time.sleep(40)
 
-            # Wait before taking next timestream
+            rfsoc_io.send_msg('INFO', f'Finished moving beam mapper to {coords[i]} mm!', output)
+            
+            # Wait before taking timestream
             time.sleep(args.wait)
+
+            # Update/add position to config file
+            R.edit_config(R.ext_cfg, 'coords', coords[i].tolist())
+            pbar.set_postfix_str(f'Current Coordinate: {coords[i]} mm')
+
+            if args.t > 0: R.take_timestream(args.t, write_tones = False, reset = False, turn_off = False, setup = False)
+    R.take_timestream(1, write_tones = False, turn_off = True, save_data = False, setup = False, reset = False)
 
 def generate_map(output, args):
     # Generates a list of coordinates for map making
@@ -161,22 +163,66 @@ def tune_detectors(R, args):
 
 def eval_args():
     # Initialize arg parser
-    parser = argparse.ArgumentParser(prog='measure_pol',
-                                     description='''Perform polarization measurements on 
-                                     microwave kinetic inductance detectors (MKID) using a rotating
-                                     polarizing grid.''')
+    parser = argparse.ArgumentParser(prog='Beam Map', description='''Perform beam mapping on microwave kinetic inductance detectors (MKID) using a motorized XY stage''')
+    
+    # Add arguments
     parser.add_argument('t', type = float, help='Length of timestreams in seconds')
-    parser.add_argument('-a', "--angles", nargs = 3, type = int,
-                         default = (0, 360, 1), metavar=('Start', 'End', 'Spacing/Num'), 
-                         help='Angles for which to collect data.')
+    parser.add_argument('-T', "--maptype", default='rect', type = str, help='type of beam map')
+    parser.add_argument('-c', "--center", nargs = 2, type = float,
+                         default = (0, 0), metavar=('X', 'Y'), 
+                         help='Center of Map')
+    parser.add_argument('-s', "--size", nargs = 2, type = float,
+                         default = (4, 4), metavar=('X/R', 'Y/Theta'), 
+                         help='Size of beam map (X mm by Y mm) or (R mm by Theta degrees)')
+    parser.add_argument('-r', "--res", type= float, default = 1,
+                         help = 'Resolution of beam map in mm. If radial beam map then applied in radial direction')
     parser.add_argument('-w', "--wait", type= float, default = 1,
-                         help = 'Time to wait after moving grid before taking timestream.')
-    parser.add_argument('-c', "--cfg", type = str, default='./pol_system_config.yaml', help='Path of a custom config file.')
-    parser.add_argument('-t', "--trials", type = int, default=1, help='Number of timestreams to take per angle.')
+                         help = 'Time to wait after moving xy stage before taking timestream.')
     parser.add_argument('--tune', action = 'store_true', help = 'Flag indicating detectors should be tuned.')
-    parser.add_argument("--num", action = 'store_true', 
-                        help='Flag indicating that last value in -a argument is number of angles')
+    parser.add_argument('-C', "--cfg", type = str, default='./beam_map_modcam_system_config.yaml', help='Path of a custom config file.')
     return parser.parse_args()
+
+
+# def tune_detectors(R, cfg, cfg_io, args):
+#     # Find detectors and set tones
+#     # ----------------------------
+#     R.find_detectors(new_sweep = True, N_steps = 400, peak_prom_db = 0.07, peak_dis = 8800, peak_width_min = 25, peak_width_max = 400)
+#     det_freqs = R.find_detectors_fine(N_steps = 300, bandwidth = 4)
+    
+#     # Makes sure that the correct number of resonators are found
+#     assert len(det_freqs) == cfg['rfsoc_tones']['num_tones'], 'Number of found detectors do not match nominal number of detectors'
+    
+#     ## Removed shifts for now. 
+#     # Write a tone at all det_freqs
+#     # --------------------------------------
+#     tone_freqs = np.array(det_freqs)
+#     tone_powers = np.array(cfg['rfsoc_tones']['tone_powers'])
+#     tone_phis = np.array(cfg['rfsoc_tones']['tone_phis'])
+    
+#     data_dir = Path(cfg_io['file_paths']['base_data_dir'])
+
+#     # Use tone powers and phis found from VNA sweep custom parameters not provided 
+#     if len(tone_powers) == 0 or len(tone_powers) != len(det_freqs):
+#         tone_powers = np.load(data_dir / "tmp" / "a_tones_comb_cust.npy")
+#     if len(tone_phis) == 0 or len(tone_phis) != len(det_freqs):
+#         tone_phis = np.load(data_dir / "tmp" / "p_tones_comb_cust.npy")
+
+#     # Edit tones in RFSoC main config file
+#     R.edit_main_config('tone_freqs', tone_freqs.tolist())
+#     R.edit_main_config('tone_powers', tone_powers.tolist())
+#     R.edit_main_config('tone_phis', tone_phis.tolist())
+
+
+# def get_dets(sweep, rfsoc_dir, dets=6):
+#     for i in range(dets):
+#         sweep_id = int(get_sweep_id(sweep))
+#         cfg_file = [file for file in rfsoc_dir.glob(f'*{sweep_id}*.yaml')][0]
+#         yield Sweep(sweep, i, cfg_file)      
+
+# def get_sweep_id(sweep_path):
+#     sweep = Path(sweep_path).name
+#     return sweep[5:15]
+
 
 if __name__ == '__main__':
     main()

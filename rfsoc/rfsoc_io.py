@@ -14,6 +14,7 @@ from fabric import Connection
 import logging
 import yaml
 import time
+import sys
 
 
 ##########################
@@ -198,18 +199,6 @@ def get_creation_time(file_path, output = False):
 # Logging IO Functions #
 ########################
 
-def addLevel(num, name):
-    '''
-    Adds a custom logging level to the logger.
-    '''
-
-    method_name = name.lower()
-
-    logging.addLevelName(num, name)
-    setattr(logging, name, num)
-    setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num))
-    setattr(logging, method_name, partial(logging.log, num))
-
 def setup_logging(log_path, level, output = False, name = __name__):
     '''
     Setup logger and logger config.
@@ -227,7 +216,11 @@ def setup_logging(log_path, level, output = False, name = __name__):
     format='%(levelname)s | %(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p", level = logging.getLevelName(level))
 
     # Add custom logging levels
-    addLevel(int((logging.getLevelName('INFO') + logging.getLevelName('WARNING'))/2), 'HEADER')
+    custom_levels = [['HEADER', int((logging.INFO + logging.WARNING)/2)], 
+                     ['PCS', int(logging.DEBUG - 1)]]
+    
+    for level in custom_levels:
+        _addLevel(level[1], level[0])
 
     # Test logging/confirm successful logger setup
     send_msg('INFO', f"Successfully initialized logger: {name}", output = output, name = name)
@@ -246,17 +239,27 @@ def send_msg(level, msg, output = True, name = __name__):
     logger = logging.getLogger(name)
 
     try:
+        log_level = logging.getLevelName(level)
         # Log message with given level
-        logger.log(logging.getLevelName(level), msg)
+        logger.log(log_level, msg)
         
         # Write message to terminal
-        if output and logger.isEnabledFor(logging.getLevelName(level)):
-            tqdm.write(f'{level} | {msg}')
+        if output and logger.isEnabledFor(log_level):
+            color_mapping = {'PCS':     '\033[95m',
+                             'DEBUG':   '\033[96m',
+                             'INFO':    '\033[32m',
+                             'HEADER':  '\033[92m', 
+                             'WARNING': '\033[93m',
+                             'ERROR':   '\033[31m',
+                             'CRITICAL':'\033[91m',
+                             'DEFAULT': '\033[0m'}
+            
+            tqdm.write(f'{color_mapping[level]}{level} {color_mapping["DEFAULT"]}| {msg}')
     except:
         logger.log(logging.WARNING, 'Error logging message. Ensure that the message is a string!')
 
         if output:
-            tqdm.write("WARNING | Error logging message. Ensure that the message is a string!")
+            tqdm.write("Error logging message. Ensure that the message is a string!")
 
 def wait(t_sec, output = True, desc = ""):
     '''
@@ -274,6 +277,31 @@ def wait(t_sec, output = True, desc = ""):
 
     for t in iterator:
         time.sleep(1)
+
+def header(func):
+    def wrapper(self, *args, **kwargs):
+        name = func.__name__
+        send_msg('HEADER', f"Executing {name}...", self.output)
+        try:
+            res = func(self, *args, **kwargs)
+            send_msg('HEADER', f"{name} executed successfully!")
+            return res
+        except Exception as e:
+            send_msg('CRITICAL', f"TERMINATING PROGRAM -- {name} failed to execute with error:\n{e}", True)
+            sys.exit()
+    return wrapper
+
+def _addLevel(num, name):
+    '''
+    Adds a custom logging level to the logger.
+    '''
+
+    method_name = name.lower()
+
+    logging.addLevelName(num, name)
+    setattr(logging, name, num)
+    setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num))
+    setattr(logging, method_name, partial(logging.log, num))
 
 #######################
 # Remote IO Functions #
