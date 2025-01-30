@@ -8,29 +8,33 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 871                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 0.5               # Bandwidth of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
+  full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
+  tone_bandwidth: 0.5          # Bandwidth of each target sweep tone (in MHz) (currently needs to be changed in _cfg_board.py on board)
   N_step: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
   dB: False                    # True if tone powers are given in dB
   num_tones: null
-  tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: []              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
-  gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+  tone_freqs: [730748824.7980335]               # Tone frequencies used for target sweep
+  tone_powers: [352.30239710850674]              # Tone powers used for target sweep
+  tone_phis: [0]                # Tone phases used for target sweep
+  generation:
+    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
-  drive: 6 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 10  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 0 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 0  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
-  network: 1.1 # Array.Network
+  network: 1.2 # Array.Network
   network_in: 1.1 # 
   network_out: 1.1 # 
   LNA_in_on: True
   LNA_out_on: True
-  detector_type: "Al" # Material of detectors
+  detector_type: "TiN" # Material of detectors
   nominal_num_detectors: 570
   nominal_detector_freqs: [] # Units of Hz
 
@@ -42,7 +46,7 @@ det_find:
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 100
+  width_max: 600
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
@@ -60,26 +64,29 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 871                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 0.5                 # Bandwidth of each target sweep tone
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
+  full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
+  tone_bandwidth: 0.5                 # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone 
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
   tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
-  gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-
+  generation:
+    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
-  drive: 15 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
-  network: 1.2 # Array.Network
-  detector_type: "Al" # Material of detectors
+  network: 1.3 # Array.Network
+  detector_type: "TiN" # Material of detectors
   nominal_num_detectors: 570
   nominal_detector_freqs: [] # Units of Hz
 
@@ -91,7 +98,7 @@ det_find:
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 100
+  width_max: 600
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
@@ -110,26 +117,29 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 871                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 0.5                 # Bandwidth of each target sweep tone
+  NCLO: 610                    # Numerically controlled oscillator frequency (in MHz)
+  full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
+  tone_bandwidth: 0.5                 # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
   tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
-  gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-
+  generation:
+    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
-  drive: 15 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
-  network: 1.3
-  detector_type: "Al" # Material of detectors
+  network: 1.4
+  detector_type: "TiN" # Material of detectors
   nominal_num_detectors: 576
   nominal_detector_freqs: [] # Units of Hz
 
@@ -141,7 +151,7 @@ det_find:
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 100
+  width_max: 600
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
@@ -158,26 +168,29 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 871                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 0.5               # Bandwidth of each target sweep tone
+  NCLO: 610                    # Numerically controlled oscillator frequency (in MHz)
+  full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
+  tone_bandwidth: 0.5               # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep (in Hz)
   tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
-  gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-
+  generation:
+    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
-  drive: 15 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
-  network: 1.4
-  detector_type: "Al" # Material of detectors
+  network: 1.5
+  detector_type: "TiN" # Material of detectors
   nominal_num_detectors: 576
   nominal_detector_freqs: [] # Units of Hz
 
@@ -189,7 +202,7 @@ det_find:
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 100
+  width_max: 600
   stitch: True
   stitch_sw: 100
   continuum_wn: 300

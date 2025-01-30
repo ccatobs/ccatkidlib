@@ -44,7 +44,7 @@ boards:
 # File paths
 file_paths:
   analysis_dir: "/home/pcs/ccatkidlib/analysis/"                                           # Analysis code directory
-  data_dir: "/mnt/md0/cooldown_dec/cust_comb"                                           # Directory to save data in
+  data_dir: "/mnt/md0/cooldown_dec/test"                                           # Directory to save data in
   tmp_data_dir: "/home/pcs/primecam_readout/src/tmp"                     # Temp data directory in which primecam_readout saves files
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
@@ -54,9 +54,9 @@ file_paths:
 
 # File names
 file_names:
-  stream_fname: 'cust_tstream' # Timestream file name
-  targ_fname: 'cust_targ'      # Target sweep file name
-  vna_fname: 'cust_vna'        # VNA sweep file name
+  stream_fname: 'test_tstream' # Timestream file name
+  targ_fname: 'test_targ'      # Target sweep file name
+  vna_fname: 'test_vna'        # VNA sweep file name
   vna_res_fname: 'f_res_vna'
   targ_res_fname: 'f_res_targ'
   comb_freq: 'f_rf_tones_comb'
