@@ -14,9 +14,9 @@ tones:
   N_step: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
   dB: False                    # True if tone powers are given in dB
   num_tones: null
-  tone_freqs: [730748824.7980335]               # Tone frequencies used for target sweep
-  tone_powers: [352.30239710850674]              # Tone powers used for target sweep
-  tone_phis: [0]                # Tone phases used for target sweep
+  tone_freqs: []               # Tone frequencies used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
@@ -80,7 +80,7 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
@@ -117,7 +117,7 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 610                    # Numerically controlled oscillator frequency (in MHz)
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   tone_bandwidth: 0.5                 # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone

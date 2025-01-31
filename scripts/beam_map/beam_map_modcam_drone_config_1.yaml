@@ -117,7 +117,7 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 610                    # Numerically controlled oscillator frequency (in MHz)
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   tone_bandwidth: 0.5                 # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone
@@ -168,7 +168,7 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 610                    # Numerically controlled oscillator frequency (in MHz)
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   tone_bandwidth: 0.5               # Bandwidth of each target sweep tone
   N_step: 500                  # Number of points of each target sweep tone

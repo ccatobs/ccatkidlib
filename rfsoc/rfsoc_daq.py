@@ -81,11 +81,16 @@ class R:
                 time.sleep(1) # Wait for socket to close
                 exit = True
 
-        # Set NCLO frequency of RFSoC
+        # Set NCLO frequency and accum_len for RFSoC drones
         if self.io_cfg['initialize']:
             for com, cfg in zip(self.drone_list, self.drone_cfg):
+                # Set NCLO
                 rtn = self.rfsoc.setNCLO(com_to = com, f_lo = cfg['tones']['NCLO'])
-                rfsoc_io.send_msg('DEBUG', f'{rtn}', self.output)
+                rfsoc_io.send_msg('PCS', f'{rtn}', self.output)
+
+                # Set accum_len
+                rtn = self.rfsoc.setAccumLength(com_to=com)
+                rfsoc_io.send_msg('PCS', f'{rtn}', self.output)
             rfsoc_io.send_msg('INFO', f"Set NCLO to {[cfg['tones']['NCLO'] for cfg in self.drone_cfg]} MHz for drones: {self.drone_list}!", self.output)
 
             # Set drone attenuations
@@ -358,6 +363,19 @@ class R:
                 rfsoc_io.send_msg('PCS', f'{rtn}', self.output)
                 rfsoc_io.send_msg('INFO', f'Sucessfully wrote custom comb for drone {com}!', self.output)
 
+    def get_ADC_rms(self, **kwargs):
+        ''' 
+        Get the root mean squared (RMS) power at the analog to digital converter (ADC) for 
+        drones specified by com_to.
+
+        Parameters:
+            com_to (list of str): List of drones to setup
+        '''
+
+        com_to = self._get_com_to(**kwargs)
+
+        return
+
     def check_avail(self, com, **kwargs):
         '''
         Check the available storage space on RFSoC board.
@@ -474,8 +492,6 @@ class R:
         # Save ext config
         self.ext_cfg = rfsoc_io.save_config(self.log_dir / f"vna_config_ext_{self.timestamp}.yaml", self.ext_cfg, self.save_cfg)
 
-        # Make sure all VNA sweeps have finished
-        time.sleep(3)
         vna_files, vna_paths = [], []
         # Save VNA sweep
         for com in com_to:
@@ -1064,6 +1080,25 @@ class R:
     #############################
     # Internal Helper Functions #
     #############################
+
+    def _run_func(self, func, *args, **kwargs):
+        '''
+        Run subfunction in parallel or in series
+        '''
+        com_to = self._get_com_to(**kwargs)
+
+        parallel = self.parallel
+        for key, value in kwargs.items():
+            if key == 'parallel':
+                parallel = value
+
+        if parallel and len(com_to) > 1:
+            func(*args, **kwargs)
+        else:
+            for com in com_to:
+                kwargs['com_to'] = com
+                func(*args, **kwargs)
+        pass
 
     def _write_custom_comb(self, com, **kwargs):
         '''

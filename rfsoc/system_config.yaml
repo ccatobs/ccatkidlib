@@ -16,11 +16,11 @@ sess_id: null
 # Drone/Board List Config #
 ###########################
 
-drone_list: ['1.1'] # List of boards/drones to use
+drone_list: ['1.2'] # List of boards/drones to use
 
 initialize: True
 parallel: False # Whether to send commands to all drones in parallel (will stop all drones not in drone_list)
-restart: False # Whether to restart already running drones
+restart: True # Whether to restart already running drones
 
 # Board configuration
 udp_ip: "192.168.3.40"
@@ -54,9 +54,9 @@ file_paths:
 
 # File names
 file_names:
-  stream_fname: 'test_tstream' # Timestream file name
-  targ_fname: 'test_targ'      # Target sweep file name
-  vna_fname: 'test_vna'        # VNA sweep file name
+  stream_fname: 'att_to_tone_tstream' # Timestream file name
+  targ_fname: 'att_to_tone_targ'      # Target sweep file name
+  vna_fname: 'att_to_tone_vna'        # VNA sweep file name
   vna_res_fname: 'f_res_vna'
   targ_res_fname: 'f_res_targ'
   comb_freq: 'f_rf_tones_comb'
