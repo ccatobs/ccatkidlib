@@ -1,21 +1,26 @@
 #=================================#
-# rfsoc_io.py               2024 #
+# rfsoc_io.py               2025 #
 # Darshan Patel dp649@cornell.edu #
 #=================================#
 
 '''
-Helper functions for file and directory read/write operations as well as logging.
+Library of helper functions for file and directory read/write operations as well as logging.
 '''
 
+# Import Python modules
 from pathlib import Path
 from tqdm import tqdm
-from functools import partial, partialmethod
+from functools import partial, partialmethod, wraps
 from fabric import Connection
 import logging
 import yaml
 import time
 import sys
+import ast
 
+# Local imports
+from style import style
+from utils import function_timer
 
 ##########################
 # Directory IO Functions #
@@ -146,7 +151,8 @@ def save_config(cfg_path, cfg_dic, save = True, output = False):
             return yaml.safe_load(config)
     else:
         return cfg_dic
-    
+
+@function_timer
 def get_most_recent_file(dir, file_identifier, output = False, time_past = 5*60):
     '''
     Fetch the most recent file in a directory with the desired file identifier.
@@ -208,19 +214,35 @@ def setup_logging(log_path, level, output = False, name = __name__):
         level: Level at which to log (messages below this level are ignored)
         name: Name of the logger
     '''
+
+    def _addLevel(num, name):
+        '''
+        Adds a custom logging level to the logger.
+        '''
+
+        method_name = name.lower()
+
+        logging.addLevelName(num, name)
+        setattr(logging, name, num)
+        setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num))
+        setattr(logging, method_name, partial(logging.log, num))
+
     # Get logger
     logger = logging.getLogger(name)
 
-    # Setup logger config
-    logging.basicConfig(filename=log_path, filemode = "w",
-    format='%(levelname)s | %(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p", level = logging.getLevelName(level))
-
     # Add custom logging levels
-    custom_levels = [['HEADER', int((logging.INFO + logging.WARNING)/2)], 
+    # -------------------------
+    custom_levels = [['HEADER', int((logging.INFO + logging.WARNING)/2)],
+                     ['FOOTER', int((logging.INFO + logging.WARNING)/2)],
                      ['PCS', int(logging.DEBUG - 1)]]
     
-    for level in custom_levels:
-        _addLevel(level[1], level[0])
+    for lvl in custom_levels:
+        _addLevel(lvl[1], lvl[0])
+
+    # Setup logger config
+    # -------------------
+    logging.basicConfig(filename=log_path, filemode = "w",
+    format='%(levelname)s | %(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p", level = logging.getLevelName(level))
 
     # Test logging/confirm successful logger setup
     send_msg('INFO', f"Successfully initialized logger: {name}", output = output, name = name)
@@ -237,7 +259,6 @@ def send_msg(level, msg, output = True, name = __name__):
     '''
     # Get logger
     logger = logging.getLogger(name)
-
     try:
         log_level = logging.getLevelName(level)
         # Log message with given level
@@ -245,21 +266,12 @@ def send_msg(level, msg, output = True, name = __name__):
         
         # Write message to terminal
         if output and logger.isEnabledFor(log_level):
-            color_mapping = {'PCS':     '\033[95m',
-                             'DEBUG':   '\033[96m',
-                             'INFO':    '\033[32m',
-                             'HEADER':  '\033[92m', 
-                             'WARNING': '\033[93m',
-                             'ERROR':   '\033[31m',
-                             'CRITICAL':'\033[91m',
-                             'DEFAULT': '\033[0m'}
-            
-            tqdm.write(f'{color_mapping[level]}{level} {color_mapping["DEFAULT"]}| {msg}')
+            tqdm.write(f'{style().log_begin(level, getattr(style, level))} {msg}')
     except:
         logger.log(logging.WARNING, 'Error logging message. Ensure that the message is a string!')
 
         if output:
-            tqdm.write("Error logging message. Ensure that the message is a string!")
+            tqdm.write(f"{style().log_begin('ERROR', style.ERROR)} Error logging message. Ensure that the message is a string!")
 
 def wait(t_sec, output = True, desc = ""):
     '''
@@ -273,36 +285,26 @@ def wait(t_sec, output = True, desc = ""):
     # If terminal output is True, use tqdm progress bar
     iterator = range(int(t_sec))
     if output:
-        iterator = tqdm(iterator, desc = desc)
+        iterator = tqdm(iterator, colour='BLUE', desc = f"{style().log_begin('WAIT', style.WAIT)} {desc}")
 
     for t in iterator:
         time.sleep(1)
 
 def header(func):
-    def wrapper(self, *args, **kwargs):
+    @wraps(func)
+    def _wrapper(self, *args, **kwargs):
         name = func.__name__
-        send_msg('HEADER', f"Executing {name}...", self.output)
+        fmt = style().func_name(name)
+        send_msg('HEADER', f"Executing {fmt}...", self.output)
         try:
-            res = func(self, *args, **kwargs)
-            send_msg('HEADER', f"{name} executed successfully!")
-            return res
+            rtn = func(self, *args, **kwargs)
+            send_msg('FOOTER', f"{fmt} executed successfully!")
+            return rtn
         except Exception as e:
             import traceback 
-            send_msg('CRITICAL', f"TERMINATING PROGRAM -- {name} failed to execute with error:\n{traceback.format_exc()}", True)
+            send_msg('CRITICAL', f"TERMINATING PROGRAM -- {fmt} failed to execute with error:\n{traceback.format_exc()}", True)
             sys.exit()
-    return wrapper
-
-def _addLevel(num, name):
-    '''
-    Adds a custom logging level to the logger.
-    '''
-
-    method_name = name.lower()
-
-    logging.addLevelName(num, name)
-    setattr(logging, name, num)
-    setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num))
-    setattr(logging, method_name, partial(logging.log, num))
+    return _wrapper
 
 #######################
 # Remote IO Functions #
@@ -325,6 +327,7 @@ def get_connection(ip, key, output = False):
     send_msg('DEBUG', f'Created Fabric Connection to {ip}.', output = output)
     return connect
 
+#@function_timer
 def load_array_board(c, path, output = False):
     '''
     Load numpy array from RFSoC board.
@@ -338,10 +341,11 @@ def load_array_board(c, path, output = False):
     '''
 
     cmd = f'python3 -c \'import numpy as np; print(np.load(\"{path}\").tolist())\''
-    loaded_array = eval(c.run(cmd, hide = 'out').stdout)
+    loaded_array = ast.literal_eval(c.run(cmd, hide = 'out').stdout)
     send_msg('DEBUG', f"Loaded array {loaded_array} from '{path}'.", output = output)
     return loaded_array
 
+#@function_timer
 def save_array_board(c, path, saved_array, output = False):
     '''
     Save numpy array to RFSoC board.
@@ -360,6 +364,7 @@ def save_array_board(c, path, saved_array, output = False):
     send_msg('DEBUG', f"Saved array {saved_array} to '{path}'.", output = output)
     return load_array_board(c, path)
 
+#@function_timer
 def get_most_recent_file_board(c, dir, file_identifier = "*", output = False):
     '''
     Get most recent file in directory on RFSoC board.
@@ -395,4 +400,4 @@ def path_exists(c, path):
     '''
 
     cmd = f"[ -f {path} ] && echo True || echo False"
-    return eval(c.run(cmd, hide = 'out').stdout)
+    return ast.literal_eval(c.run(cmd, hide = 'out').stdout)

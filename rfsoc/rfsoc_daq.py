@@ -13,8 +13,9 @@ import numpy as np
 import time
 
 # Import local modules
-from rfsoc_io import *
 import rfsoc_io
+from rfsoc_io import header
+from style import style
 import utils
 
 class R:
@@ -23,6 +24,7 @@ class R:
     Radio Frequency System on a Chip (RFSoC).
     '''
 
+    @utils.method_timer
     def __init__(self, cfg_path = "/home/pcs/ccatkidlib/rfsoc/system_config.yaml"):
         '''
         Constructor for R. Creates directories for data storage, configures logger, and starts
@@ -118,7 +120,6 @@ class R:
             parallel (bool): Whether to run board commands in parallel
             restart (bool): Whether to restart already running drones
         '''
-        import drone_control
 
         com_to = self.drone_list
         parallel = self.parallel # Whether to run board commands in parallel (stops drones not in drone_list)
@@ -144,7 +145,7 @@ class R:
             # Loop through all drones
             for i in range(4):
                 # Set to_run for drone (True if supposed to be running, False otherwise)
-                com = board + f'.{i + 1}'
+                com = board + f'.{i+1}'
                 master_drone[com]['ip'] = self.io_cfg['boards'][f'b{board}']['board_ip']
                 master_drone[com]['to_run'] = com in com_to
         # Save edited config
@@ -152,26 +153,31 @@ class R:
 
         # Setup drones
         # ------------
-
         wait = False
         # Loop through all boards
         for board in self.board_list:
             # Loop through all drones
             for i in range(4):
-                ip, to_run, running = drone_control.statusDrone(int(board), i + 1) # Get drone status
-
+                com = board + f'.{i+1}'
+                rtn = self.rfsoc.action(com_to=com, action='status') # Get drone status
+                ip, to_run, running = ast.literal_eval(rtn.session['messages'][1][1].split(': ')[1])
+                rfsoc_io.send_msg('PCS', f"{rtn.session}", self.output)
+                if running: rfsoc_io.send_msg('INFO', f"Drone {com} is currently running.", self.output)
                 # Stop, Start, or Restart drone as appropriate
                 if running and not to_run and parallel:
-                    ret = drone_control.stopDrone(int(board), i + 1)
+                    rtn = self.rfsoc.action(com_to=com, action='stop')
+                    rfsoc_io.send_msg('INFO', f"Stopping drone {com}...", self.output)
                 elif to_run and not running:
-                    ret = drone_control.startDrone(int(board), i + 1)
+                    rtn = self.rfsoc.action(com_to=com, action='start')
+                    rfsoc_io.send_msg('INFO', f"Starting drone {com}...", self.output)
                     wait = True
                 elif to_run and running and restart:
-                    ret = drone_control.restartDrone(int(board), i + 1)
+                    rtn = self.rfsoc.action(com_to=com, action='restart')
+                    rfsoc_io.send_msg('INFO', f"Restarting drone {com}...", self.output)
                     wait = True
 
         # Wait if any of the drones were started/restarted
-        if wait: rfsoc_io.wait(25, output = self.output, desc = "Waiting for drones to start")
+        if wait: rfsoc_io.wait(25, output = self.output, desc = f"For drones to start")
 
     def load_system_config(self, cfg_path = "/home/rfsoc/ccatkidlib/rfsoc/system_config.yaml"):
         '''
@@ -287,6 +293,7 @@ class R:
         return done
 
     @header
+    @utils.method_timer
     def set_atten(self, drive = None, sense = None, **kwargs):
         '''
         Set drive/sense attenutors.
@@ -343,6 +350,7 @@ class R:
         _set_atten(com_to = com_to, direction = 'sense', atten = sense)
 
     @header
+    @utils.method_timer
     def write_config_comb(self, **kwargs):
         '''
         Write custom comb using comb parameters from config file. Config file parameters are
@@ -396,6 +404,7 @@ class R:
                 rfsoc_io.send_msg('INFO', f'Sucessfully wrote custom comb for drone {com}!', self.output)
 
     @header
+    @utils.method_timer
     def get_ADC_rms(self, **kwargs):
         ''' 
         Get the root mean squared (RMS) power at the analog to digital converter (ADC) for 
@@ -409,6 +418,8 @@ class R:
             rtn = self.rfsoc.getSnapData(com_to = com, mux_sel = 0, silent = False)
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
             return rtn.session['messages'][1][1][:-3].split('}, ')
+        
+        com_to, _ = self._get_com_to(**kwargs)
 
         rtns = np.array(self._run_parallel(_getSnapData, **kwargs)).flatten()
 
@@ -421,12 +432,13 @@ class R:
             # From primecam_readout alcove_base getADCrms function
             I, Q = data_dic['data']
             z = I + 1j * Q
-            rms = np.real(np.sqrt(np.mean(z * np.conj(z)))).astype(np.float32)
+            rms = float(np.real(np.sqrt(np.mean(z * np.conj(z)))))
             rms_list.append(rms)
 
             self.edit_config(self.drone_cfg[ind], 'ADC_RMS', rms)
 
         rms_list = [rms for _, rms in sorted(zip(inds, rms_list))]
+        rfsoc_io.send_msg('INFO', f'RMS power at the ADC is {rms_list} for drones {com_to}!')
         return rms_list
 
     def check_avail(self, com, **kwargs):
@@ -482,6 +494,7 @@ class R:
     # Data Acquisition Functions #
     ##############################
     @header
+    @utils.method_timer
     def take_vna_sweep(self, **kwargs):
         '''
         Take a vector network analyzer (VNA) sweep using RFSoC.
@@ -502,8 +515,6 @@ class R:
             avail = self.check_avail(com = com)
             rtn = self.rfsoc.vnaSweep(com_to = com, silent = True)
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-
-            self.get_ADC_rms(com_to = com)
             return rtn
         
         # Get com_to
@@ -535,6 +546,7 @@ class R:
         self.timestamp = str(time.time()).split('.')[0]
         rfsoc_io.send_msg('INFO', 'Taking VNA sweeps!', self.output)
         self._run_parallel(_take_vna_sweep, **kwargs)
+        self.get_ADC_rms(**kwargs)
         rfsoc_io.send_msg('INFO', f'Finished taking VNA sweeps for drones {com_to}!', self.output)
 
         # Save ext config
@@ -583,6 +595,7 @@ class R:
             return vna_files
 
     @header
+    @utils.method_timer
     def take_target_sweep(self, **kwargs):
         '''
         Take a target sweep around the specified tones.
@@ -633,6 +646,7 @@ class R:
         self.timestamp = str(time.time()).split('.')[0]
         rfsoc_io.send_msg('INFO', 'Taking target sweeps!', output = self.output)
         self._run_parallel(_take_targ_sweep, **kwargs)
+        self.get_ADC_rms(**kwargs)
         rfsoc_io.send_msg('INFO', f'Finished taking target sweeps for drones {com_to}!', self.output)
 
         # Get current timestamp and save ext config
@@ -681,6 +695,7 @@ class R:
             return targ_files
 
     @header
+    @utils.method_timer
     def take_timestream(self, t_sec, **kwargs):
         '''
         Take timestream data using RFSoC.
@@ -825,11 +840,12 @@ class R:
                     stream_paths.append(self._save_timestream(ind, timestream_data))
                 else:
                     timestreams.append(timestream_data)
+        # Get RMS power at the ADC
+        self.get_ADC_rms(**kwargs)
 
+        # Save ext config
         if save_data:
-            # Save ext config
             self.ext_cfg = rfsoc_io.save_config(self.log_dir / f"timestream_config_ext_{self.timestamp}.yaml", self.ext_cfg, self.save_cfg)
-            
             return stream_paths
         else:
             return timestreams
@@ -839,6 +855,7 @@ class R:
     ####################
 
     @header
+    @utils.method_timer
     def find_detectors(self, new_sweep = True, **kwargs):
         '''
         Find detectors and place tones at their minima. Length of bins is 500,000 Hz / N_steps.
@@ -933,7 +950,7 @@ class R:
             # Check if a VNA sweep was taken in the last day
             vna_file = rfsoc_io.get_most_recent_file(self.vna_dirs[ind], f"{self.io_cfg['save_file_names']['vna_sweep'][0]}*", self.output, time_past=24*3600)
             if not vna_file.exists() or new_sweep:
-                to_sweep.append(com)
+                to_sweep.append(str(com))
         if len(to_sweep) != 0:
             # Take VNA sweep(s) without saving configs (saved later)
             self.save_cfg = False
@@ -1000,6 +1017,7 @@ class R:
         return found_nums, found_freqs
 
     @header
+    @utils.method_timer
     def find_detectors_fine(self, new_sweep = True, **kwargs):
         '''
         Find detectors and place tones at their minima. Length of bins is 500,000 Hz / N_steps.
@@ -1432,6 +1450,7 @@ class R:
         # Return loaded frequency, amplitude, and phase arrays
         return comb_freq, comb_amp, comb_phi
 
+    @utils.method_timer
     def _save_timestream(self, ind, data, **kwargs):
 
         '''
@@ -1504,7 +1523,7 @@ class R:
         '''
 
         # Set com_to to drone list specified in system config (make a copy so that it does not point to the class drone_list attribute)
-        com_to = np.copy(self.drone_list)
+        com_to = np.copy(self.drone_list).tolist()
         bids = self.board_list
         setup = True
 
