@@ -54,6 +54,7 @@ det_find:
   remove_noise: True
   noise_wn: 30000
 
+ADC_RMS: null
 ---
 sess_id: null
 
@@ -106,6 +107,7 @@ det_find:
   remove_noise: True
   noise_wn: 30000
 
+ADC_RMS: null
 ---
 sess_id: null
 
@@ -158,6 +160,8 @@ det_find:
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+
+ADC_RMS: null
 ---
 sess_id: null
 
@@ -209,6 +213,8 @@ det_find:
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+
+ADC_RMS: null
 ...
 
 

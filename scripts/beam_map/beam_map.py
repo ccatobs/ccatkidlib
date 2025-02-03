@@ -160,6 +160,7 @@ def tune_detectors(R, args):
     R.find_detectors(new_sweep = True)
     det_freqs = R.find_detectors_fine(new_sweep = True)
     R.take_target_sweep(write_tones = False)
+    R.take_target_sweep(write_tones = True)
 
 def eval_args():
     # Initialize arg parser

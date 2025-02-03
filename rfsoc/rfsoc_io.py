@@ -287,7 +287,8 @@ def header(func):
             send_msg('HEADER', f"{name} executed successfully!")
             return res
         except Exception as e:
-            send_msg('CRITICAL', f"TERMINATING PROGRAM -- {name} failed to execute with error:\n{e}", True)
+            import traceback 
+            send_msg('CRITICAL', f"TERMINATING PROGRAM -- {name} failed to execute with error:\n{traceback.format_exc()}", True)
             sys.exit()
     return wrapper
 

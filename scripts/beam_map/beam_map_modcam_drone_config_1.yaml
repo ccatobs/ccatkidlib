@@ -15,7 +15,7 @@ tones:
   dB: False                    # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: []              # Tone powers used for target sweep
+  tone_powers: 550              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
@@ -71,7 +71,7 @@ tones:
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: []              # Tone powers used for target sweep
+  tone_powers: 300              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
@@ -80,7 +80,7 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
@@ -124,7 +124,7 @@ tones:
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: []              # Tone powers used for target sweep
+  tone_powers: 300              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
@@ -133,7 +133,7 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
@@ -175,7 +175,7 @@ tones:
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep (in Hz)
-  tone_powers: []              # Tone powers used for target sweep
+  tone_powers: 300              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
@@ -184,7 +184,7 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration

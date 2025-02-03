@@ -16,11 +16,11 @@ sess_id: null
 # Drone/Board List Config #
 ###########################
 
-drone_list: ['1.2'] # List of boards/drones to use
+drone_list: ['1'] # List of boards/drones to use
 
 initialize: True
 parallel: False # Whether to send commands to all drones in parallel (will stop all drones not in drone_list)
-restart: True # Whether to restart already running drones
+restart: False # Whether to restart already running drones
 
 # Board configuration
 udp_ip: "192.168.3.40"
@@ -49,16 +49,21 @@ file_paths:
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
   pcs_dir: "/home/ocs/pcs-site-configs/"                                 # PCS directory
-  RSA_key: "/home/pcs/.ssh/id_ecdsa"                                       # Path to RSA key (null if no key)
+  ssh_key: "/home/pcs/.ssh/id_ecdsa"                                       # Path to RSA key (null if no key)
   drone_dir: "/home/xilinx/primecam_readout/drones"                        # Drone directory on the boards
 
-# File names
-file_names:
-  stream_fname: 'att_to_tone_tstream' # Timestream file name
-  targ_fname: 'att_to_tone_targ'      # Target sweep file name
-  vna_fname: 'att_to_tone_vna'        # VNA sweep file name
-  vna_res_fname: 'f_res_vna'
-  targ_res_fname: 'f_res_targ'
+# File names of saved data files
+save_file_names:
+  timestream: 'att_to_tone_tstream' # Timestream file name
+  targ_sweep: 'att_to_tone_targ'      # Target sweep file name
+  vna_sweep: 'att_to_tone_vna'        # VNA sweep file name
+
+# File names of files on RFSoC boards
+board_file_names:
+  vna_s21: 's21_vna'
+  targ_s21: 's21_targ'
+  vna_res: 'f_res_vna'
+  targ_res: 'f_res_targ'
   comb_freq: 'f_rf_tones_comb'
   comb_amp: 'a_tones_comb'
   comb_phi: 'p_tones_comb'
