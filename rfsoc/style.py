@@ -2,6 +2,10 @@ from dataclasses import dataclass
 
 @dataclass
 class style:
+    # Font styles
+    ITALICS:  str = '\033[3m'
+    INVERT:   str = '\033[7m'
+
     # Logging Colors
     PCS:      str = '\033[92m'
     DEBUG:    str = '\033[34m'
@@ -14,11 +18,8 @@ class style:
     
     # Other Colors
     DEFAULT:  str = '\033[0m'
-    WAIT:     str = '\033[94;7m'
+    WAIT:     str = '\033[94;7m' 
     TIMER:    str = '\033[96;7m'
-
-    # Font styles
-    ITALICS:  str = '\033[3m'
 
     # Style Properties
     LONGEST_DESC: int = 8

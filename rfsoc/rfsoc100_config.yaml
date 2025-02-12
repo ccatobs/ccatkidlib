@@ -1,0 +1,232 @@
+###################
+# rfsoc100 Config #
+###################
+---
+sess_id: null
+
+# bid.drid (Board ID & Drone ID)
+com_to: '1.1'
+udp_source_ip: '192.168.3.54'
+udp_source_port: 4096
+
+# Tone configuration
+tones:
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
+  full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
+  tone_bandwidth: 0.5          # Bandwidth of each target sweep tone (in MHz) (currently needs to be changed in _cfg_board.py on board)
+  N_step: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
+  dB: False                    # True if tone powers are given in dB
+  num_tones: null
+  tone_freqs: []               # Tone frequencies used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
+  generation:
+    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+    rescale_step: 0.05           # Steps to rescale amplitudes
+
+# Attenuator configuration
+atten:
+  drive: 0 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 0  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+
+# Detector configuration
+det_config:
+  network: 1.2 # Array.Network
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 570
+  nominal_detector_freqs: [] # Units of Hz
+
+  found_num_detectors: null # Number of detectors found using find_detectors method
+  found_detector_freqs: null # Array of found detector frequencies
+
+det_find:
+  peak_prom_std: 8.5
+  peak_prom_db: 0
+  peak_dis: 100
+  width_min: 5
+  width_max: 400
+  stitch: True
+  stitch_sw: 100
+  continuum_wn: 300
+  remove_cont: True
+  remove_noise: True
+  noise_wn: 30000
+
+ADC_RMS: null
+---
+sess_id: null
+
+# bid.drid (Board ID & Drone ID)
+com_to: '1.2'
+udp_source_ip: '192.168.3.55'
+udp_source_port: 4096
+
+# Tone configuration
+tones:
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
+  full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
+  tone_bandwidth: 0.5                 # Bandwidth of each target sweep tone
+  N_step: 500                  # Number of points of each target sweep tone 
+  dB: False                     # True if tone powers are given in dB
+  num_tones: null
+  tone_freqs: []               # Tone frequencies used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
+  generation:
+    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+    rescale_step: 0.05           # Steps to rescale amplitudes
+
+# Attenuator configuration
+atten:
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+
+# Detector configuration
+det_config:
+  network: 1.3 # Array.Network
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 570
+  nominal_detector_freqs: [] # Units of Hz
+
+  found_num_detectors: null # Number of detectors found using find_detectors method
+  found_detector_freqs: null # Array of found detector frequencies
+
+det_find:
+  peak_prom_std: 8.5
+  peak_prom_db: 0
+  peak_dis: 100
+  width_min: 5
+  width_max: 400
+  stitch: True
+  stitch_sw: 100
+  continuum_wn: 300
+  remove_cont: True
+  remove_noise: True
+  noise_wn: 30000
+
+ADC_RMS: null
+---
+sess_id: null
+
+# bid.drid (Board ID & Drone ID)
+com_to: '1.3'
+udp_source_ip: '192.168.3.56'
+udp_source_port: 4096
+
+
+# Tone configuration
+tones:
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
+  full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
+  tone_bandwidth: 0.5                 # Bandwidth of each target sweep tone
+  N_step: 500                  # Number of points of each target sweep tone
+  dB: False                     # True if tone powers are given in dB
+  num_tones: null
+  tone_freqs: []               # Tone frequencies used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
+  generation:
+    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+    rescale_step: 0.05           # Steps to rescale amplitudes
+
+# Attenuator configuration
+atten:
+  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+
+# Detector configuration
+det_config:
+  network: 1.4
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 576
+  nominal_detector_freqs: [] # Units of Hz
+
+  found_num_detectors: null # Number of detectors found using find_detectors method
+  found_detector_freqs: null # Array of found detector frequencies
+
+det_find:
+  peak_prom_std: 8.5
+  peak_prom_db: 0
+  peak_dis: 100
+  width_min: 5
+  width_max: 400
+  stitch: True
+  stitch_sw: 100
+  continuum_wn: 300
+  remove_cont: True
+  remove_noise: True
+  noise_wn: 30000
+
+ADC_RMS: null
+---
+sess_id: null
+
+# bid.drid (Board ID & Drone ID)
+com_to: '1.4'
+udp_source_ip: '192.168.3.57'
+udp_source_port: 4096
+
+# Tone configuration
+tones:
+  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
+  full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
+  tone_bandwidth: 0.5               # Bandwidth of each target sweep tone
+  N_step: 500                  # Number of points of each target sweep tone
+  dB: False                     # True if tone powers are given in dB
+  num_tones: null
+  tone_freqs: []               # Tone frequencies used for target sweep (in Hz)
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
+  generation:
+    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+    rescale_step: 0.05           # Steps to rescale amplitudes
+
+# Attenuator configuration
+atten:
+  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+
+# Detector configuration
+det_config:
+  network: 1.5
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 576
+  nominal_detector_freqs: [] # Units of Hz
+
+  found_num_detectors: null # Number of detectors found using find_detectors method
+  found_detector_freqs: null   # Array of found detector frequencies
+
+det_find:
+  peak_prom_std: 8.5
+  peak_prom_db: 0
+  peak_dis: 100
+  width_min: 5
+  width_max: 400
+  stitch: True
+  stitch_sw: 100
+  continuum_wn: 300
+  remove_cont: True
+  remove_noise: True
+  noise_wn: 30000
+
+ADC_RMS: null
+...
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
