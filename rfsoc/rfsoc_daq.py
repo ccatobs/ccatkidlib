@@ -69,16 +69,17 @@ class R:
         # Load local modules
         from ocs.ocs_client import OCSClient # Import PCS client module
         from rfsoc_timestream import Streamer
-        globals()['alcove_base'] = __import__('alcove_base') # Import alcove base with global scope
-
 
         # Initialize PCS clients
         # ----------------------
         self.rfsoc = OCSClient(self.io_cfg['pcs_agents']['rfsoc_agent'], args=[])
 
+        # Setup boards
+        if self.io_cfg['initialize_boards']: self.setup_boards()
+
         # Setup drones
         # ------------
-        if self.io_cfg['initialize']: self.setup_drones()
+        if self.io_cfg['initialize_drones']: self.setup_drones()
         rfsoc_io.send_msg('INFO', f'Initialized RFSoC agent. Communicating with drones: {self.drone_list}!', self.output)
 
         # Initialize timestream client
@@ -88,7 +89,7 @@ class R:
 
         # Set NCLO frequency and accum_len for RFSoC drones
         # -------------------------------------------------
-        if self.io_cfg['initialize']:
+        if self.io_cfg['initialize_drones']:
             for com, cfg in zip(self.drone_list, self.drone_cfg):
                 # Set NCLO
                 rtn = self.rfsoc.setNCLO(com_to = com, f_lo = cfg['tones']['NCLO'])
@@ -112,6 +113,58 @@ class R:
     #################
     # Setup Methods #
     #################
+
+    @header
+    @utils.method_timer
+    def setup_boards(self, **kwargs):
+        '''
+        (Re)initialize RFSoC boards one at time and run queen commands to safely start timestreaming.
+        '''
+
+        kwargs['setup'] = False
+        com_to, boards = self._get_com_to(**kwargs)
+
+        for board in boards:
+            bip = self.io_cfg['boards'][f'b{board}']['board_ip']
+            ssh_key = self.io_cfg['file_paths']['ssh_key']
+            with rfsoc_io.get_connection(bip, ssh_key, sudo=True, output=self.output) as c:
+                cmd = 'systemctl restart startup_board.service'
+                rfsoc_io.send_msg('INFO', f'Initializing board {board}!',self.output)
+                stdout = c.sudo(cmd, hide='stderr')
+                rfsoc_io.send_msg('DEBUG', stdout, self.output)
+                rfsoc_io.send_msg('INFO', f'Finished initializing board {board}!', self.output)
+
+                self.setup_drones(com_to=[f'{board}.1', f'{board}.2', f'{board}.3', f'{board}.4'], restart = True, parallel = -1)
+
+                rfsoc_io.send_msg('INFO', f'Setting NCLOs for board {board}!', self.output)
+                for i in range(4):
+                    com = f'{board}.{i+1}'
+                    rtn = self.rfsoc.setNCLO(com_to = com, f_lo = 500)
+                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+                    time.sleep(1)
+
+                rfsoc_io.send_msg('INFO', f'Setting accumulation lengths for board {board}!', self.output)
+                for i in range(4):
+                    com = f'{board}.{i+1}'
+                    rtn = self.rfsoc.setAccumLength(com_to=com)
+                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+                    time.sleep(1)
+
+                rfsoc_io.send_msg('INFO', f'Writing VNA combs for board {board}!', self.output)
+                for i in range(4):
+                    com = f'{board}.{i+1}'
+                    rtn = self.rfsoc.writeNewVnaComb(com_to = com)
+                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+                    time.sleep(5)
+
+                rfsoc_io.send_msg('INFO', f'Turning timestreams on for board {board}!', self.output)
+                for i in range(4):
+                    com = f'{board}.{i+1}'
+                    ret = self.rfsoc.timestreamOn(com_to = com, on = True)
+                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+                    time.sleep(5)
+        ret = self.rfsoc.timestreamOn(com_to = None, on = False)
+        rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)    
 
     @header
     def setup_drones(self, **kwargs):
@@ -522,7 +575,7 @@ class R:
         key = self.io_cfg['file_paths']['ssh_key']
         
         # Get space available on board in bytes
-        with rfsoc_io.get_connection(bip, key) as c:
+        with rfsoc_io.get_connection(bip, key, output = self.output) as c:
             avail_space = int(c.run("df -P -B1 | grep '/dev/root' | awk '{print $4}'",  hide = True).stdout)/1e9
         
             # Append available board space to config
@@ -1118,7 +1171,7 @@ class R:
                 bip = self.io_cfg['boards'][f'b{bid}']['board_ip']
                 path = self.drone_dir / f'drone{drid}' / sweep
 
-                with rfsoc_io.get_connection(bip, ssh_key) as c:
+                with rfsoc_io.get_connection(bip, ssh_key, output = self.output) as c:
                     # Get most recent sweep file in sweep directory
                     file = rfsoc_io.get_most_recent_file_board(c, path, file_identifier = self.io_cfg['board_file_names'][f'{sweep}']['s21'], output = self.output)
 
@@ -1239,7 +1292,7 @@ class R:
                 ssh_key = self.io_cfg['file_paths']['ssh_key']
                 path = self.drone_dir / f'drone{drid}' / f'{sweep}'
 
-                with rfsoc_io.get_connection(bip, ssh_key) as c:
+                with rfsoc_io.get_connection(bip, ssh_key, output = self.output) as c:
                     # Get file with found resonators
                     res_file = rfsoc_io.get_most_recent_file_board(c, path, file_identifier = self.io_cfg["board_file_names"][f'{sweep}']['res'], output = self.output)
                     res_path = rfsoc_io.get_array_board(c, bip, ssh_key, res_file, res_dir / fname, load = False, output = self.output)
@@ -1395,6 +1448,8 @@ class R:
             tone_phis   (list of float) : Comb phases used in written comb
         '''
 
+        import alcove_base
+
         def _check_comb_type(key, value):
             # Convert from dB to normal units if necessary
             if key == 'tone_powers' and self.drone_cfg[ind]['tones']['dB']: value = utils.convert_from_dB(value)
@@ -1436,7 +1491,7 @@ class R:
         # ----------------------------------
 
         # Open connection to RFSoC board
-        with rfsoc_io.get_connection(bip, ssh_key) as c:
+        with rfsoc_io.get_connection(bip, ssh_key, output = self.output) as c:
             # Get current comb and paths to custom comb files
             # -----------------------------------------------
             freq_comb, amp_comb, phi_comb = self._get_curr_comb(com, c = c)
@@ -1663,7 +1718,7 @@ class R:
             ssh_key = self.io_cfg['file_paths']['ssh_key']
 
             # Create connection to board if Connection object not passed
-            if connection is None: connection = rfsoc_io.get_connection(bip, ssh_key)
+            if connection is None: connection = rfsoc_io.get_connection(bip, ssh_key, output = self.output)
 
             # Define directory where sweep combs are saved
             comb_dir = self.drone_dir / f'drone{drid}' / 'comb'
@@ -1746,7 +1801,7 @@ class R:
             ssh_key = self.io_cfg['file_paths']['ssh_key']
 
             # Create connection to board if Connection object not passed
-            if connection is None: connection = rfsoc_io.get_connection(bip, ssh_key)
+            if connection is None: connection = rfsoc_io.get_connection(bip, ssh_key, output = self.output)
 
             with connection as c:
                 # Edit drone config with comb used

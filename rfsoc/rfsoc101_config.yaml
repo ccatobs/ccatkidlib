@@ -86,6 +86,10 @@ atten:
 # Detector configuration
 det_config:
   network: 1.2 # Array.Network
+  network_in: 1.2
+  network_out: 1.2
+  LNA_in_on: False
+  LNA_out_on: False
   detector_type: "Al" # Material of detectors
   nominal_num_detectors: 570
   nominal_detector_freqs: [] # Units of Hz

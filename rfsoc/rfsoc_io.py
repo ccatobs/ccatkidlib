@@ -11,7 +11,7 @@ Library of helper functions for file and directory read/write operations as well
 from pathlib import Path
 from tqdm import tqdm
 from functools import partial, partialmethod, wraps
-from fabric import Connection
+from fabric import Connection, Config
 import logging
 import yaml
 import time
@@ -383,7 +383,7 @@ def header(func):
 # Remote IO Functions #
 #######################
 
-def get_connection(ip, ssh_key, output = False):
+def get_connection(ip, ssh_key, sudo = False, output = False):
     '''
     Create Fabric Connection to RFSoC board with specified IP address. 
 
@@ -395,8 +395,11 @@ def get_connection(ip, ssh_key, output = False):
         connection (Connection) : Fabric Connection object to specified IP address
     '''
 
+    # MOVE PASSWORD AT SOME POINT
+    config = Config(overrides={'sudo': {'password': 'xilinx'}}) if sudo else Config()
+
     # Get Fabric Connection to RFSoC board
-    connect = Connection(f'xilinx@{ip}', connect_kwargs = {'key_filename': ssh_key})
+    connect = Connection(f'xilinx@{ip}', config = config, connect_kwargs = {'key_filename': ssh_key})
     send_msg('DEBUG', f'Created Fabric Connection to {ip}.', output = output)
     return connect
 
