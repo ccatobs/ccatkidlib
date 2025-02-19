@@ -47,7 +47,7 @@ boards:
 # File paths
 file_paths:
   ccatkidlib_dir: "/home/pcs/ccatkidlib"                                 # ccatkidlib directory
-  data_dir: "/mnt/md0/cooldown_dec/crosstalk_021425"                             # Directory to save data in
+  data_dir: "/mnt/md0/cooldown_dec/test"                             # Directory to save data in
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
   pcs_dir: "/home/ocs/pcs-site-configs/"                                 # PCS directory
@@ -56,9 +56,9 @@ file_paths:
 
 # File names of saved data files
 save_file_names:
-  timestream: 'crosstalk_tstream' # Timestream file name
-  targ_sweep: 'crosstalk_targ'    # Target sweep file name
-  vna_sweep:  'crosstalk_vna'     # VNA sweep file name
+  timestream: 'test_tstream' # Timestream file name
+  targ_sweep: 'test_targ'    # Target sweep file name
+  vna_sweep:  'test_vna'     # VNA sweep file name
 
 # Names of files on RFSoC boards
 board_file_names:

@@ -15,7 +15,7 @@ import time
 # Import local modules
 import rfsoc_io
 from rfsoc_io import header
-from style import style
+from style import Style
 import utils
 
 class R:
@@ -54,7 +54,7 @@ class R:
         self.log_dir = self.config_dirs[0].parent
         rfsoc_io.setup_logging(self.log_dir / self.io_cfg['io']['logging_fname'], self.io_cfg['io']['logging_level'], output = self.output)
 
-        rfsoc_io.send_msg('INFO', f'{style.INVERT}Date: {self.curr_date}; Session: {self.sess_id}{style.DEFAULT}')
+        rfsoc_io.send_msg('INFO', f'{Style.INVERT}Date: {self.curr_date}; Session: {self.sess_id}{Style.DEFAULT}')
 
         # Add paths to primecam_readout modules, PCS clients, and ccatkidlib
         # ---------------------------------------------------------------------
@@ -653,7 +653,7 @@ class R:
 
         time.sleep(1)
         self.get_ADC_rms(**kwargs)
-        rfsoc_io.send_msg('INFO', f'Finished taking VNA sweeps for drones {com_to}!', self.output)
+        rfsoc_io.send_msg('INFO', f'Finished taking VNA sweeps for drones {com_to} with timestamp {self.timestamp}!', self.output)
         for board in boards: self.check_avail(com=board)
 
         # Save VNA sweep data
@@ -720,7 +720,7 @@ class R:
 
         time.sleep(1)
         self.get_ADC_rms(**kwargs)
-        rfsoc_io.send_msg('INFO', f'Finished taking target sweeps for drones {com_to}!', self.output)
+        rfsoc_io.send_msg('INFO', f'Finished taking target sweeps for drones {com_to} with timestamp {self.timestamp}!', self.output)
         for board in boards: self.check_avail(com=board)
         
         # Save target sweep data
@@ -779,7 +779,7 @@ class R:
                     # Turn off timestream
                     if turn_off: ret = self.rfsoc.timestreamOn(com_to = board, on = False)
 
-                    rfsoc_io.send_msg('INFO', f'Finished taking timestream data for board {board}!', self.output)
+                    rfsoc_io.send_msg('INFO', f'Finished taking timestream data for board {board} with timestamp {self.timestamp}!', self.output)
 
                     # Sort the data by drone based on source IP address
                     drone_ips = [self.drone_cfg[ind]['udp_source_ip'] for ind in inds]
@@ -823,7 +823,7 @@ class R:
                     # Turn off timestream
                     if turn_off: ret = self.rfsoc.timestreamOn(com_to = com, on = False)
 
-                    rfsoc_io.send_msg('INFO', f'Finished taking timestream data for drone {com}!', self.output)
+                    rfsoc_io.send_msg('INFO', f'Finished taking timestream data for drone {com} with timestamp {self.timestamp}!', self.output)
 
                     # Convert data into I, Q
                     data = np.array(data)
@@ -850,6 +850,7 @@ class R:
             rtn = self.rfsoc.timestreamOn(com_to = com, on = True)
             rfsoc_io.wait(t_sec, output = self.output, desc = f'Taking {t_sec} second timestream for {com}')
             rtn = self.rfsoc.timestreamOn(com_to = com, on = False)
+            rfsoc_io.send_msg('INFO', f"Finished taking {t_sec} seconds of timestream data with timestamp {self.timestamp}!")
             return rtn
 
         com_to, _ = self._get_com_to(**kwargs)

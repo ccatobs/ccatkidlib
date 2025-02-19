@@ -5,7 +5,7 @@ Various utility functions for MKID data collection and analysis.
 import numpy as np
 from tqdm import tqdm
 from functools import wraps
-from style import style
+from style import Style
 
 def dict_get(dic, keys):
     '''
@@ -73,8 +73,8 @@ def method_timer(func):
         rtn = func(self, *args, **kwargs)
         time_diff = time.time() - start_time
 
-        s = style()
-        tqdm.write(f'{s.log_begin("TIMER", style.TIMER)} Method {s.func_name(name)} executed in {time_diff} seconds.')
+        s = Style()
+        tqdm.write(f'{s.log_begin("TIMER", Style.TIMER)} Method {s.func_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper
 
@@ -88,7 +88,7 @@ def function_timer(func):
         rtn = func(*args, **kwargs)
         time_diff = time.time() - start_time
 
-        s = style()
-        tqdm.write(f'{s.log_begin("TIMER", style.TIMER)} Function {s.func_name(name)} executed in {time_diff} seconds.')
+        s = Style()
+        tqdm.write(f'{s.log_begin("TIMER", Style.TIMER)} Function {s.func_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper

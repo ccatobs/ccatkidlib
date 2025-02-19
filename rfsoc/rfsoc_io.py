@@ -21,7 +21,7 @@ import subprocess
 import numpy as np
 
 # Local imports
-from style import style
+from style import Style
 from utils import function_timer
 
 ##########################
@@ -257,7 +257,7 @@ def get_array(src_path, dest_path, action = 'cp', load = True, output = False, t
 # Logging IO Functions #
 ########################
 
-def setup_logging(log_path, level, name = __name__, output = False):
+def setup_logging(log_path , level, name = __name__, output = False):
     '''
     Setup logger and logger config.
 
@@ -327,13 +327,14 @@ def send_msg(level, msg, output = True, name = __name__):
         logger.log(log_level, msg)
         
         # Write message to terminal
-        if output and logger.isEnabledFor(log_level): tqdm.write(f'{style().log_begin(level, getattr(style, level))} {msg}')
-    except:
+        if output and logger.isEnabledFor(log_level): tqdm.write(f'{Style().log_begin(level, getattr(Style, level))} {msg}')
+    except Exception as e:
+        print(e)
         # Log error message
         logger.log(logging.ERROR, 'Error logging message. Ensure that the message is a string!')
 
         # Write error message to terminal
-        if output: tqdm.write(f"{style().log_begin('ERROR', style.ERROR)} Error logging message. Ensure that the message is a string!")
+        if output: tqdm.write(f"{Style().log_begin('ERROR', Style.ERROR)} Error logging message. Ensure that the message is a string!")
 
 def wait(t_sec, output = True, desc = ""):
     '''
@@ -348,7 +349,7 @@ def wait(t_sec, output = True, desc = ""):
     iterator = range(int(t_sec)) # Create iterator
 
     # Wrap iterator in tqdm progress bar if output = True
-    if output: iterator = tqdm(iterator, colour='BLUE', desc = f"{style().log_begin('WAIT', style.WAIT)} {desc}")
+    if output: iterator = tqdm(iterator, colour='BLUE', desc = f"{Style().log_begin('WAIT', Style.WAIT)} {desc}")
 
     # Wait t_sec seconds
     for _ in iterator: time.sleep(1)
@@ -363,7 +364,7 @@ def header(func):
     @wraps(func) # Help calls on func will print help message of func instead of help message of header
     def _wrapper(self, *args, **kwargs):
         name = func.__name__ # Get method name
-        fmt = style().func_name(name) # Add style to function name
+        fmt = Style().func_name(name) # Add style to function name
 
         # Try to execute func
         # -------------------

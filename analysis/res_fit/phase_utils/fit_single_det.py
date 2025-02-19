@@ -511,6 +511,7 @@ class ResonanceFitterSingleTone():
         z2 = (result['zc'] - z1)*np.exp(-1.j*theta_zc)
     
         # now fit to data below
+        print(self.f,z2)
         if use_bounds:
             popt, pcov, pherr, fit_result, x0_result, ft, zt, angt, ang, var, err, xt, flag, uncertainty_angt, ezinf = self.fitphasenlin_c2(self.f,z2,estv,numspan,use_bounds=use_bounds)
         else:

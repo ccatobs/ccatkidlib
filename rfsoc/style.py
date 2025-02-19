@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 @dataclass
-class style:
+class Style:
     # Font styles
     ITALICS:  str = '\033[3m'
     INVERT:   str = '\033[7m'

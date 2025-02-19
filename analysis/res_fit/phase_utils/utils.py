@@ -118,7 +118,7 @@ def removecable(f,z,tau,verbose=False,showplot=False):
         plt.plot(f,logmag(z),'c')
         plt.plot(f,logmag(z1),'k')
         plt.xlabel('Frequency (GHz)')
-        plt.ylabel('$|S_{21}|^2$')
+        plt.ylabel('|S21|2|S_{21}|^2')
         #plt.show()
 
         plt.subplot(222,polar=True) # np.arctan2(np.imag(self.z),np.real(self.z))
