@@ -3,6 +3,9 @@ Various utility functions for MKID data collection and analysis.
 '''
 
 import numpy as np
+from tqdm import tqdm
+from functools import wraps
+from style import Style
 
 def dict_get(dic, keys):
     '''
@@ -59,3 +62,33 @@ def convert_to_dB(power):
         return 20*np.log10(np.array(power))
     except:
         return 20*np.log10(power)
+
+def method_timer(func):
+    @wraps(func)
+    def _wrapper(self, *args, **kwargs):
+        import time
+        name = func.__name__
+
+        start_time = time.time()
+        rtn = func(self, *args, **kwargs)
+        time_diff = time.time() - start_time
+
+        s = Style()
+        tqdm.write(f'{s.log_begin("TIMER", Style.TIMER)} Method {s.func_name(name)} executed in {time_diff} seconds.')
+        return rtn
+    return _wrapper
+
+def function_timer(func):
+    @wraps(func)
+    def _wrapper(*args, **kwargs):
+        import time
+        name = func.__name__
+
+        start_time = time.time()
+        rtn = func(*args, **kwargs)
+        time_diff = time.time() - start_time
+
+        s = Style()
+        tqdm.write(f'{s.log_begin("TIMER", Style.TIMER)} Function {s.func_name(name)} executed in {time_diff} seconds.')
+        return rtn
+    return _wrapper

@@ -28,7 +28,7 @@ drone_list: ['1'] # List of boards/drones to use
 
 initialize: True
 parallel: False # Whether to send commands to all drones in parallel (will stop all drones not in drone_list)
-restart: True # Whether to restart already running drones
+restart: False # Whether to restart already running drones
 
 # Board configuration
 udp_ip: "192.168.3.40"

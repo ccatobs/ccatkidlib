@@ -1,3 +1,6 @@
+###################
+# rfsoc100 Config #
+###################
 ---
 sess_id: null
 
@@ -15,7 +18,7 @@ tones:
   dB: False                    # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: 550              # Tone powers used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
@@ -30,10 +33,6 @@ atten:
 # Detector configuration
 det_config:
   network: 1.2 # Array.Network
-  network_in: 1.1 # 
-  network_out: 1.1 # 
-  LNA_in_on: True
-  LNA_out_on: True
   detector_type: "TiN" # Material of detectors
   nominal_num_detectors: 570
   nominal_detector_freqs: [] # Units of Hz
@@ -42,11 +41,11 @@ det_config:
   found_detector_freqs: null # Array of found detector frequencies
 
 det_find:
-  peak_prom_std: 5
+  peak_prom_std: 8.5
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 600
+  width_max: 400
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
@@ -54,6 +53,7 @@ det_find:
   remove_noise: True
   noise_wn: 30000
 
+ADC_RMS: null
 ---
 sess_id: null
 
@@ -71,7 +71,7 @@ tones:
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: 300              # Tone powers used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
@@ -80,7 +80,7 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
@@ -94,11 +94,11 @@ det_config:
   found_detector_freqs: null # Array of found detector frequencies
 
 det_find:
-  peak_prom_std: 5
+  peak_prom_std: 8.5
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 600
+  width_max: 400
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
@@ -106,6 +106,7 @@ det_find:
   remove_noise: True
   noise_wn: 30000
 
+ADC_RMS: null
 ---
 sess_id: null
 
@@ -124,7 +125,7 @@ tones:
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: 300              # Tone powers used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
@@ -133,7 +134,7 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
@@ -147,17 +148,19 @@ det_config:
   found_detector_freqs: null # Array of found detector frequencies
 
 det_find:
-  peak_prom_std: 5
+  peak_prom_std: 8.5
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 600
+  width_max: 400
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+
+ADC_RMS: null
 ---
 sess_id: null
 
@@ -175,7 +178,7 @@ tones:
   dB: False                     # True if tone powers are given in dB
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep (in Hz)
-  tone_powers: 300              # Tone powers used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
   tone_phis: []                # Tone phases used for target sweep
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
@@ -184,7 +187,7 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
   sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
@@ -198,17 +201,19 @@ det_config:
   found_detector_freqs: null   # Array of found detector frequencies
 
 det_find:
-  peak_prom_std: 5
+  peak_prom_std: 8.5
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 600
+  width_max: 400
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+
+ADC_RMS: null
 ...
 
 

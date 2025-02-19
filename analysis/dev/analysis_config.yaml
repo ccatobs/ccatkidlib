@@ -1,0 +1,9 @@
+
+---
+data_load:
+  root_data_dir: '/mnt/md0'
+
+save_fig: True
+output: True
+
+...
