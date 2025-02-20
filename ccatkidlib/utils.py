@@ -5,7 +5,7 @@ Various utility functions for MKID data collection and analysis.
 import numpy as np
 from tqdm import tqdm
 from functools import wraps
-from style import Style
+from .style import Style
 
 def dict_get(dic, keys):
     '''

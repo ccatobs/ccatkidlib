@@ -3,8 +3,7 @@ import numpy as np
 import sys
 
 # Local Imports
-sys.path.append(str(Path(__file__).parent / '..' / '..' / 'rfsoc'))
-import rfsoc_io
+import ccatkidlib.rfsoc_io as rfsoc_io
 
 def get_timestamp(path) -> int:
     '''
@@ -92,4 +91,3 @@ def get_config(path, all_cfg = False) -> list:
         return [] # Return an empty list if none of the searched config directories contain config files matching data file
     else: # Return an empty list if invalid data file is passed
         return []
-

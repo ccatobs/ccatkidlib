@@ -13,10 +13,10 @@ import numpy as np
 import time
 
 # Import local modules
-import rfsoc_io
-from rfsoc_io import header
-from style import Style
-import utils
+import ccatkidlib.rfsoc_io as rfsoc_io
+from ccatkidlib.rfsoc_io import header
+from ccatkidlib.style import Style
+import ccatkidlib.utils as utils
 
 class R:
     '''
@@ -25,7 +25,7 @@ class R:
     '''
 
     @utils.method_timer
-    def __init__(self, cfg_path = "/home/pcs/ccatkidlib/rfsoc/system_config.yaml"):
+    def __init__(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml"):
         '''
         Constructor for R. Creates directories for data storage, configures logger, and starts
         RFSoC PCS agent.
@@ -246,7 +246,7 @@ class R:
         if wait: rfsoc_io.wait(25, output = self.output, desc = f"For drones to start")
         rfsoc_io.send_msg('INFO', f"Drones {running_drones} are currently running!", self.output)
 
-    def load_system_config(self, cfg_path = "/home/rfsoc/ccatkidlib/rfsoc/system_config.yaml"):
+    def load_system_config(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml"):
         '''
         Load the system and drone config files and setup file directory structure for saving data.
 
@@ -319,6 +319,7 @@ class R:
         self.data_dir = Path(self.io_cfg['file_paths']['data_dir'])
         self.drone_dir = Path(self.io_cfg['file_paths']['drone_dir'])
         self.tmp_data_dir = Path(self.io_cfg['file_paths']['primecam_readout']) / 'tmp'
+        self.tmp_dir = Path(__file__).parent / '..' / '..' / 'tmp'
 
         # Save session ID to config files
         # -------------------------------
@@ -1483,8 +1484,8 @@ class R:
         ssh_key = self.io_cfg['file_paths']['ssh_key']
         custom_comb_dir = self.drone_dir / f'drone{drid}' / 'custom_comb'
         # Define directory to temporary store resonator files
-        tmp_dir = Path(self.io_cfg['file_paths']['ccatkidlib_dir']) / 'tmp'
-
+        
+        
         gen_amps = False
         gen_phis = False
 
@@ -1609,7 +1610,7 @@ class R:
 
             # Define maximum RFSoC DAC power
             max_power = self.io_cfg['boards'][f'b{bid}']['max_power']
-            tone_freqs = rfsoc_io.get_array_board(c, bip, ssh_key, freq_path, tmp_dir, output = self.output)
+            tone_freqs = rfsoc_io.get_array_board(c, bip, ssh_key, freq_path, self.tmp_dir, output = self.output)
             tone_freqs_bb = np.array(tone_freqs) - self.drone_cfg[ind]['tones']['NCLO']*1e6
 
             # Determine if tone powers need to be generated
@@ -1620,12 +1621,12 @@ class R:
                 tone_powers = np.ones(tone_num)*comb_max/np.sqrt(tone_num)
                 factors = np.arange(0.36, 0, rescale_step)
             else:
-                tone_powers = rfsoc_io.get_array_board(c, bip, ssh_key, amp_path, tmp_dir, output = self.output)
+                tone_powers = rfsoc_io.get_array_board(c, bip, ssh_key, amp_path, self.tmp_dir, output = self.output)
                 if self.drone_cfg[ind]['tones']['generation']['rescale_power']: factors = np.arange(1, 0, rescale_step)
             
             # Generate tone phis and tone powers
             # ----------------------------------
-            tone_phis = rfsoc_io.get_array_board(c, bip, ssh_key, phi_path, tmp_dir, output = self.output)
+            tone_phis = rfsoc_io.get_array_board(c, bip, ssh_key, phi_path, self.tmp_dir, output = self.output)
 
             # Iterate over tone power rescale factors
             for factor in factors:
@@ -1734,13 +1735,10 @@ class R:
 
                 if not load: return freq_file, amp_file, phi_file
 
-                # Define directory to temporary store comb files
-                tmp_dir = Path(self.io_cfg['file_paths']['ccatkidlib_dir']) / 'tmp'
-
                 # Load most recent comb files
-                comb_freq = rfsoc_io.get_array_board(c, bip, ssh_key, freq_file, tmp_dir, output = self.output, timestamp=True)
-                comb_amp  = rfsoc_io.get_array_board(c, bip, ssh_key,  amp_file, tmp_dir, output = self.output, timestamp=True)
-                comb_phi  = rfsoc_io.get_array_board(c, bip, ssh_key,  phi_file, tmp_dir, output = self.output, timestamp=True)
+                comb_freq = rfsoc_io.get_array_board(c, bip, ssh_key, freq_file, self.tmp_dir, output = self.output, timestamp=True)
+                comb_amp  = rfsoc_io.get_array_board(c, bip, ssh_key,  amp_file, self.tmp_dir, output = self.output, timestamp=True)
+                comb_phi  = rfsoc_io.get_array_board(c, bip, ssh_key,  phi_file, self.tmp_dir, output = self.output, timestamp=True)
         else: # Pull files from primecam_readout tmp folder
             drone_id = f"*{bid}_{drid}*"
             # Get most recent comb file paths
@@ -1750,13 +1748,10 @@ class R:
 
             if not load: return freq_file, amp_file, phi_file
 
-            # Define directory to temporary store comb files
-            tmp_dir = Path(self.io_cfg['file_paths']['ccatkidlib_dir']) / 'tmp'
-
             # Load most recent comb files
-            comb_freq = rfsoc_io.get_array(freq_file, tmp_dir, action='cp', output = self.output, timestamp=True)
-            comb_amp  = rfsoc_io.get_array(amp_file,  tmp_dir, action='cp', output = self.output, timestamp=True)
-            comb_phi  = rfsoc_io.get_array(phi_file,  tmp_dir, action='cp', output = self.output, timestamp=True)
+            comb_freq = rfsoc_io.get_array(freq_file, self.tmp_dir, action='cp', output = self.output, timestamp=True)
+            comb_amp  = rfsoc_io.get_array(amp_file,  self.tmp_dir, action='cp', output = self.output, timestamp=True)
+            comb_phi  = rfsoc_io.get_array(phi_file,  self.tmp_dir, action='cp', output = self.output, timestamp=True)
 
         # Return loaded frequency, amplitude, and phase arrays
         return comb_freq, comb_amp, comb_phi
@@ -1781,10 +1776,9 @@ class R:
 
         # Define comb directory and file names to save to
         # -----------------------------------------------
-        tmp_dir   = Path(self.io_cfg['file_paths']['ccatkidlib_dir']) / 'tmp'
-        freq_name = tmp_dir
-        amp_name  = tmp_dir
-        phi_name  = tmp_dir
+        freq_name = self.tmp_dir
+        amp_name  = self.tmp_dir
+        phi_name  = self.tmp_dir
 
         timestamp = False
         if name is not None:

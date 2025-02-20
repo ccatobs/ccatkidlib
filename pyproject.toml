@@ -1,0 +1,39 @@
+[project]
+name = "ccatkidlib"
+description = "Data acquisition and analysis library for CCAT Observatory KIDs using RFSoC"
+readme = "README.md"
+authors = [
+    { name = "Darshan Patel", email = "dp649@cornell.edu" }
+]
+license = { text = "BSD 2-Clause License" }
+requires-python = ">=3.8"
+
+dependencies = [
+    "pyyaml",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "tqdm",
+    "fabric",
+    "bokeh"
+]
+dynamic = ["version"]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics"
+]
+
+[project.urls]
+Homepage = "https://github.com/ccatobs/ccatkidlib"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = 'setuptools.build_meta'
+
+[tool.setuptools_scm]
+write_to = "ccatkidlib/_version.py"
+
+[tool.setuptools.packages.find]

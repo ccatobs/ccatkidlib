@@ -21,8 +21,8 @@ import subprocess
 import numpy as np
 
 # Local imports
-from style import Style
-from utils import function_timer
+from .style import Style
+from .utils import function_timer
 
 ##########################
 # Directory IO Functions #

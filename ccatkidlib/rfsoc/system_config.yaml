@@ -32,13 +32,13 @@ boards:
     board_ip: '192.168.2.100'
     sampling_freq: 488.28 # Timestream sampling frequency (in Hz)
     max_power: 32767 # Max power at the drone DACs
-    drone_cfg: "/home/pcs/ccatkidlib/rfsoc/rfsoc100_config.yaml"
+    drone_cfg: "/home/pcs/ccatkidlib/ccatkidlib/rfsoc/rfsoc100_config.yaml"
   b2:
     name: rfsoc101
     board_ip: '192.168.2.101'
     sampling_freq: 488.28 # Timestream sampling frequency
     max_power: 32767 # Max power at the drone DACs
-    drone_cfg: "/home/pcs/ccatkidlib/rfsoc/rfsoc101_config.yaml"
+    drone_cfg: "/home/pcs/ccatkidlib/ccatkidlib/rfsoc/rfsoc101_config.yaml"
 
 ##################
 # File IO Config #
@@ -46,7 +46,6 @@ boards:
 
 # File paths
 file_paths:
-  ccatkidlib_dir: "/home/pcs/ccatkidlib"                                 # ccatkidlib directory
   data_dir: "/mnt/md0/cooldown_dec/test"                             # Directory to save data in
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
