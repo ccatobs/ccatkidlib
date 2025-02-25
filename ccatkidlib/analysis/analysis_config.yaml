@@ -1,9 +1,60 @@
-
 ---
 data_load:
   root_data_dir: '/mnt/md0'
 
-save_fig: True
-output: True
+output: False
+
+---
+plot_defaults:
+  figure:
+    width: 750
+    height: 750
+    toolbar_location: "left"
+    tools: 'pan, hover, box_select, box_zoom, undo, redo, reset, save'
+    resizable: True
+    sizing_mode: 'stretch_width'
+    output_backend: 'webgl'
+  line_scatter:
+    plot_line: True
+    line:
+      line_color: '#1F77B4'
+      line_width: 1
+      line_alpha: 1
+      line_dash: 'solid'
+    plot_scatter: True
+    scatter:
+      marker: 'circle'
+      size: 4
+      fill_color: 'orange'
+      fill_alpha: 0.5
+      line_color: 'black'
+      line_width: 1
+      line_alpha: 0.5
+      line_dash: 'solid'
+  res:
+    plot_line: False
+    line:
+      line_color: 'red'
+      line_width: 0.5
+      line_alpha: 0.75
+      line_dash: 'solid'
+    plot_scatter: True
+    scatter:
+      marker: 'star'
+      size: 4
+      fill_color: 'red'
+      fill_alpha: 0.5
+      line_color: 'black'
+      line_width: 1
+      line_alpha: 1
+      line_dash: 'solid'
+  binboxes:
+    enable: True
+
+    
+plot_output:
+  save_fig: True
+  save_type: 'png' # Valid file types are png, svg, jpeg
+  save_path: 'fig'
 
 ...

@@ -1,3 +1,12 @@
+#=================================#
+# rfsoc_io.py               2025 #
+# Darshan Patel dp649@cornell.edu #
+#=================================#
+
+'''
+Library of helper functions for getting output data files of rfsoc_daq.py and pairing with corresponding configuration files.
+'''
+
 from pathlib import Path
 import numpy as np
 import sys

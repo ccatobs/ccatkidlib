@@ -1,0 +1,80 @@
+import matplotlib.pyplot as plt
+import sys
+# sys.path.append('/home/pcs/')
+import numpy as np
+import yaml
+import scipy
+
+from ccatkidlib.analysis.res_fit.jordan_utils.fitting import fit_nonlinear_iq_multi, fit_nonlinear_iq
+
+def fit_target_sweep(targ_file, cfg_file, verb=True, keep_model=False):
+
+    fs, s21 = np.load(targ_file)
+    fs = fs.real
+    with open(cfg_file, 'r') as f:
+            config = yaml.safe_load(f)
+
+    bin_width = config['tones']['N_step']
+        
+    dets = np.reshape(s21, (s21.shape[0]//bin_width,bin_width))
+    fs = np.reshape(fs, (fs.shape[0]//bin_width,bin_width))
+
+    ret = {
+        'Qr': [],
+        'Qi': [],
+        'Qc': [],
+        'f0': [],
+        'a': [],
+        'tau': [],
+        'chi_sq': [],  
+    }
+
+    model = {
+         'fs': [],
+         'data_z': []
+    }
+
+    if keep_model:
+        # ret['fit_fs'] = []
+        model['fit_z'] = []
+         
+    # fits = fit_nonlinear_iq_multi(fs, dets, verbose=False)
+
+    for i, (f, z) in enumerate(zip(fs, dets)):
+
+        fit = fit_nonlinear_iq(f,z, verbose=False)
+        for k in ret.keys():
+             exec(f"ret['{k}'].append(fit.result.{k})")
+        
+        if keep_model:
+            model['fit_z'].append(fit.z_fit())
+
+        model['fs'].append(f)
+        model['data_z'].append(z)
+
+    # for i, result in enumerate(fits):
+    #     if i >= len(fs): continue
+        
+
+    #     if keep_model:
+    #         # ret['fs'].append(fits._fit_results[result].f_data)
+    #         model['fit_z'].append(fits._fit_results[result].z_fit())
+    #     model['fs'].append(fss[i])
+    #     model['data_z'].append(detss[i])
+
+    
+    for k in model.keys():
+        ret[k] = model[k]
+    
+    ret['Q'] = ret.pop('Qr')
+    ret['alpha'] = ret.pop('a')
+
+    for k in ret.keys():
+        ret[k] = np.array(ret[k])
+
+    return ret
+          
+
+if __name__ == "__main__":
+    target_file = "/mnt/md0/cooldown_dec/test/targ/20250201/1738368042/B1D1/att_to_tone_targ_1738368500.npy"
+    target_cfg = "/mnt/md0/cooldown_dec/test/rfsoc/20250201/1738368042/B1D1/targ_config_drone_1738368500.yaml"

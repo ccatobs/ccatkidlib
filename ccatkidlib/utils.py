@@ -3,9 +3,16 @@ Various utility functions for MKID data collection and analysis.
 '''
 
 import numpy as np
+from datetime import datetime
+import pytz
 from tqdm import tqdm
 from functools import wraps
 from .style import Style
+
+def convert_timestamp(timestamp, timezone = 'America/New_York'):
+    timestamp = int(timestamp)
+    return datetime.fromtimestamp(timestamp, pytz.timezone(timezone)).strftime("%Y-%m-%d %H:%M:%S")
+
 
 def dict_get(dic, keys):
     '''

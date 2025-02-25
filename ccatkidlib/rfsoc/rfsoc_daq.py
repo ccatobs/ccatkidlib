@@ -68,13 +68,14 @@ class R:
 
         # Load local modules
         from ocs.ocs_client import OCSClient # Import PCS client module
-        from rfsoc_timestream import Streamer
+        from .rfsoc_timestream import Streamer
 
         # Initialize PCS clients
         # ----------------------
         self.rfsoc = OCSClient(self.io_cfg['pcs_agents']['rfsoc_agent'], args=[])
 
         # Setup boards
+        # ------------
         if self.io_cfg['initialize_boards']: self.setup_boards()
 
         # Setup drones
