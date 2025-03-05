@@ -7,10 +7,10 @@ output: False
 ---
 plot_defaults:
   figure:
-    width: 750
-    height: 750
+    width: 400
+    height: 400
     toolbar_location: "left"
-    tools: 'pan, hover, box_select, box_zoom, undo, redo, reset, save'
+    tools: 'hover, box_select, box_zoom, undo, redo, reset, save'
     resizable: True
     sizing_mode: 'stretch_width'
     output_backend: 'webgl'

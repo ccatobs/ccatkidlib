@@ -5,6 +5,7 @@ import numpy as np
 
 from bokeh.layouts import layout
 from bokeh.io import show
+from bokeh.plotting import curdoc
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
@@ -26,15 +27,37 @@ class Target(Sweep):
     # Plotting Methods #
     ####################
 
+    def dashboard(self, dB = False, show_plot = True, **kwargs):
+        plot_dash = show_plot if self.res_num is None else False
+        lyot = super().dashboard(dB = dB, show_plot = plot_dash, **kwargs)
+        
+        if self.res_num is not None:
+            # Get all column objects from current layout
+            children = lyot.children
+            columns = []
+            for child in children:
+                columns += child.children
+            
+            print(columns)
+            # Restructure layout to have only one row
+            lyot = layout(columns, sizing_mode='scale_width')
+            if show_plot: 
+                curdoc().add_root(lyot)
+                show(lyot)
+        return lyot
+
     def plot_mag(self, fig = None, freqs = None, s21m = None, source = None, dB = False, show_plot = True, **kwargs):
         res_num = self.res_num
         kwargs.setdefault('title', f"Target Sweep of {f'Resonator {res_num} in ' if res_num is not None else ''}{self.drone_cfg['det_config']['detector_type']} Network {self.drone_cfg['det_config']['network']} Taken on {utils.convert_timestamp(self.timestamp)} EST")
         if res_num is None: 
             kwargs['plot_scatter'] = False
         else:
+            tools = self.plot_cfg['plot_defaults']['figure']['tools']
+            if not 'pan' in tools: 
+                tools += ',pan'
+                kwargs['tools'] = tools
             show_bins = False 
-        fig = super().plot_mag(fig = fig, freqs = freqs, s21m = s21m, dB = dB, source = source, show_plot = show_plot, **kwargs)
-        return fig
+        return super().plot_mag(fig = fig, freqs = freqs, s21m = s21m, dB = dB, source = source, show_plot = show_plot, **kwargs)
     
     def plot_phase(self, fig = None, freqs = None, phase = None, source = None, show_plot = True, **kwargs):
         res_num = self.res_num
@@ -42,46 +65,38 @@ class Target(Sweep):
         if res_num is None: 
             kwargs['plot_scatter'] = False
         else:
+            tools = self.plot_cfg['plot_defaults']['figure']['tools']
+            if not 'pan' in tools: 
+                tools += ',pan'
+                kwargs['tools'] = tools
             show_bins = False 
-        fig = super().plot_phase(fig = fig, freqs = freqs, phase = phase, source = source, show_plot = show_plot, **kwargs)
-        return fig
+        return super().plot_phase(fig = fig, freqs = freqs, phase = phase, source = source, show_plot = show_plot, **kwargs)
 
     def plot_IQ(self, fig = None, I = None, Q = None, source = None, show_plot = True, **kwargs):
         res_num = self.res_num
         kwargs.setdefault('title', f"Target Sweep of {f'Resonator {res_num} in ' if res_num is not None else ''}{self.drone_cfg['det_config']['detector_type']} Network {self.drone_cfg['det_config']['network']} Taken on {utils.convert_timestamp(self.timestamp)} EST")
-        if res_num is None: kwargs['plot_line'] = False
-        fig = super().plot_IQ(fig = fig, I = I, Q = Q, source = source, show_plot = show_plot, **kwargs)
-        return fig
-
-    def dashboard(self, dB = False, show_plot = True, **kwargs):
-        plot_cfg = self.plot_cfg
-
-        if self.res_num is not None:
-            kwargs['aspect_ratio'] = 1
-            mag_fig, source = self.plot_mag(dB = dB, show_plot = False, **kwargs)
-            phase_fig, source = self.plot_phase(show_plot = False, source = source, **kwargs)
-            IQ_fig, source =  self.plot_IQ(show_plot = False, source = source, **kwargs)
-
-            lyot = layout([[mag_fig, phase_fig, IQ_fig]], sizing_mode='scale_width')
-            if show_plot: show(lyot)
+        if res_num is None: 
+            kwargs['plot_line'] = False
         else:
-            lyot = super().dashboard(dB = dB, show_plot = show_plot, **kwargs)
-        return lyot
-
+            tools = self.plot_cfg['plot_defaults']['figure']['tools']
+            if not 'pan' in tools: 
+                tools += ',pan'
+                kwargs['tools'] = tools
+        return super().plot_IQ(fig = fig, I = I, Q = Q, source = source, show_plot = show_plot, **kwargs)
 
     ############################
     # Internal Loading Methods #
     ############################
 
-
     def _load_res_freqs(self):
-        res_freqs =  super()._load_res_freqs()
-        res_freqs = [res_freqs[self.res_num]] if self.res_num is not None else res_freqs
-        return np.array(res_freqs)
+        res_freqs = super()._load_res_freqs()
+        if res_freqs is not None: res_freqs = np.array([res_freqs[self.res_num]]) if self.res_num is not None else res_freqs
+        return res_freqs
 
     def _get_res_s21z(self):
         res_s21z = None
-        if self.res_freqs is not None:
+        res_freqs = self.res_freqs
+        if res_freqs is not None and len(res_freqs) > 0:
             N_step = self.drone_cfg['tones']['N_step']
             freq_bins = np.array(self.freqs).reshape((-1, N_step))
             data_bins = np.array(self.s21z).reshape((-1, N_step))

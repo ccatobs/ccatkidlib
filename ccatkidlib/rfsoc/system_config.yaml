@@ -16,12 +16,12 @@ sess_id: null
 # Drone/Board List Config #
 ###########################
 
-drone_list: ['1.2'] # List of boards/drones to use
+drone_list: ['2'] # List of boards/drones to use
 
 initialize_boards: False # Whether to reintialize boards (not working in Jupyter Notebook right now)
 initialize_drones: True # Whether to run drone initialzie commands (e.g. set_atten and setNCLO)
 parallel: -1 # Whether to send commands to all drones in parallel (will stop all drones not in drone_list): -1 series, 0 all boards, 1 one board at a time
-restart: False # Whether to restart already running drones
+restart: True # Whether to restart already running drones
 
 # Board configuration
 udp_ip: "192.168.3.40"
@@ -46,7 +46,7 @@ boards:
 
 # File paths
 file_paths:
-  data_dir: "/mnt/md0/cooldown_dec/timing"                             # Directory to save data in
+  data_dir: "/mnt/md0/cooldown_dec/drone1_testing"                             # Directory to save data in
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
   pcs_dir: "/home/ocs/pcs-site-configs/"                                 # PCS directory
@@ -55,9 +55,9 @@ file_paths:
 
 # File names of saved data files
 save_file_names:
-  timestream: 'timing_tstream' # Timestream file name
-  targ_sweep: 'timing_targ'    # Target sweep file name
-  vna_sweep:  'timing_vna'     # VNA sweep file name
+  timestream: 'drone1_tstream' # Timestream file name
+  targ_sweep: 'drone1_targ'    # Target sweep file name
+  vna_sweep:  'drone1_vna'     # VNA sweep file name
 
 # Names of files on RFSoC boards
 board_file_names:

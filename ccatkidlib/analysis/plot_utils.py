@@ -8,7 +8,8 @@ Library of helper functions for plotting KID sweep and timestream data.
 '''
 
 from bokeh.plotting import figure
-from bokeh.models import BoxAnnotation, ColumnDataSource
+from bokeh.models import CheckboxButtonGroup, CustomJS, BoxAnnotation, ColumnDataSource
+
 
 def plot_res(fig, res_x, res_y, cfg=None, **kwargs):
     res_line = False
@@ -45,7 +46,7 @@ def plot_res(fig, res_x, res_y, cfg=None, **kwargs):
     line = fig.vspan(x = res_x, level = 'underlay', visible = res_line,**res_line_kwargs)
     scatter = fig.scatter(res_x, res_y, visible = res_scatter, **res_scatter_kwargs)
 
-    return fig, (line,scatter)
+    return fig, [line,scatter]
 
 def plot_bin_boxes(fig, bins, **kwargs):
     bin_colors = ['dimgray', 'lightgray']
@@ -108,7 +109,7 @@ def line_scatter(fig, x, y, source, cfg = None, **kwargs):
     fig = get_fig(fig, cfg, **kwargs)
     line = fig.line(x = x, y = y, source = source, visible = plot_line, **line_kwargs)
     scatter = fig.scatter(x = x, y = y, source = source, visible = plot_scatter, **scatter_kwargs)
-    return fig, (line, scatter)
+    return fig, [line, scatter]
 
 def get_fig(fig, cfg, **kwargs):
     if not fig:
@@ -122,3 +123,18 @@ def get_fig(fig, cfg, **kwargs):
         
         fig = figure(**fig_kwargs)
     return fig
+
+def create_glyph_buttons(labels, active, button_glyphs, num_buttons):
+    checkbox_button = CheckboxButtonGroup(labels = labels, active= [i for i, active in enumerate(active) if active], sizing_mode = 'stretch_width', height = 50)
+        
+    update_checkbox = """
+    let isVisible = btn.active.includes({ind});
+    glyph.visible=isVisible;
+    glyph.change.emit();
+    """
+
+    for i, glyph in enumerate(button_glyphs):
+        ind = i if i < num_buttons else num_buttons - 1
+        checkbox_button.js_on_change('active', CustomJS(args=dict(btn=checkbox_button, glyph=glyph), code=update_checkbox.format(ind=ind)))
+
+    return checkbox_button

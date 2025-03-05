@@ -80,8 +80,8 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 0 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 0  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
@@ -134,8 +134,8 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 0 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 0  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:

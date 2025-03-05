@@ -16,6 +16,13 @@ def fit_single_res(fs, z, **kwargs):
 
     return nonlinear_result
 
+# def fit_target_sweep_plot(targ_file, cfg_file, verb=False):
+
+#     fits = fit_target_sweep(targ_file, cfg_file, verb, keep_model=True)
+
+#     Qs = fits['Q']
+
+#     fig, ax = plt.subplots()
 
 def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_model=False,  **kwargs):
     '''
@@ -80,13 +87,19 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
         'tau':[],
         'f0':[],
         'flag':[],
+        'f0_corr':[]
     }
 
     models = {
         'fs': [],
-        'data_z': []
+        'data_z': [],
     }
-    if keep_model: models['fit_z'] = []
+    if keep_model: 
+        models['fit_z'] = []
+        # models['phase_fit'] = []
+        models['ang'] = []
+
+
     
     for i, (f, z) in enumerate(zip(fs, dets)):
         try:
@@ -100,7 +113,10 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
 
             nonlinear_result = fit_single_res(f,z,**kwargs)
 
-            if keep_model: models['fit_z'].append(nonlinear_result['ang_to_z'])
+            if keep_model: 
+                models['fit_z'].append(nonlinear_result['ang_to_z'])
+                # models['phase_fit'].append(nonlinear_result['fit_result'])
+                models['ang'].append(nonlinear_result['ang'])
 
 
             for k in ret.keys():
@@ -108,7 +124,10 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
 
             
         except:
-            if keep_model: models['fit_z'].append(z.mean()*np.ones(shape=z.shape))
+            if keep_model: 
+                models['fit_z'].append(z.mean()*np.ones(shape=z.shape))
+                # models['phase_fit'].append(np.ones(shape=z.shape))
+                models['ang'].append(np.ones(shape=z.shape))
 
             for k in ret.keys():
                 ret[k].append(None)
@@ -118,6 +137,7 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
         ret[k] = models[k]
 
     for k in ret.keys():
+        # if k == 'phase_fit':print(k, ret[k])
         ret[k] = np.array(ret[k])
     
     ret['chi_sq'] = np.array(
