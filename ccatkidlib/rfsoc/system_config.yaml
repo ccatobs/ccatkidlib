@@ -16,16 +16,22 @@ sess_id: null
 # Drone/Board List Config #
 ###########################
 
-drone_list: ['2'] # List of boards/drones to use
+# Drone configuration
+drone_list: ['1', '2'] # List of boards/drones to use
 
-initialize_boards: False # Whether to reintialize boards (not working in Jupyter Notebook right now)
-initialize_drones: True # Whether to run drone initialzie commands (e.g. set_atten and setNCLO)
-parallel: -1 # Whether to send commands to all drones in parallel (will stop all drones not in drone_list): -1 series, 0 all boards, 1 one board at a time
-restart: True # Whether to restart already running drones
+initialize_boards: False  # Whether to reintialize boards (not working in Jupyter Notebook right now)
+initialize_drones: True  # Whether to run drone initialize commands (e.g. set_atten and setNCLO)
 
-# Board configuration
+parallel_boards: -1    # Number of boards to run in parallel (-1 for all boards in parallel)
+parallel_drones: 4    # Number of drones to run in in parallel
+restart: False            # Whether to restart already running drones
+
+# Timestream configuration
 udp_ip: "192.168.3.40"
 udp_port: 4096
+g3: True
+
+# Board configuration
 boards:
   b1: 
     name: rfsoc100
@@ -46,7 +52,8 @@ boards:
 
 # File paths
 file_paths:
-  data_dir: "/mnt/md0/cooldown_dec/drone1_testing"                             # Directory to save data in
+  data_dir: "/mnt/md0/cooldown_march/quality_test"                       # Directory to save data in
+  g3_dir: "/mnt/md0/g3_temp/g3"
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
   pcs_dir: "/home/ocs/pcs-site-configs/"                                 # PCS directory
@@ -55,9 +62,9 @@ file_paths:
 
 # File names of saved data files
 save_file_names:
-  timestream: 'drone1_tstream' # Timestream file name
-  targ_sweep: 'drone1_targ'    # Target sweep file name
-  vna_sweep:  'drone1_vna'     # VNA sweep file name
+  timestream: 'quality_tstream' # Timestream file name
+  targ_sweep: 'quality_targ'    # Target sweep file name
+  vna_sweep:  'quality_vna'     # VNA sweep file name
 
 # Names of files on RFSoC boards
 board_file_names:

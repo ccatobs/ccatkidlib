@@ -9,8 +9,10 @@ import sys
 import ast
 import pickle
 from pathlib import Path
+from math import floor
 import numpy as np
 import time
+
 
 # Import local modules
 import ccatkidlib.rfsoc_io as rfsoc_io
@@ -85,8 +87,9 @@ class R:
 
         # Initialize timestream client
         # ----------------------------
-        self.streamer = Streamer(self.io_cfg['udp_ip'], self.io_cfg['udp_port'])
-        rfsoc_io.send_msg('INFO', f"Successfully initialized timestream object using address {self.io_cfg['udp_ip']} and port {self.io_cfg['udp_port']}!" ,output = self.output)
+        if not self.io_cfg['g3']:
+            self.streamer = Streamer(self.io_cfg['udp_ip'], self.io_cfg['udp_port'])
+            rfsoc_io.send_msg('INFO', f"Successfully initialized timestream object using address {self.io_cfg['udp_ip']} and port {self.io_cfg['udp_port']}!" ,output = self.output)
 
         # Set NCLO frequency and accum_len for RFSoC drones
         # -------------------------------------------------
@@ -95,10 +98,10 @@ class R:
                 # Set NCLO
                 rtn = self.rfsoc.setNCLO(com_to = com, f_lo = cfg['tones']['NCLO'])
                 rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-
-                # Set accum_len
-                rtn = self.rfsoc.setAccumLength(com_to=com)
-                rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+            #
+            #    # Set accum_len
+            #    rtn = self.rfsoc.setAccumLength(com_to=com)
+            #    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
             rfsoc_io.send_msg('INFO', f"Set NCLO to {[cfg['tones']['NCLO'] for cfg in self.drone_cfg]} MHz for drones: {self.drone_list}!", self.output)
 
             # Set drone attenuations
@@ -119,28 +122,46 @@ class R:
     @utils.method_timer
     def setup_boards(self, **kwargs):
         '''
-        (Re)initialize RFSoC boards one at time and run queen commands to safely start timestreaming.
+        (Re)initialize RFSoC boards one at time and run queen commands to safely set accumulation length and start timestreaming.
         '''
 
-        kwargs['setup'] = False
+        # Get boards to initialize (only initialize boards with at least on running drone)
+        # --------------------------------------------------------------------------------
+        kwargs['setup'] = False 
         com_to, boards = self._get_com_to(**kwargs)
+        NCLOs = []
 
+        # Iterate over boards
+        # -------------------
         for board in boards:
+            # Create Fabric connection to board
+            # ---------------------------------
             bip = self.io_cfg['boards'][f'b{board}']['board_ip']
             ssh_key = self.io_cfg['file_paths']['ssh_key']
             with rfsoc_io.get_connection(bip, ssh_key, sudo=True, output=self.output) as c:
+
+                # Restart startup board service on board
+                # --------------------------------------
                 cmd = 'systemctl restart startup_board.service'
-                rfsoc_io.send_msg('INFO', f'Initializing board {board}!',self.output)
+                rfsoc_io.send_msg('INFO', f'Initializing board {board}!', self.output)
                 stdout = c.sudo(cmd, hide='stderr')
                 rfsoc_io.send_msg('DEBUG', stdout, self.output)
                 rfsoc_io.send_msg('INFO', f'Finished initializing board {board}!', self.output)
 
-                self.setup_drones(com_to=[f'{board}.1', f'{board}.2', f'{board}.3', f'{board}.4'], restart = True, parallel = -1)
+                # Restart all drones
+                # ------------------
+                self.setup_drones(com_to=[f'{board}.1', f'{board}.2', f'{board}.3', f'{board}.4'], restart = True)
 
                 rfsoc_io.send_msg('INFO', f'Setting NCLOs for board {board}!', self.output)
                 for i in range(4):
                     com = f'{board}.{i+1}'
-                    rtn = self.rfsoc.setNCLO(com_to = com, f_lo = 500)
+                    try:
+                        ind = self.drone_list.index(com)
+                        NCLO = self.drone_cfg[ind]['tones']['NCLO']
+                        NCLOs.append(NCLO)
+                    except:
+                        NCLO = 500
+                    rtn = self.rfsoc.setNCLO(com_to = com, f_lo = NCLO)
                     rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
                     time.sleep(1)
 
@@ -167,6 +188,8 @@ class R:
         ret = self.rfsoc.timestreamOn(com_to = None, on = False)
         rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)    
 
+        rfsoc_io.send_msg('INFO', f"Set NCLOs to {NCLOs} MHz for drones: {self.drone_list}!", self.output)
+
     @header
     def setup_drones(self, **kwargs):
         '''
@@ -174,20 +197,16 @@ class R:
 
         Parameters:
             com_to (list of str): List of drones to setup
-            parallel      (int) : Whether to run board commands in parallel (0, 1) or in series (-1)
             restart      (bool) : Whether to restart already running drones
         '''
 
         # Parse key word arguments
         # ------------------------
         com_to = self.drone_list
-        parallel = self.parallel 
         restart = self.io_cfg['restart']
 
         for key, value in kwargs.items():
-            if key == 'parallel':
-                parallel = value
-            elif key == 'restart':
+            if key == 'restart':
                 restart = value
             elif key == 'com_to':
                 com_to = value
@@ -226,18 +245,14 @@ class R:
                 rfsoc_io.send_msg('PCS', f"{rtn.session}", self.output)
                 if running: running_drones.append(com)
 
-                # Stop, Start, or Restart drone as appropriate
-                # --------------------------------------------
-                if running and not to_run and parallel >= 0: # If running in parallel, stop all drones that are not supposde to be running
-                    rtn = self.rfsoc.action(com_to=com, action='stop')
-                    rfsoc_io.send_msg('INFO', f"Stopping drone {com}...", self.output)
-                    running_drones.pop()
-                elif to_run and not running: # Start drones that are not running but should be running
+                # Start or Restart drones as appropriate
+                # --------------------------------------
+                if to_run and not running: # Start drones that are not running but should be running
                     rtn = self.rfsoc.action(com_to=com, action='start')
                     rfsoc_io.send_msg('INFO', f"Starting drone {com}...", self.output)
                     running_drones.append(com)
                     wait = True
-                elif to_run and running and restart: # Restart drones if restart = True
+                elif to_run and restart: # Restart drones if restart = True
                     rtn = self.rfsoc.action(com_to=com, action='restart')
                     rfsoc_io.send_msg('INFO', f"Restarting drone {com}...", self.output)
                     wait = True
@@ -309,7 +324,8 @@ class R:
         # Assign commonly used parameters as class attributes
         # ---------------------------------------------------
         # Whether to run commands in parallel
-        self.parallel = self.io_cfg['parallel']
+        self.parallel_boards = self.io_cfg['parallel_boards']
+        self.parallel_drones = self.io_cfg['parallel_drones']
 
         # IO parameters for saving and printing data
         self.output = self.io_cfg['io']['terminal_output']
@@ -321,6 +337,7 @@ class R:
         self.drone_dir = Path(self.io_cfg['file_paths']['drone_dir'])
         self.tmp_data_dir = Path(self.io_cfg['file_paths']['primecam_readout']) / 'tmp'
         self.tmp_dir = Path(__file__).parent / '..' / '..' / 'tmp'
+        self.g3_dir = Path(self.io_cfg['file_paths']['g3_dir'])
 
         # Save session ID to config files
         # -------------------------------
@@ -486,7 +503,6 @@ class R:
         rtn = self._run_parallel(_write_targ_comb, **kwargs)
         rfsoc_io.send_msg('INFO', f'Sucessfully wrote custom comb for drones {com_to}!', self.output)
 
-
     @header
     @utils.method_timer
     def get_ADC_rms(self, **kwargs):
@@ -515,11 +531,8 @@ class R:
         
         com_to, _ = self._get_com_to(**kwargs)
 
-        # Take data one board at a time if instructed to take data with all drones at a time (all drones transfers too much data through OCS)
-        try:
-            if self.parallel == 0 or kwargs['parallel'] == 0: kwargs['parallel'] = 1
-        except:
-            pass
+        # Take data one board at a time (all drones transfers too much data through OCS)
+        kwargs['parallel_boards'] = 1
 
         # Get snap data of drones
         rtns = np.array(self._run_parallel(_getSnapData, **kwargs)).flatten()
@@ -755,9 +768,8 @@ class R:
         def _take_timestream_python(com_to, t_sec, reset, turn_off, save_data):
             stream_paths = []
             timestreams = []
-            self.timestamp = str(time.time()).split('.')[0]
-            if self.parallel >=0 and len(com_to) > 1:
-                if self.parallel > 0:
+            if (self.parallel_boards or self.parallel_drones) and len(com_to) > 1:
+                if self.parallel_boards > 0:
                     coms = self.board_list
                 else:
                     coms = [None]
@@ -855,10 +867,45 @@ class R:
             rfsoc_io.send_msg('INFO', f"Finished taking {t_sec} seconds of timestream data with timestamp {self.timestamp}!")
             return rtn
 
+        def _save_timestream_g3(com_to):
+            date = self.timestamp[0:5]
+
+            fname = self.io_cfg["save_file_names"]["timestream"]
+            fname = f'{fname}_{self.timestamp}'
+
+            stream_paths = []
+            for com in com_to:
+                bid, drid = com.split('.')
+                ind = self.drone_list.index(com)
+                timestream_dir = self.timestream_dirs[ind]
+
+                g3_tstream_dir = self.g3_dir / date / f'rfsoc{int(bid):02d}_drone{drid}'
+                g3_file = rfsoc_io.get_most_recent_file(g3_tstream_dir, f'r{int(bid):02d}d{drid}*', output = self.output, time_past = np.inf)
+
+                tstream_parts = g3_file.stem.split('_')
+                tstream_name = '_'.join(tstream_parts[0:-1])
+                try:
+                    tstream_num = int(tstream_parts[-1])
+                except:
+                    tstream_num = -1
+
+                g3_files = []
+                while tstream_num >= 0 and rfsoc_io.get_creation_time(g3_file) - float(self.timestamp) > 0:
+                    g3_files.append(g3_file)
+                    tstream_num -= 1
+                    g3_file = g3_tstream_dir / (tstream_name + f'_{tstream_num:03d}.g3')
+
+                tstream_file = timestream_dir / f'{fname}.txt'
+                with open(tstream_file, 'w') as file:
+                    file.writelines(f"{g3_file}\n" for g3_file in g3_files)
+
+                stream_paths.append(tstream_file)
+            return stream_paths
+                
         com_to, _ = self._get_com_to(**kwargs)
 
         # Parse key word arguments
-        g3 = False # Whether to take g3 timestream
+        g3 = self.io_cfg['g3'] # Whether to take g3 timestream
         write_comb = False
         save_data = self.save_data
         reset = True # Whether to turn off currently running timestreams
@@ -875,25 +922,31 @@ class R:
             elif key == 'turn_off':
                 turn_off = value
 
-        # Write new tones
+        # Write custom comb
+        # -----------------
         if write_comb:
             self.write_config_comb(**kwargs)
             time.sleep(1)
 
-        rfsoc_io.send_msg('INFO', f'Taking {t_sec} seconds of timestream data!', self.output)
-
         # Turn off all currently running timestreams
+        # ------------------------------------------
         if reset:
             rtn = self.rfsoc.timestreamOn(on = False)
             time.sleep(0.5) # Wait to ensure that all timestreams were turned off
 
+        # Take timestreams
+        # ----------------
+        rfsoc_io.send_msg('INFO', f'Taking {t_sec} seconds of timestream data!', self.output)
+        self.timestamp = str(time.time()).split('.')[0]
         if g3:
             args=[t_sec]
             self._run_parallel(_take_timestream_g3, *args, **kwargs)
+            if self.save_data: stream_paths = _save_timestream_g3(com_to)
         else:
             stream_paths, timestreams = _take_timestream_python(com_to, t_sec, reset, turn_off, save_data)
 
         # Get RMS power at the ADC
+        # ------------------------
         self.get_ADC_rms(**kwargs)
 
         # Edit and save drone config with comb used for timestream
@@ -1266,7 +1319,7 @@ class R:
         fname = self.io_cfg["save_file_names"]["timestream"]
         fname = f'{fname}_{self.timestamp}'
 
-        tstream_files = list([])
+        tstream_files = []
         timestream_dir = self.timestream_dirs[ind]
         # Iterate over timestream array in chuncks of trimmed_len and save these chuncks as seperate files
         for i, j in enumerate(range(0, tstream_len, trimmed_len)):
@@ -1844,21 +1897,70 @@ class R:
         # ------------------------
         com_to, boards = self._get_com_to(**kwargs)
 
-        parallel = self.parallel
+        parallel_boards = self.parallel_boards
+        parallel_drones = self.parallel_drones
         for key, value in kwargs.items():
-            if key == 'parallel':
-                parallel = value
+            if key == 'parallel_boards':
+                parallel_boards = value
+            elif key == 'parallel_drones':
+                parallel_drones = value
+        
+        if parallel_boards == -1: parallel_boards = len(boards)
         
         # Run func in parallel or series
         # ------------------------------
+
+        # Calculate max number of arrays needed to accommodate drones 
+        # Need 4 arrays for 1 drone in parallel, 2 arrays for 2 & 3 drones in parallel, and 1 array for 4 drones in parallel
+        num_drone_arr = 4 // parallel_drones
+        num_drone_arr += 1 if 4 % parallel_drones > 0 else 0
+
+        # Calculate max number of arrays needed to accommodate boards
+        # Identical calculation as for drones with 4 replaced with number of boards
+        num_board_arr = len(boards) // parallel_boards
+        num_board_arr += 1 if len(boards) % parallel_boards > 0 else 0
+
+        # Create array of com_to arrays
+        com_arrs = [[] for _ in range(num_drone_arr*num_board_arr)]
+
+        # Create array of sets to track which boards are in each com_to array
+        board_arrs = [set() for _ in range(num_drone_arr*num_board_arr)]
+
+        curr_bid = int(boards[0])
+
+        drone_ind = -1 / parallel_drones
+        high_ind = 0 # Highest index of com_arrs containing a com_to array with open space
+
+        # Iterate over all drones in drone list
+        for com in com_to:
+            bid = int(com.split('.')[0])
+            
+            if bid > curr_bid:
+                curr_bid = bid
+                drone_ind = high_ind - 1 / parallel_drones
+
+            drone_ind += 1 / parallel_drones
+
+            board_set = board_arrs[floor(drone_ind)]
+            
+            # Check if number of boards exceeds the amount that should be run in parallel
+            while len(board_set) >= parallel_boards and not bid in board_set:
+                # Move on to next com_to array and check if it has open space
+                high_ind += 1
+                drone_ind = floor(drone_ind) + 1
+                board_set = board_arrs[floor(drone_ind)]
+
+            # Add com to com_to array and add board to set
+            ind = floor(drone_ind)
+            com_arrs[ind].append(float(com))
+            board_arrs[ind].add(bid)        
+
+        s = Style()
+        name = func.__name__
+
         rtn_list = []
-        if parallel < 0 or len(com_to) <= 1: # Run func in series for all drones
-            for com in com_to: 
-                rtn_list.append(func(com, *args, **kwargs))
-        else:
-            if parallel == 0: # Run func with all drones at the same time
-                rtn_list.append(func(None, *args, **kwargs))
-            else:
-                for board in boards: # Run func one board at a time
-                    rtn_list.append(func(board, *args, **kwargs))
+        for com_to in com_arrs:
+            rfsoc_io.send_msg('INFO', f'Running {s.func_name(name)} for drones {com_to}!')
+            rtn_list.append(func(str(com_to), *args, **kwargs))
+
         return rtn_list

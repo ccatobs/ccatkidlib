@@ -8,11 +8,12 @@ from ccatkidlib.analysis.res_fit.phase_utils.utils import *
 
 from ccatkidlib.analysis.res_fit.phase_utils.fit_single_det import ResonanceFitterSingleTone as fit
 
-def fit_single_res(fs, z, **kwargs):
+def fit_single_res(fs, z, numspan, **kwargs):
 
     tau = findcabledelay(fs/1e9, z)
-    result0 = fit(fs, z, tau, **kwargs).result
-    nonlinear_result = fit(fs, z, tau, result0=result0, **kwargs).result
+    #print('tau',tau)
+    result0 = fit(fs, z, tau, numspan, **kwargs).result
+    nonlinear_result = fit(fs, z, tau, numspan, result0=result0, **kwargs).result
 
     return nonlinear_result
 
@@ -75,8 +76,8 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
     dets = np.reshape(s21, (s21.shape[0]//bin_width,bin_width))
     fs = np.reshape(fs, (fs.shape[0]//bin_width,bin_width))
 
-    dets = dets[:, bin_width//2 - int(bin_width*span*0.5) : bin_width//2 + int(bin_width*span*0.5)]
-    fs = fs[:, bin_width//2 - int(bin_width*span*0.5) : bin_width//2 + int(bin_width*span*0.5)]
+    #dets = dets[:, bin_width//2 - int(bin_width*span*0.5) : bin_width//2 + int(bin_width*span*0.5)]
+    #fs = fs[:, bin_width//2 - int(bin_width*span*0.5) : bin_width//2 + int(bin_width*span*0.5)]
 
     ret = {
         'Qi': [],
@@ -111,12 +112,14 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
             models['fs'].append(f)
             models['data_z'].append(z)
 
-            nonlinear_result = fit_single_res(f,z,**kwargs)
+            nonlinear_result = fit_single_res(f,z,numspan=span,**kwargs)
 
             if keep_model: 
                 models['fit_z'].append(nonlinear_result['ang_to_z'])
                 # models['phase_fit'].append(nonlinear_result['fit_result'])
                 models['ang'].append(nonlinear_result['ang'])
+                models['angt'].append(nonlinear_result['angt'])
+                models['fit_result'].append(nonlinear_result['fit_result'])
 
 
             for k in ret.keys():
@@ -127,7 +130,9 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
             if keep_model: 
                 models['fit_z'].append(z.mean()*np.ones(shape=z.shape))
                 # models['phase_fit'].append(np.ones(shape=z.shape))
-                models['ang'].append(np.ones(shape=z.shape))
+                models['ang'].append(nonlinear_result['ang'])
+                models['angt'].append(nonlinear_result['angt'])
+                models['fit_result'].append(np.ones(shape=z.shape))
 
             for k in ret.keys():
                 ret[k].append(None)
@@ -192,7 +197,7 @@ if __name__ == '__main__':
     dets = np.reshape(s21, (s21.shape[0]//bin_width,bin_width))
     fs = np.reshape(fs, (fs.shape[0]//bin_width,bin_width))
 
-    data = fit_target_sweep(target_file, target_cfg, verb=True, pherr_threshold=0.2, pherr_threshold_num = 10)
+    data = fit_target_sweep(target_file, target_cfg, verb=True, numspan=span, pherr_threshold=0.2, pherr_threshold_num = 10)
 
     s21s = []
 
