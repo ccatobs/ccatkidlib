@@ -150,7 +150,7 @@ class ResonanceFitterSingleTone():
         ezinf = zinf/np.abs(zinf)
 
         z1_1 = z/(-ezinf)
-        ang = np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) #+ np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #8/11/24: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #before: phase2(z1_1) + np.angle(-ezinf)
+        ang = np.angle(z1_1) + np.angle(-ezinf) # before: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) #+ np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #8/11/24: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #before: phase2(z1_1) + np.angle(-ezinf)
 
         hnumsmopts = int(np.floor((f0g/Qg/3.)/(f[1]-f[0])))
         hnumsmopts = int(np.amax([np.amin([hnumsmopts, 20]),0]))
@@ -166,7 +166,7 @@ class ResonanceFitterSingleTone():
         zm_inf = (zm[0]+zm[-1])/2.
         ezminf = zm_inf/np.abs(zm_inf)
         zm1_1 = zm/(-ezminf)
-        angm = np.angle(zm1_1) + np.angle(-ezminf) #phase2(zm1_1) #+ np.angle(-ezminf) #phase2(zm1_1) + np.angle(-ezminf) #phase2(zm1_1) + np.angle(-ezminf)
+        angm = np.angle(zm1_1) + np.angle(-ezminf) # before: np.angle(zm1_1) + np.angle(-ezminf) #phase2(zm1_1) #+ np.angle(-ezminf) #phase2(zm1_1) + np.angle(-ezminf) #phase2(zm1_1) + np.angle(-ezminf)
     
         dangm = angm[hnumsmopts_l:len(angm)] - angm[0:len(angm)-hnumsmopts+1]
 
@@ -427,7 +427,7 @@ class ResonanceFitterSingleTone():
 
         z1_1 = z/(-ezinf) # z1 in matlab, renamed due to redundancy
 
-        ang = np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) #+ np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #8/11/24: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) # before: phase2(z1_1) + np.angle(-ezinf)
+        ang = np.angle(z1_1) + np.angle(-ezinf) # before: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) #+ np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #8/11/24: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) # before: phase2(z1_1) + np.angle(-ezinf)
 
         # linear regime used with estpara # -20 dBm data and linear fit # import data to test for now
         ft, angt = trimdata(f,ang,estv['f0'],estv['Q'],numspan)

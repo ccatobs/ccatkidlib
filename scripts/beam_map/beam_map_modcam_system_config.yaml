@@ -24,24 +24,35 @@ sess_id: null
 # Drone/Board List Config #
 ###########################
 
-drone_list: ['1'] # List of boards/drones to use
+# Drone configuration
+drone_list: ['1', '2'] # List of boards/drones to use
 
-initialize: True
-parallel: False # Whether to send commands to all drones in parallel (will stop all drones not in drone_list)
-restart: False # Whether to restart already running drones
+initialize_boards: False  # Whether to reintialize boards (not working in Jupyter Notebook right now)
+initialize_drones: False # Whether to run drone initialize commands (e.g. set_atten and setNCLO)
 
-# Board configuration
+parallel_boards: -1    # Number of boards to run in parallel (-1 for all boards in parallel)
+parallel_drones: 4    # Number of drones to run in in parallel
+restart: False            # Whether to restart already running drones
+
+# Timestream configuration
 udp_ip: "192.168.3.40"
 udp_port: 4096
+g3: True
+
+# Board configuration
 boards:
   b1: 
+    name: rfsoc100
     board_ip: '192.168.2.100'
-    sampling_freq: 488.28 # Timestream sampling frequency (Hz)
-    drone_cfg: "/home/pcs/ccatkidlib/scripts/beam_map/beam_map_modcam_drone_config_1.yaml"
+    sampling_freq: 488.28 # Timestream sampling frequency (in Hz)
+    max_power: 32767 # Max power at the drone DACs
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/beam_map/beam_map_modcam_rfsoc100_config.yaml"
   b2:
+    name: rfsoc101
     board_ip: '192.168.2.101'
     sampling_freq: 488.28 # Timestream sampling frequency
-    drone_cfg: "/home/pcs/ccatkidlib/scripts/beam_map/beam_map_modcam_drone_config_2.yaml"
+    max_power: 32767 # Max power at the drone DACs
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/beam_map/beam_map_modcam_rfsoc101_config.yaml"
 
 ##################
 # File IO Config #
@@ -49,25 +60,34 @@ boards:
 
 # File paths
 file_paths:
-  analysis_dir: "/home/pcs/ccatkidlib/analysis/"                         # Analysis code directory
-  data_dir: "/mnt/md0/cooldown_dec/beam_map"                                # Directory to save data in
-  tmp_data_dir: "/home/pcs/primecam_readout/src/tmp"                     # Temp data directory in which primecam_readout saves files
+  data_dir: "/mnt/md0/cooldown_march/beam_map"                       # Directory to save data in
+  g3_dir: "/mnt/md0/g3_temp/g3"
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
-  pcs_dir: "/home/ocs/ocs-site-configs/"                                 # PCS directory
-  RSA_key: "/home/pcs/.ssh/id_ecdsa"                                       # Path to RSA key (None if no key)
-  drone_dir: "/home/xilinx/primecam_readout/drones"                        # Drone directory on the boards
+  pcs_dir: "/home/ocs/pcs-site-configs/"                                 # PCS directory
+  ssh_key: "/home/pcs/.ssh/id_ecdsa"                                     # Path to private ssh key (null if no key)
+  drone_dir: "/home/xilinx/primecam_readout/drones"                      # Drone directory on the boards
 
-# File names
-file_names:
-  stream_fname: 'beam_map_sweep_tstream' # Timestream file name
-  targ_fname: 'beam_map_sweep_targ'      # Target sweep file name
-  vna_fname: 'beam_map_sweep_vna'        # VNA sweep file name
-  vna_res_fname: 'f_res_vna'
-  targ_res_fname: 'f_res_targ'
-  comb_freq: 'f_rf_tones_comb'     # File head of comb frequency array
-  comb_amp: 'a_tones_comb'         # File head of comb power array
-  comb_phi: 'p_tones_comb'         # File head of comb phi array
+# File names of saved data files
+save_file_names:
+  timestream: 'beam_map_tstream' # Timestream file name
+  targ_sweep: 'beam_map_targ'    # Target sweep file name
+  vna_sweep:  'beam_map_vna'     # VNA sweep file name
+
+# Names of files on RFSoC boards
+board_file_names:
+  vna:
+    s21: 's21_vna'
+    res: 'f_res_vna'
+    comb_freq: 'freqs_vna'
+    comb_amp:  'amps_vna'
+    comb_phi:  'phis_vna'
+  targ:
+    s21: 's21_targ'
+    res: 'f_res_targ'
+    comb_freq: 'f_rf_tones_comb'
+    comb_amp:  'a_tones_comb'
+    comb_phi:  'p_tones_comb'
 
 # PCS agent IDs
 pcs_agents:
@@ -78,11 +98,11 @@ pcs_agents:
 io:
   logging_level: 'INFO'
   logging_fname: "rfsoc_daq_log.txt"
-  terminal_output: True  # Whether to print logs to terminal
-  save_data: True        # Whether to save data
-  save_config_copy: True # Whether to sawe copy of config (Recommended to use True)
-  max_file_size: 1000     # Max file size of timestreams in Megabytes
-
+  terminal_output: True   # Whether to print logs to terminal
+  save_data: True         # Whether to save data
+  from_board: False        # Whether to pull data directly from RFSoC board (slower) or from primecam_readout /src/tmp folder
+  save_config_copy: True  # Whether to sawe copy of config (Recommended to use True)
+  max_file_size: 2000     # Max file size of timestreams in Megabytes
 ######################
 # Beam Mapper Config #
 ######################
@@ -98,7 +118,6 @@ beam_mapper:
   # Hawkeye IR-55 source parameters
   source_on: True # Whether the IR source is on
   source_freq: 10 # Frequency of the IR source in Hz
-  source_voltage: 5.5 # Voltage of the IR source in Volts
+  source_voltage: 8 # Voltage of the IR source in Volts
   source_duty_cycle: 50 # Duty-cycle of the IR source square wave as a percent 
-
 ...

@@ -226,10 +226,11 @@ def get_array(src_path, dest_path, action = 'cp', load = True, output = False, t
         # Copy numpy file from board and load locally
         # -------------------------------------------
         # Get name of file to be copied
-        file = Path(src_path).name.split('.')[0]
+        file = Path(src_path).stem
+        ext = Path(src_path).suffix
         if timestamp: file = '_'.join(file.split('_')[:-1]) # Trim timestamp off file if desired
 
-        if Path(dest_path).suffix == '': dest_path += f'/{file}.npy' # If local path is a directory, use same file name as on RFSoC board
+        if Path(dest_path).suffix == '': dest_path += f'/{file}{ext}' # If local path is a directory, use same file name as on RFSoC board
 
         # Define command for copying/moving array for src to dest dir.
         cmd = [action, src_path, dest_path]

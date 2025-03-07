@@ -8,16 +8,13 @@ import numpy as np
 import time
 
 # Local imports
-sys.path.append('./../../rfsoc/') # Append path with RFSoC_DAQ.py
-import rfsoc_io
+from ccatkidlib.rfsoc.rfsoc_daq import R
+import ccatkidlib.rfsoc_io as rfsoc_io
 
 def main():
     '''
     Main method run when 'measure_beam.py' is called directly
     '''
-    
-    # Import RFSoC control module
-    from rfsoc_daq import R
 
     # Parse command line arguments
     args = eval_args()
@@ -25,11 +22,11 @@ def main():
     # Initialize PCS Agents
     # ---------------------
     # Initialize RFSoC control agent
-    R = R(args.cfg)
-    output = R.io_cfg['io']['terminal_output']
+    RC = R(args.cfg)
+    output = RC.io_cfg['io']['terminal_output']
 
     # Initialize polarized beam mapper agent
-    P = OCSClient(R.io_cfg['pcs_agents']['beam_map_agent'], args=[])
+    P = OCSClient(RC.io_cfg['pcs_agents']['beam_map_agent'], args=[])
     rfsoc_io.send_msg('INFO', 'Initialized polarized beam mapper PCS agent!', output)
 
     # Wait for IR source to be plugged in
@@ -46,15 +43,15 @@ def main():
     # ---------------------------------
     if args.tune: 
         rfsoc_io.send_msg('INFO', 'Tuning Detectors', output)
-        tune_detectors(R, args)
+        tune_detectors(RC, args)
         rfsoc_io.send_msg('INFO', 'Finished tuning detectors', output)
 
     # Start beam mapping
     # ------------------
     rfsoc_io.send_msg('INFO', 'Starting Beam Map', output)
-    acquire_data(P, R, output, args)
+    acquire_data(P, RC, output, args)
    
-def acquire_data(P, R, output, args):
+def acquire_data(P, RC, output, args):
     '''
     Move beam mapper to specified coordinates and collect timestream data.
 
@@ -68,17 +65,12 @@ def acquire_data(P, R, output, args):
     map, mesh = generate_map(output, args)
     rfsoc_io.send_msg('INFO', f'Generated Beam Map:\n{map}', output)
 
-    R.edit_config(R.io_cfg, "map", map.tolist())
+    RC.edit_config(RC.io_cfg, "map", map.tolist())
     if mesh is not None:
-        R.edit_config(R.io_cfg, "mesh_X", mesh[0].tolist())
-        R.edit_config(R.io_cfg, "mesh_Y", mesh[1].tolist())
-    rfsoc_io.save_config(R.log_dir / f"beammap_config_io_{R.timestamp}.yaml", R.io_cfg, R.save_cfg)
+        RC.edit_config(RC.io_cfg, "mesh_X", mesh[0].tolist())
+        RC.edit_config(RC.io_cfg, "mesh_Y", mesh[1].tolist())
+    rfsoc_io.save_config(RC.log_dir / f"beammap_config_io_{RC.timestamp}.yaml", RC.io_cfg, RC.save_cfg)
     coords = map.reshape(-1, 2)
-
-    # Take initial timestream to initialize drones
-    # --------------------------------------------
-    R.parallel = True
-    R.take_timestream(1, write_tones = False, turn_off = False, save_data = False)
 
     # Iterate over positions and take timestreams
     # -------------------------------------------
@@ -98,11 +90,11 @@ def acquire_data(P, R, output, args):
             time.sleep(args.wait)
 
             # Update/add position to config file
-            R.edit_config(R.ext_cfg, 'coords', coords[i].tolist())
+            RC.edit_config(RC.ext_cfg, 'coords', coords[i].tolist())
             pbar.set_postfix_str(f'Current Coordinate: {coords[i]} mm')
 
-            if args.t > 0: R.take_timestream(args.t, write_tones = False, reset = False, turn_off = False, setup = False)
-    R.take_timestream(1, write_tones = False, turn_off = True, save_data = False, setup = False, reset = False)
+            if args.t > 0: RC.take_timestream(args.t, write_comb = False, setup = False)
+    RC.take_timestream(1, write_comb = False, turn_off = True, save_data = False, setup = False, reset = False)
 
 def generate_map(output, args):
     # Generates a list of coordinates for map making
@@ -154,13 +146,12 @@ def generate_map(output, args):
 # Other Functions #
 ###################
 
-def tune_detectors(R, args):
+def tune_detectors(RC, args):
     # Find detectors and set tones
     # ----------------------------
-    R.find_detectors(new_sweep = True)
-    det_freqs = R.find_detectors_fine(new_sweep = True)
-    R.take_target_sweep(write_tones = False)
-    R.take_target_sweep(write_tones = True)
+    RC.find_detectors(new_sweep = True)
+    det_freqs = RC.find_detectors_fine(new_sweep = True, write_comb = False)
+    RC.take_target_sweep(write_comb = False)
 
 def eval_args():
     # Initialize arg parser

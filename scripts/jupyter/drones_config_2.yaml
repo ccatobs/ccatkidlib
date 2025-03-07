@@ -1,0 +1,141 @@
+---
+sess_id: None
+
+# bid.drid (Board ID & Drone ID)
+com_to: '2.1'
+
+# Tone configuration
+tones:
+  NCLO: 850                    # Numerically controlled oscillator frequency (in MHz)
+  bandwidth: 2                 # Bandwidth of each target sweep tone
+  N_step: 500                  # Number of points of each target sweep tone
+  sampling_freq: 512e6/(2**20) # Timestream sampling frequency 
+  dB: True                     # True if tone powers are given in dB
+  tone_freqs: []               # Tone frequencies used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
+
+# Attenuator configuration
+atten:
+  drive: 12 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+
+# Detector configuration
+det_config:
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 500
+  nominal_detector_freqs: [] # Units of Hz
+
+  found_num_detectors: None # Number of detectors found using find_detectors method
+  found_detector_freqs: None # Array of found detector frequencies
+
+---
+sess_id: None
+
+# bid.drid (Board ID & Drone ID)
+com_to: '2.2'
+
+# Tone configuration
+tones:
+  NCLO: 850                    # Numerically controlled oscillator frequency (in MHz)
+  bandwidth: 2                 # Bandwidth of each target sweep tone
+  N_step: 500                  # Number of points of each target sweep tone
+  sampling_freq: 512e6/(2**20) # Timestream sampling frequency 
+  dB: True                     # True if tone powers are given in dB
+  tone_freqs: []               # Tone frequencies used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
+
+# Attenuator configuration
+atten:
+  drive: 12 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+
+# Detector configuration
+det_config:
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 500
+  nominal_detector_freqs: [] # Units of Hz
+
+  found_num_detectors: None # Number of detectors found using find_detectors method
+  found_detector_freqs: None # Array of found detector frequencies
+
+---
+sess_id: None
+
+# bid.drid (Board ID & Drone ID)
+com_to: '2.3'
+
+
+# Tone configuration
+tones:
+  NCLO: 850                    # Numerically controlled oscillator frequency (in MHz)
+  bandwidth: 2                 # Bandwidth of each target sweep tone
+  N_step: 500                  # Number of points of each target sweep tone
+  sampling_freq: 512e6/(2**20) # Timestream sampling frequency 
+  dB: True                     # True if tone powers are given in dB
+  tone_freqs: []               # Tone frequencies used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
+
+# Attenuator configuration
+atten:
+  drive: 12 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+
+# Detector configuration
+det_config:
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 500
+  nominal_detector_freqs: [] # Units of Hz
+
+  found_num_detectors: None # Number of detectors found using find_detectors method
+  found_detector_freqs: None # Array of found detector frequencies
+
+---
+sess_id: None
+
+# bid.drid (Board ID & Drone ID)
+com_to: '2.4'
+
+# Tone configuration
+tones:
+  NCLO: 850                    # Numerically controlled oscillator frequency (in MHz)
+  bandwidth: 2                 # Bandwidth of each target sweep tone
+  N_step: 500                  # Number of points of each target sweep tone
+  sampling_freq: 512e6/(2**20) # Timestream sampling frequency 
+  dB: True                     # True if tone powers are given in dB
+  tone_freqs: []               # Tone frequencies used for target sweep
+  tone_powers: []              # Tone powers used for target sweep
+  tone_phis: []                # Tone phases used for target sweep
+
+# Attenuator configuration
+atten:
+  drive: 12 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+
+# Detector configuration
+det_config:
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 500
+  nominal_detector_freqs: [] # Units of Hz
+
+  found_num_detectors: None # Number of detectors found using find_detectors method
+  found_detector_freqs: None   # Array of found detector frequencies
+
+...
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
