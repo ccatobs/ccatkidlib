@@ -1508,7 +1508,8 @@ class R:
 
         def _check_comb_type(key, value):
             # Convert from dB to normal units if necessary
-            if key == 'tone_powers' and self.drone_cfg[ind]['tones']['dB']: value = utils.convert_from_dB(value)
+            if key == 'tone_powers':
+            	if self.drone_cfg[ind]['tones']['dB']: value = utils.convert_from_dB(value)
             
             # Check if the tone frequencies are within the bandwidth of the RFSoC
             if key == 'tone_freqs' and np.max(np.abs(np.array(value) - self.drone_cfg[ind]['tones']['NCLO']*1e6))  > self.drone_cfg[ind]['tones']['full_bandwidth']*1e6/2:

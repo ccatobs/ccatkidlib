@@ -8,7 +8,7 @@ from ccatkidlib.analysis.res_fit.phase_utils.utils import *
 
 from ccatkidlib.analysis.res_fit.phase_utils.fit_single_det import ResonanceFitterSingleTone as fit
 
-def fit_single_res(fs, z, numspan, **kwargs):
+def fit_single_res(fs, z, numspan=1, **kwargs):
 
     tau = findcabledelay(fs/1e9, z)
     #print('tau',tau)
@@ -99,6 +99,7 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
         models['fit_z'] = []
         # models['phase_fit'] = []
         models['ang'] = []
+        models['fit_result'] = []
 
 
     
@@ -113,13 +114,13 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
             models['data_z'].append(z)
 
             nonlinear_result = fit_single_res(f,z,numspan=span,**kwargs)
-
+            #print('test', np.shape(nonlinear_result['fit_result2'])) # fit_result by comparison have different sizes
             if keep_model: 
                 models['fit_z'].append(nonlinear_result['ang_to_z'])
                 # models['phase_fit'].append(nonlinear_result['fit_result'])
                 models['ang'].append(nonlinear_result['ang'])
-                models['angt'].append(nonlinear_result['angt'])
-                models['fit_result'].append(nonlinear_result['fit_result'])
+                #models['angt'].append(nonlinear_result['angt'])
+                models['fit_result'].append(nonlinear_result['fit_result2'])
 
 
             for k in ret.keys():
@@ -131,8 +132,8 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
                 models['fit_z'].append(z.mean()*np.ones(shape=z.shape))
                 # models['phase_fit'].append(np.ones(shape=z.shape))
                 models['ang'].append(nonlinear_result['ang'])
-                models['angt'].append(nonlinear_result['angt'])
-                models['fit_result'].append(np.ones(shape=z.shape))
+                #models['angt'].append(nonlinear_result['angt'])
+                models['fit_result'].append(z.mean()*np.ones(shape=z.shape))
 
             for k in ret.keys():
                 ret[k].append(None)
@@ -143,6 +144,7 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
 
     for k in ret.keys():
         # if k == 'phase_fit':print(k, ret[k])
+        print(k)
         ret[k] = np.array(ret[k])
     
     ret['chi_sq'] = np.array(

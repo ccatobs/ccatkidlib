@@ -32,7 +32,7 @@ def get_timestamp(path) -> int:
         for i in [-1, -2, 0]: # Timestamp should only be at the 0, -1, or -2 index of the file part list
             try:
                 tstamp = int(parts[i]) # Try casting part of file to int
-                if tstamp > 1.7e9: return tstamp
+                if tstamp > 1.7e9: return tstamp # Check that integer is a valid timestamp
             except:
                 pass
         return -1 # Return -1 if no valid timestamp was found

@@ -7,7 +7,15 @@ sess_id: null
 
 # Add external system parameters that change over the course of data acquisiton here
 avail_space: null # Available space on board in GB
+array_temp: null
 bath_temp: null
+
+##########################
+# Beam Mapper Parameters #
+##########################
+
+fts:
+  position: null
 
 ---
 sess_id: null
@@ -17,10 +25,10 @@ sess_id: null
 ###########################
 
 # Drone configuration
-drone_list: ['1','2'] # List of boards/drones to use
+drone_list: ['1'] # List of boards/drones to use
 
-initialize_boards: False  # Whether to reintialize boards (not working in Jupyter Notebook right now)
-initialize_drones: True  # Whether to run drone initialize commands (e.g. set_atten and setNCLO)
+initialize_boards: True  # Whether to reintialize boards (not working in Jupyter Notebook right now)
+initialize_drones: True # Whether to run drone initialize commands (e.g. set_atten and setNCLO)
 
 parallel_boards: -1    # Number of boards to run in parallel (-1 for all boards in parallel)
 parallel_drones: 4    # Number of drones to run in in parallel
@@ -38,13 +46,13 @@ boards:
     board_ip: '192.168.2.100'
     sampling_freq: 488.28 # Timestream sampling frequency (in Hz)
     max_power: 32767 # Max power at the drone DACs
-    drone_cfg: "/home/pcs/ccatkidlib/ccatkidlib/rfsoc/rfsoc100_config.yaml"
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/fts/fts_rfsoc100_config.yaml"
   b2:
     name: rfsoc101
     board_ip: '192.168.2.101'
     sampling_freq: 488.28 # Timestream sampling frequency
     max_power: 32767 # Max power at the drone DACs
-    drone_cfg: "/home/pcs/ccatkidlib/ccatkidlib/rfsoc/rfsoc101_config.yaml"
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/fts/fts_rfsoc101_config.yaml"
 
 ##################
 # File IO Config #
@@ -52,19 +60,19 @@ boards:
 
 # File paths
 file_paths:
-  data_dir: "/mnt/md0/cooldown_march/power_recovery"                       # Directory to save data in
+  data_dir: "/mnt/md0/cooldown_march/fts"                       # Directory to save data in
   g3_dir: "/mnt/md0/g3_temp/g3"
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # Master Drone List File
-  pcs_dir: "/home/ocs/pcs-deployment-configs/"                                 # PCS directory
+  pcs_dir: "/home/ocs/pcs-site-configs/"                                 # PCS directory
   ssh_key: "/home/pcs/.ssh/id_ecdsa"                                     # Path to private ssh key (null if no key)
   drone_dir: "/home/xilinx/primecam_readout/drones"                      # Drone directory on the boards
 
 # File names of saved data files
 save_file_names:
-  timestream: 'recovery_tstream' # Timestream file name
-  targ_sweep: 'recovery_targ'    # Target sweep file name
-  vna_sweep:  'recovery_vna'     # VNA sweep file name
+  timestream: 'fts_tstream' # Timestream file name
+  targ_sweep: 'fts_targ'    # Target sweep file name
+  vna_sweep:  'fts_vna'     # VNA sweep file name
 
 # Names of files on RFSoC boards
 board_file_names:
@@ -84,6 +92,7 @@ board_file_names:
 # PCS agent IDs
 pcs_agents:
   rfsoc_agent: "det-queenagent" # RFSoC agent ID 
+  fts_agent: "det-fts"
 
 # Runtime IO config
 io:
@@ -91,7 +100,22 @@ io:
   logging_fname: "rfsoc_daq_log.txt"
   terminal_output: True   # Whether to print logs to terminal
   save_data: True         # Whether to save data
-  from_board: True        # Whether to pull data directly from RFSoC board (slower) or from primecam_readout /src/tmp folder
+  from_board: False        # Whether to pull data directly from RFSoC board (slower) or from primecam_readout /src/tmp folder
   save_config_copy: True  # Whether to sawe copy of config (Recommended to use True)
   max_file_size: 2000     # Max file size of timestreams in Megabytes
+######################
+# Beam Mapper Config #
+######################
+
+fts:
+  # Mirror parameters
+  pos_array: [] # Array of positions 
+  
+
+  # Hg Arc Lamp Config
+  source_on: True # Whether the Arc Lamp is on
+  source_current: 99 # Percentage
+
+  # Chopper Wheel Config
+  chopper_freq: 10 # Frequency of the chopper wheel (in Hz)
 ...
