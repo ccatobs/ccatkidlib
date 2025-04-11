@@ -258,7 +258,7 @@ def get_array(src_path, dest_path, action = 'cp', load = True, output = False, t
 # Logging IO Functions #
 ########################
 
-def setup_logging(log_path , level, name = __name__, output = False):
+def setup_logging(log_path, level, name = __name__, output = False):
     '''
     Setup logger and logger config.
 
@@ -385,7 +385,7 @@ def header(func):
 # Remote IO Functions #
 #######################
 
-def get_connection(ip, ssh_key, sudo = False, output = False):
+def get_connection(ip, ssh_key, output = False):
     '''
     Create Fabric Connection to RFSoC board with specified IP address. 
 
@@ -397,11 +397,8 @@ def get_connection(ip, ssh_key, sudo = False, output = False):
         connection (Connection) : Fabric Connection object to specified IP address
     '''
 
-    # MOVE PASSWORD AT SOME POINT
-    config = Config(overrides={'sudo': {'password': 'xilinx'}}) if sudo else Config()
-
     # Get Fabric Connection to RFSoC board
-    connect = Connection(f'xilinx@{ip}', config = config, connect_kwargs = {'key_filename': ssh_key})
+    connect = Connection(f'xilinx@{ip}', connect_kwargs = {'key_filename': ssh_key})
     send_msg('DEBUG', f'Created Fabric Connection to {ip}.', output = output)
     return connect
 

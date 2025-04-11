@@ -94,7 +94,7 @@ def get_config(path, all_cfg = False) -> list:
                 cfg_files = sorted(cfg_path.rglob(f'*{timestamp}*.yaml')) 
                 cfgs = [io_cfg] + cfg_files
                 if not all_cfg: # Find ext config if all_cfg is False (since it is not in the drone config directory)
-                    ext_cfg = rfsoc_io.get_most_recent_file(cfg_path.parent, f'*ext*{timestamp}*.yaml', time_past = np.inf) 
+                    ext_cfg = rfsoc_io.get_most_recent_file(cfg_path.parent, f'*{timestamp}*.yaml', time_past = np.inf) 
                     cfgs += [ext_cfg]
                 return cfgs # Return found config files
         return [] # Return an empty list if none of the searched config directories contain config files matching data file

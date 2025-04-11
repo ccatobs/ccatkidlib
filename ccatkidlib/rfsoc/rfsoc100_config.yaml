@@ -13,9 +13,8 @@ udp_source_port: 4096
 tones:
   NCLO: 848                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
-  tone_bandwidth: 0.5          # Bandwidth of each target sweep tone (in MHz) (currently needs to be changed in _cfg_board.py on board)
-  N_step: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
-  dB: False                    # True if tone powers are given in dB
+  chan_bw: 0.5          # Bandwidth of each target sweep tone (in MHz) (currently needs to be changed in _cfg_board.py on board)
+  sweep_steps: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
   tone_powers: []              # Tone powers used for target sweep
@@ -27,8 +26,8 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 4  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 11  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
@@ -66,9 +65,8 @@ udp_source_port: 4096
 tones:
   NCLO: 849                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
-  tone_bandwidth: 0.5                 # Bandwidth of each target sweep tone
-  N_step: 500                  # Number of points of each target sweep tone 
-  dB: False                     # True if tone powers are given in dB
+  chan_bw: 0.5           # Bandwidth of each target sweep tone
+  sweep_steps: 500              # Number of points of each target sweep tone 
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
   tone_powers: 348.77204295    # Tone powers used for target sweep
@@ -80,8 +78,8 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 4 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 13  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 11  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
@@ -120,9 +118,8 @@ udp_source_port: 4096
 tones:
   NCLO: 850                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
-  tone_bandwidth: 0.5                 # Bandwidth of each target sweep tone
-  N_step: 500                  # Number of points of each target sweep tone
-  dB: False                     # True if tone powers are given in dB
+  chan_bw: 0.5                 # Bandwidth of each target sweep tone
+  sweep_steps: 500                  # Number of points of each target sweep tone
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep
   tone_powers: []              # Tone powers used for target sweep
@@ -134,8 +131,8 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 8 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 4  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 11  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
@@ -173,9 +170,8 @@ udp_source_port: 4096
 tones:
   NCLO: 851                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
-  tone_bandwidth: 0.5               # Bandwidth of each target sweep tone
-  N_step: 500                  # Number of points of each target sweep tone
-  dB: False                     # True if tone powers are given in dB
+  chan_bw: 0.5          # Bandwidth of each target sweep tone
+  sweep_steps: 500             # Number of points of each target sweep tone
   num_tones: null
   tone_freqs: []               # Tone frequencies used for target sweep (in Hz)
   tone_powers: []              # Tone powers used for target sweep
@@ -187,8 +183,8 @@ tones:
 
 # Attenuator configuration
 atten:
-  drive: 13 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 4  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 11  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:

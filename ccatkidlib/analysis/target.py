@@ -98,17 +98,23 @@ class Target(Sweep):
         res_s21z = None
         res_freqs = self.res_freqs
         if res_freqs is not None and len(res_freqs) > 0:
-            N_step = self.drone_cfg['tones']['N_step']
-            freq_bins = np.array(self.freqs).reshape((-1, N_step))
-            data_bins = np.array(self.s21z).reshape((-1, N_step))
+            try:
+                sweep_steps = self.drone_cfg['tones']['sweep_steps']
+            except KeyError:
+                sweep_steps = self.drone_cfg['tones']['N_step']
+            freq_bins = np.array(self.freqs).reshape((-1, sweep_steps))
+            data_bins = np.array(self.s21z).reshape((-1, sweep_steps))
             res_s21z = [data[np.argmin(np.abs(freqs - res))] for res, freqs, data in zip(self.res_freqs, freq_bins, data_bins)]
         return res_s21z
 
     def _load_sweep(self):
         data = list(super()._load_sweep()) # Call the Sweep _load_sweep method
         if self.res_num is not None: # Run if a specific resonator(s) is specified
-            N_step = self.drone_cfg['tones']['N_step']
-            data = np.array(data).reshape((2, -1, N_step))
+            try:
+                sweep_steps = self.drone_cfg['tones']['sweep_steps']
+            except KeyError:
+                sweep_steps = self.drone_cfg['tones']['N_step']
+            data = np.array(data).reshape((2, -1, sweep_steps))
             try:
                 freqs, s21z = [], []
                 for res in self.res_num:
