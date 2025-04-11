@@ -4,8 +4,95 @@ import sys
 import numpy as np
 import yaml
 import scipy
+import multiprocessing
+import time
 
 from ccatkidlib.analysis.res_fit.jordan_utils.fitting import fit_nonlinear_iq_multi, fit_nonlinear_iq, fit_nonlinear_iq_ss
+
+def multiprocess_fit_ss(fs=None, dets=None,targ_file=None, cfg_file=None, keep_model=False, verb=False, num_cores=40):
+    '''
+    Uses multiprocessing to make jordan's code run faster for a target sweep
+    '''
+
+    t = time.time()
+    
+    if fs is None and dets is None:
+        fs, s21 = np.load(targ_file)
+        fs = fs.real
+        with open(cfg_file, 'r') as f:
+                config = yaml.safe_load(f)
+    
+        bin_width = config['tones']['N_step']
+            
+        dets = np.reshape(s21, (s21.shape[0]//bin_width,bin_width))
+        fs = np.reshape(fs, (fs.shape[0]//bin_width,bin_width))
+
+    args = [(f,z) for i, (f,z) in enumerate(zip(fs, dets))]
+
+    with multiprocessing.Pool(processes=num_cores) as pool:
+        results = pool.starmap(fit_single_res_ss, args)
+
+    print(time.time()-t)
+
+    return {key: np.array([d[key] for d in results]) for key in results[0]}
+
+    
+    
+
+def fit_single_res_ss(f, z, keep_model=False):
+    ret = {}
+
+    model = {
+         'fs': [],
+         'data_z': []
+    }
+    flags = []
+    
+    if keep_model:
+        # ret['fit_fs'] = []
+        model['fit_z'] = []
+
+    try:
+        fit = fit_nonlinear_iq_ss(f,z, verbose=False)
+
+        ret['Qc'] = fit.result.Qc
+        ret['Q'] = fit.result.Qr
+        ret['Qi'] = fit.result.Qi
+        ret['f0'] = fit.result.fr
+        ret['a'] = fit.result.a
+        ret['tau'] = fit.result.tau
+        ret['chi_sq'] = fit.result.chi_sq
+        
+        if keep_model:
+            ret['fit_z'] = fit.z_fit()
+
+        ret['fs'] = f
+        ret['data_z'] = z
+        ret['flag'] = 0
+
+    except RuntimeError:
+        ret['flag'] = 3
+
+        ret['Qc'] = None
+        ret['Q'] = None
+        ret['Qi'] = None
+        ret['f0'] = None
+        ret['a'] = None
+        ret['tau'] = None
+        ret['chi_sq'] = None
+        
+        if keep_model:
+            ret['fit_z'] = z.mean()*np.ones(shape=z.shape)
+
+        ret['fs'] = f
+        ret['data_z'] = z
+
+    return ret
+    
+
+    
+    
+    
 
 def fit_target_sweep_ss(targ_file, cfg_file, verb=True, keep_model=False):
 

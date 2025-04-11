@@ -32,7 +32,7 @@ def get_timestamp(path) -> int:
         for i in [-1, -2, 0]: # Timestamp should only be at the 0, -1, or -2 index of the file part list
             try:
                 tstamp = int(parts[i]) # Try casting part of file to int
-                if tstamp > 1.7e9: return tstamp
+                if tstamp > 1.7e9: return tstamp # Check that integer is a valid timestamp
             except:
                 pass
         return -1 # Return -1 if no valid timestamp was found
@@ -94,7 +94,7 @@ def get_config(path, all_cfg = False) -> list:
                 cfg_files = sorted(cfg_path.rglob(f'*{timestamp}*.yaml')) 
                 cfgs = [io_cfg] + cfg_files
                 if not all_cfg: # Find ext config if all_cfg is False (since it is not in the drone config directory)
-                    ext_cfg = rfsoc_io.get_most_recent_file(cfg_path.parent, f'*ext*{timestamp}*.yaml', time_past = np.inf) 
+                    ext_cfg = rfsoc_io.get_most_recent_file(cfg_path.parent, f'*{timestamp}*.yaml', time_past = np.inf) 
                     cfgs += [ext_cfg]
                 return cfgs # Return found config files
         return [] # Return an empty list if none of the searched config directories contain config files matching data file

@@ -265,8 +265,11 @@ class Sweep:
         # ------------------------------------
         boxes = []
         if plot_cfg['plot_defaults']['binboxes']['enable']:
-            N_step = self.drone_cfg['tones']['N_step']
-            bins = source.data['freqs'].reshape((-1, 500))
+            try:
+                sweep_steps = self.drone_cfg['tones']['sweep_steps']
+            except KeyError:
+                sweep_steps = self.drone_cfg['tones']['N_step']
+            bins = source.data['freqs'].reshape((-1, sweep_steps))
             fig, boxes = putils.plot_bin_boxes(fig, bins, **kwargs)
 
         res_glyphs = None
@@ -275,9 +278,11 @@ class Sweep:
         
         # Create CheckboxButton for toggling graph glyphs
         # -----------------------------------------------
-        labels = ["Sweep Line", "Sweep Scatter", "Tones Lines", "Tones Scatter"]
+        labels = ["Sweep Line", "Sweep Scatter"]
         button_glyphs = [glyphs[0],glyphs[1]]
-        if isinstance(res_glyphs, list): button_glyphs += [res_glyphs[0], res_glyphs[1]]
+        if isinstance(res_glyphs, list):
+            labels += ["Tones Lines", "Tones Scatter"]
+            button_glyphs += [res_glyphs[0], res_glyphs[1]]
 
         active = [glyph.visible for glyph in button_glyphs]
         if plot_cfg['plot_defaults']['binboxes']['enable']: 
@@ -345,10 +350,10 @@ class Sweep:
         elif name == 'res_s21z':
             if super().__getattribute__("res_s21z") is None: self.res_s21z = self._get_res_s21z()
         elif name == 'io_cfg':
-            if super().__getattribute__("io_cfg") is None: self.io_cfg = self._load_cfg('_io_')
+            if super().__getattribute__("io_cfg") is None: self.io_cfg = self._load_cfg('_io')
         elif name == 'ext_cfg':
-            if super().__getattribute__("ext_cfg") is None: self.ext_cfg = self._load_cfg('_ext_')
+            if super().__getattribute__("ext_cfg") is None: self.ext_cfg = self._load_cfg('_ext')
         elif name == 'drone_cfg':
-            if super().__getattribute__("drone_cfg") is None: self.drone_cfg = self._load_cfg('_drone_')
+            if super().__getattribute__("drone_cfg") is None: self.drone_cfg = self._load_cfg('_drone')
 
         return super().__getattribute__(name)

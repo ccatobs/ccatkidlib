@@ -26,7 +26,10 @@ class VNA(Sweep):
         freqs = list(self.freqs)
         res_freqs = self.res_freqs
         if res_freqs is not None:
-            res_s21z = [s21z[freqs.index(freq)] for freq in res_freqs]
+            try:
+                res_s21z = [s21z[freqs.index(freq)] for freq in res_freqs]
+            except ValueError:
+                res_s21z = super()._get_res_s21z()
         return res_s21z
 
     def get_cable_delay(self, freqs = None, phases = None, stitch_phase = True):
@@ -63,14 +66,18 @@ class VNA(Sweep):
         
         # Reshape data into bins of size N_step
         # -------------------------------------
-        N_step = self.drone_cfg['tones']['N_step']
-        phase_bins = np.array(phases).reshape(-1, N_step)
-        freq_bins = np.array(freqs).reshape(-1, N_step)
+        try:
+            sweep_steps = self.drone_cfg['tones']['sweep_steps']
+        except KeyError:
+            sweep_steps = self.drone_cfg['tones']['N_step']
+
+        phase_bins = np.array(phases).reshape(-1, sweep_steps)
+        freq_bins = np.array(freqs).reshape(-1, sweep_steps)
 
         # Stitch phase discontiuities at bin edges
         # ----------------------------------------
         curr_shift = 0
-        stitch_ends = int(N_step / stitch_ends_factor)
+        stitch_ends = int(sweep_steps / stitch_ends_factor)
 
         slope, intercept, _, _, _ = linregress(freq_bins[0, -1*stitch_ends:], phase_bins[0, -1*stitch_ends:])
 

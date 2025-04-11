@@ -1,4 +1,4 @@
-=# Dont want images from scripts
+# Dont want images from scripts
 *.png
 
 # Drone List
@@ -32,3 +32,6 @@ docs/_build/
 # IPython
 profile_default/
 ipython_config.py
+
+# Version files
+*_version.py
