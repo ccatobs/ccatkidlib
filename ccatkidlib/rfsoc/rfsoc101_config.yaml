@@ -11,14 +11,14 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 518                    # Numerically controlled oscillator frequency (in MHz)
+  NCLO: 848                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5          # Bandwidth of each target sweep tone (in MHz) (currently needs to be changed in _cfg_board.py on board)
   sweep_steps: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
   num_tones: null
-  tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: []              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
+  tone_freqs: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D1/combs/long_vna_freq_comb_1743578336.npy
+  tone_powers: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D1/combs/long_vna_amp_comb_1743578336.npy
+  tone_phis: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D1/combs/long_vna_phi_comb_1743578336.npy
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
@@ -69,14 +69,14 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 519                    # Numerically controlled oscillator frequency (in MHz)
+  NCLO: 849                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5                 # Bandwidth of each target sweep tone
   sweep_steps: 500                  # Number of points of each target sweep tone 
   num_tones: null
-  tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: []              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
+  tone_freqs: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D2/combs/long_vna_freq_comb_1743578336.npy
+  tone_powers: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D2/combs/long_vna_amp_comb_1743578336.npy
+  tone_phis: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D2/combs/long_vna_phi_comb_1743578336.npy
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
@@ -124,14 +124,14 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 520                    # Numerically controlled oscillator frequency (in MHz)
+  NCLO: 850                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5                 # Bandwidth of each target sweep tone
   sweep_steps: 500                  # Number of points of each target sweep tone
   num_tones: null
-  tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: []              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
+  tone_freqs: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D3/combs/long_vna_freq_comb_1743578336.npy
+  tone_powers: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D3/combs/long_vna_amp_comb_1743578336.npy
+  tone_phis: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D3/combs/long_vna_phi_comb_1743578336.npy
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
@@ -176,14 +176,14 @@ udp_source_port: 4096
 
 # Tone configuration
 tones:
-  NCLO: 521                    # Numerically controlled oscillator frequency (in MHz)
+  NCLO: 851                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5               # Bandwidth of each target sweep tone
   sweep_steps: 500                  # Number of points of each target sweep tone
   num_tones: null
-  tone_freqs: []               # Tone frequencies used for target sweep (in Hz)
-  tone_powers: []              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
+  tone_freqs: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D4/combs/long_vna_freq_comb_1743578336.npy
+  tone_powers: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D4/combs/long_vna_amp_comb_1743578336.npy
+  tone_phis: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D4/combs/long_vna_phi_comb_1743578336.npy
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit

@@ -39,7 +39,7 @@ def get_timestamp(path) -> int:
     except Exception as e: # If exception is thrown, return -1 to represent invalid path
         return -1
 
-def get_data_file(com_to, timestamp, data_dir = '**', date = '**', sess_id = '**', data_type = '**', root_data_dir = '/mnt/md0'):
+def get_data_file(com_to, timestamp, data_dir = '**', date = '**', sess_id = '**', data_type = '**', root_data_dir = '/'):
     root_data_dir = Path(root_data_dir)
 
     bid, drid = com_to.split('.')

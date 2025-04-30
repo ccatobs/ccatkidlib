@@ -8,17 +8,21 @@ Library of helper functions for file and directory read/write operations as well
 '''
 
 # Import Python modules
+import os
+import sys
+import ast
+import time
+import yaml
+import logging
+import subprocess
+import numpy as np
+
 from pathlib import Path
 from tqdm import tqdm
 from functools import partial, partialmethod, wraps
 from fabric import Connection, Config
-import logging
-import yaml
-import time
-import sys
-import ast
-import subprocess
-import numpy as np
+from jinja2 import Environment, FileSystemLoader
+
 
 # Local imports
 from .style import Style
@@ -126,11 +130,14 @@ def load_config(config):
     '''
     cfg_path = Path(config)
     assert cfg_path.exists(), "Could not find config file!" # Check that config file exists
-    
+
+    env = Environment(loader = FileSystemLoader(f"{str(cfg_path.parent)}"))
+    template = env.get_template(f"{cfg_path.name}")
+
+    config = template.render()
+
     # Load config file
-    with open(cfg_path, 'r') as config:
-        cfg = [file for file in yaml.safe_load_all(config)]
-    
+    cfg = [file for file in yaml.safe_load_all(config)]
     # Return loaded dictionary(ies)
     if len(cfg) == 1:
         return cfg[0] # If only one dictionary, do not return array
@@ -165,7 +172,7 @@ def save_config(cfg_path, cfg_dic, save = True, output = False):
         return cfg_dic
 
 #@function_timer
-def get_most_recent_file(path, file_identifier, output = False, time_past = 5*60):
+def get_most_recent_file(path, file_identifier, output = False, time_past = 60*60):
     '''
     Fetch the most recent file in a directory with the desired file identifier.
 
@@ -253,6 +260,24 @@ def get_array(src_path, dest_path, action = 'cp', load = True, output = False, t
         send_msg('ERROR', f'Failed to locate array at path {src_path}!')
         loaded_array = None
     return loaded_array
+
+def combine_npy(files, num, com = None, fname_out = None):
+    files = list(files)
+    num_zipped = len(files)/num 
+    num_zipped = int(num_zipped) if num_zipped == int(num_zipped) else int(num_zipped) + 1
+    
+    fname = str(Path(files[0]).parent / '_'.join(str(Path(files[0]).stem).split('_')[:-1]))
+    fnames = []
+    for i in range(num_zipped):
+        name = f'{fname}_{i:03d}.npz'
+        fnames.append(name)
+        loaded_files = {str(Path(file).stem):np.load(file, mmap_mode='r') for file in files[i*num:(i+1)*num]}
+        np.savez(name, **loaded_files)
+    for file in files: os.remove(str(file))
+
+    if fname_out is not None: fname_out[com] = fnames
+    
+    return fnames
 
 ########################
 # Logging IO Functions #
@@ -344,16 +369,17 @@ def wait(t_sec, output = True, desc = ""):
     Parameters:
         t_sec   (int) : Number of seconds to wait
         output (bool) : Whether to print progress bar to terminal
-    '''
+    '''    
 
-    # If terminal output is True, use tqdm progress bar
-    iterator = range(int(t_sec)) # Create iterator
+    start_time = time.time()
+    time_diff = 0
 
-    # Wrap iterator in tqdm progress bar if output = True
-    if output: iterator = tqdm(iterator, colour='BLUE', desc = f"{Style().log_begin('WAIT', Style.WAIT)} {desc}")
-
-    # Wait t_sec seconds
-    for _ in iterator: time.sleep(1)
+    with tqdm(total=t_sec, colour='BLUE', desc = f"{Style().log_begin('WAIT', Style.WAIT)} {desc}") as pbar:
+        while time_diff < t_sec:
+            pbar.update(int(time_diff - pbar.n))
+            time.sleep(0.1)
+            time_diff = time.time() - start_time
+        pbar.update(t_sec - pbar.n)
 
 def header(func):
     '''
@@ -478,7 +504,7 @@ def save_array_board(c, path, saved_array, output = False):
     return result
 
 #@function_timer
-def get_most_recent_file_board(c, dir, file_identifier = "*", output = False, time_past = 5*60):
+def get_most_recent_file_board(c, dir, file_identifier = "*", output = False, time_past = 60*60):
     '''
     Get most recent file in directory on RFSoC board.
 
@@ -490,8 +516,11 @@ def get_most_recent_file_board(c, dir, file_identifier = "*", output = False, ti
         file            (str) : File path of most recent file (returns "invalid/path" if no valid files found)
     '''
 
-    # Define command string for finding most recent file, use grep to get most recent file
-    cmd = f'find {dir}/* -type f | grep {file_identifier} | xargs ls -rt | tail -1'
+    # Define command string for finding most recent file, use find to get most recent file
+    if not time_past == np.inf:
+        time_past = time_past/60
+        time_past = int(time_past) if time_past == int(time_past) else int(time_past) + 1
+    cmd = f"find {dir}/* -type f {f'-cmin -{time_past} ' if not time_past == np.inf else ''}-name '*{file_identifier}*' | xargs --no-run-if-empty ls -rt | tail -1"
 
     # Try to find the most recent file
     # --------------------------------

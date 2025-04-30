@@ -22,14 +22,20 @@ boards:
 # Parameters with * are measurment specific, ? are system specific, and - should not be edited #
 # ##############################################################################################
 
+# Create Jinja variables for values used more than once
+{% set measurement_name="G3Timestream_Test" %}            # * Measurement Name
+{% set root_dir="/mnt/md0/" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
+
 sess_id: null
+name: {{measurement_name}} # * Measurement Name
+desc: "Test rfsoc-streamer G3 timestreams for dropped packets." # Description of measurement
 
 ###########################
 # Drone/Board List Config #
 ###########################
 
 # Drone configuration
-drone_list: ['1','2.1', '2.2', '2.4'] # *List of boards/drones to use
+drone_list: ['1.1'] # *List of boards/drones to use
 
 init:
   initialize_boards: False  # * Whether to reintialize boards
@@ -38,8 +44,7 @@ init:
 
 runtime:
   parallel_boards: -1 # * Number of boards to run in parallel (-1 for all boards in parallel)
-  parallel_drones: 4  # * Number of drones to run in in parallel
-  clean_threshold: 10 # * Remaining disk space in GB after which boards should be automatically cleaned (negative number for no auto cleaning)
+  parallel_drones: 4  # * Number of drones to run in in parallel  
 
 # Board configuration
 boards:
@@ -58,10 +63,11 @@ boards:
 
 # Timestream configuration
 timestream:
-  udp_ip: "192.168.3.40" # ? Control computer UDP packet capture port IP address
-  udp_port: 4096         # ? Control computer UDP packet capture port number
+  udp_ip: "192.168.3.40"  # ? Control computer UDP packet capture port IP address
+  udp_port: 4096          # ? Control computer UDP packet capture port number
   g3: True               # * Whether to save timestreams as g3 files
-  max_file_size: 2000    # * Max file size of timestreams in Megabytes (for python timestreaming)
+  file_rotation_time: 600 # * Length of timestream files (in seconds)
+  save_interval: 3
 
 # PCS agent IDs
 pcs_agents:
@@ -73,8 +79,10 @@ pcs_agents:
 
 # File paths
 file_paths:
-  data_dir: "/mnt/md0/cooldown_march/thermal_stab"                          # * Directory to save data in
-  g3_dir: "/mnt/md0/g3_temp/g3"                                          # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
+  root_dir: "{{root_dir}}"
+  data_dir: "{{root_dir}}/{{measurement_name}}"                          # * Directory to save data in
+  g3_dir:   "{{root_dir}}/g3_temp/g3"                                    # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
+  
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # ? Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # ? Master Drone List File
   pcs_dir: "/home/ocs/pcs-deployment-configs/"                           # ? PCS directory
@@ -83,9 +91,9 @@ file_paths:
 
 # * File names of saved data files
 save_file_names:
-  timestream: 'thermal_tstream' # * Timestream file name
-  targ_sweep: 'thermal_targ'    # * Target sweep file name
-  vna_sweep:  'thermal_vna'     # * VNA sweep file name
+  timestream: '{{measurement_name}}_tstream' # * Timestream file name
+  targ_sweep: '{{measurement_name}}_targ'    # * Target sweep file name
+  vna_sweep:  '{{measurement_name}}_vna'     # * VNA sweep file name
 
 # - Names of files on RFSoC boards
 board_file_names:
@@ -102,12 +110,17 @@ board_file_names:
     comb_amp:  'a_tones_comb'
     comb_phi:  'p_tones_comb'
 
+clean:
+  threshold: 10       # * Remaining disk space in GB after which boards should be automatically cleaned (negative number for no auto cleaning)
+  olderThanDaysAgo: 1 # * (days) Clean files older than specified number of days
+  ftype: '.npy'       # * File type to clean
+
 # Runtime IO config
 io:
   logging_level: 'INFO'   # * Logging level
   logging_fname: "rfsoc_daq_log.txt" # * Log file name
   terminal_output: True   # * Whether to print logs to terminal
+  influx_output: True     # * Whether to push measurement info to InfluxDB through the queen_agent
   save_data: True         # * Whether to save data
-  from_board: True        # Whether to pull data directly from RFSoC board (slower) or from primecam_readout /src/tmp folder
   save_config_copy: True  # * Whether to save copy of config (Recommended to use True)
 ...

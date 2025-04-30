@@ -24,33 +24,76 @@ def dict_get(dic, keys):
     Returns:
         value: Value corresponding to dictionary keys (returns None if invalid key is encountered)
     '''
-    for key in keys:
+
+    def _dict_get_r(dic, key):
+        '''
+        Recursively get value in dictionary using specified key.
+        Assumes key is unique, otherwise gets first matching key.
+
+        Parameters:
+            cfg (dict): Dictionary to get value from
+            key (str): Entry in dictionary to retrieve
+        '''
+
+        done = False
+        for k, v in dic.items():
+            if isinstance(v, dict):
+                done, value = _dict_get_r(v, key)
+                if done: return done, value
+            elif k == key:
+                value = dic[k]
+                return True, value
+        return done, value
+
+    if not isinstance(keys, list): keys = [keys]
+
+    for key in keys[:-1]:
         try:
             dic = dic[key]
         except KeyError:
             return None
-    return dic
+    done, value = _dict_get_r(dic, keys[-1])
+    return value if done else None
 
-def edit_dic(dic, key, value):
+def dict_set(dic, keys, value):
     '''
-    Recursively edit value in dictionary using specified key.
-    Assumes key is unique, otherwise edits first matching key.
+    Set value in dictionary using provided dictionary keys.
 
     Parameters:
-        cfg (dict): Dictionary to edit
-        key (str): Entry in dictionary to be edited
-        value: Value to replace current value in dictionary
+        dic: Dictionary to set value in
+        keys: Dictionary keys
+    Returns:
+        value: Value corresponding to dictionary keys (returns False if invalid key is encountered)
     '''
+    def _dict_set_r(dic, key, value):
+        '''
+        Recursively edit value in dictionary using specified key.
+        Assumes key is unique, otherwise edits first matching key.
 
-    done = False
-    for k, v in dic.items():
-        if isinstance(v, dict):
-            done = edit_dic(v, key, value)
-            if done: return done
-        elif k == key:
-            dic[k] = value
-            return True
-    return done
+        Parameters:
+            cfg (dict): Dictionary to edit
+            key (str): Entry in dictionary to be edited
+            value: Value to replace current value in dictionary
+        '''
+        
+        done = False
+        for k, v in dic.items():
+            if isinstance(v, dict):
+                done = _dict_set_r(v, key, value)
+                if done: return done
+            elif k == key:
+                dic[k] = value
+                return True
+        return done
+
+    if not isinstance(keys, list): keys = [keys]
+
+    for key in keys[:-1]:
+        try:
+            dic = dic[key]
+        except KeyError:
+            return False
+    return _dict_set_r(dic, keys[-1], value)
 
 def convert_from_dB(power):
     '''
