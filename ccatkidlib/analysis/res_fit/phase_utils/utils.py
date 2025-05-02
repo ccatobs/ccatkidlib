@@ -90,8 +90,8 @@ class Circlefit():
         return r, zc_complex, residue
 
 
-# refer to https://matplotlib.org/stable/gallery/misc/transoffset.html#sphx-glr-gallery-misc-transoffset-py
-# for switching between projections using ax and subplot
+
+
 def removecable(f,z,tau,verbose=False,showplot=False): 
     # f,z,tau,f1
     #f1 = f[0]
@@ -129,6 +129,7 @@ def removecable(f,z,tau,verbose=False,showplot=False):
         plt.show()
     
     return z1
+
 
 
 def find_nearest_indice(x,val):
@@ -172,7 +173,6 @@ def smoothdata2(y, N): # more matlab like
     return y_smooth
 
 
-# put this in one of the classes instead?
 def estpara3(f,z,verbose=False,**keywords):
     # to do: add guess for phi0?
 
@@ -230,6 +230,7 @@ def plot_summary_for_index(data,ii,fig=None,ax=None):
     ax[1,1].set(xlabel='i',ylabel='q')
     return fig,ax
     
+   
 
 def guess_tone_drive_atten(tone_range, powlist, a_guess, a_predict_threshold, Q_dict, Qc_dict, omega_r_dict, a_dict, E_star_dict, bif_flag_filter_dict):
         # pick a new a_guess and guess tone drive attenuation values based on previous fits
@@ -287,6 +288,7 @@ def guess_tone_drive_atten(tone_range, powlist, a_guess, a_predict_threshold, Q_
             Pro_test_low_dBm_dict[ii] = Pro_test_low_dBm
             Pro_test_guess_dBm_dict[ii] = Pro_test_low_guess_dBm
     return a_predict_off_dict, a_predict_flag_dict, Pro_test_low_dBm_dict, Pro_test_guess_dBm_dict
+
 
 
 def find_best_adrv(
@@ -349,6 +351,7 @@ def find_best_adrv(
     #    f"use {n_interp} data points, found {p_best=} {a_best=} {p_flag=}",
     #)
     return locals()
+
 
 
 def find_best_adrv_tone_amp(
@@ -515,7 +518,6 @@ def find_first_zerocrossing1d(x, y, tolerance=1e-5):
         return x[-1], y[-1], 1
 
 
-
 def _get_tone_amps(nc):
     if "Header.Toltec.ToneAmp" in nc.variables:
         ## new change 20240316
@@ -554,38 +556,30 @@ def get_dip_depth(s21): # from Yuhan # using target sweeps would be best I think
 
 
 def findcabledelay(f,z):
-    '''
-    f : takes np array in Hz
-    z : tales np array in complex s21
-
-    return tau in ns
-    '''
-    
-    # assumes f in Hz, identical to MATLAB code
-    f = f / 1e9
+    # assumes f in GHz, identical to MATLAB code
     
     theta = phase2(z) # includes phase unwrapping
     grad = np.gradient(theta)/np.gradient(f)/2./np.pi
     
-    # fig = plt.figure()
-    # ax = plt.subplot(211)
-    # plt.plot(f, theta)
-    # plt.xlabel('f [GHz]')
-    # plt.ylabel('Phase')
+    #fig = plt.figure()
+    #ax = plt.subplot(211)
+    #plt.plot(f, theta)
+    #plt.xlabel('f [GHz]')
+    #plt.ylabel('Phase')
     
-    # ax = plt.subplot(212)
-    # plt.plot(f, grad)
+    #ax = plt.subplot(212)
+    #plt.plot(f, grad)
     tau = np.mean(grad)
-    #plt.plot(f, tau,'r--') # horizontal line
-    #plt.axhline(y=tau, color='r', linestyle='--')
-    # plt.xlabel('f [GHz]')
-    # plt.ylabel('tau [ns]')
-    # plt.title('tau = ' + str(tau))
-    # fig.tight_layout()
-    # plt.show()
-    # print(tau)
+    ##plt.plot(f, tau,'r--') # horizontal line
+    ##plt.axhline(y=tau, color='r', linestyle='--')
+    #plt.xlabel('f [GHz]')
+    #plt.ylabel('tau [ns]')
+    #plt.title('tau = ' + str(tau))
+    #fig.tight_layout()
+    #plt.show()
+    #print(tau)
     
-    return tau/1e9
+    return tau
 
 
 def fit_cable_delay(gain_f,gain_z):

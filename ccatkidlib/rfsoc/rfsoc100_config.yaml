@@ -22,7 +22,6 @@ tones:
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
@@ -74,7 +73,6 @@ tones:
   generation:
     gen_attempts: 10            # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False        # Whether to rescale amplitudes if power exceeds DAC limit
-    rescale_step: 0.05          # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
@@ -127,7 +125,6 @@ tones:
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
@@ -179,7 +176,6 @@ tones:
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:

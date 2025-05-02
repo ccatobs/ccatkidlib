@@ -24,6 +24,12 @@ class Target(Sweep):
         if isinstance(res_num, int): res_num = [res_num]
         self.res_num = res_num
     
+
+    ####################
+    # Analysis Methods #
+    ####################
+
+
     ####################
     # Plotting Methods #
     ####################

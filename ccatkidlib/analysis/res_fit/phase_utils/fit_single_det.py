@@ -3,8 +3,6 @@ from ccatkidlib.analysis.res_fit.phase_utils.utils import *
 from scipy.optimize import curve_fit
 import scipy
 
-
-
 class ResonanceFitterSingleTone():
     ''' Class to extract resonance parameters following algorithm in Gao Thesis Appendix E
         1) remove cable delay
@@ -14,7 +12,7 @@ class ResonanceFitterSingleTone():
         Class to load resonator data and perform a simple or 
         nonlinear phase fit (user-specified) on a single tone
     '''
-    def __init__(self,f,z,tau, numspan=2, tone_freq_lo=0,window_width=0,\
+    def __init__(self,f,z,tau,numspan=2,tone_freq_lo=0,window_width=0,\
                  pherr_threshold_num=10,pherr_threshold=0.2,\
                  verbose=False,**keywords):
         # f in Hz (will also work with GHz?), z is complex, tau in ns
@@ -150,7 +148,7 @@ class ResonanceFitterSingleTone():
         ezinf = zinf/np.abs(zinf)
 
         z1_1 = z/(-ezinf)
-        ang = np.angle(z1_1) + np.angle(-ezinf) # before: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) #+ np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #8/11/24: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #before: phase2(z1_1) + np.angle(-ezinf)
+        ang = phase2(z) #np.angle(z1_1) + np.angle(-ezinf) #phase2(z) #np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) #+ np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #8/11/24: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #before: phase2(z1_1) + np.angle(-ezinf)
 
         hnumsmopts = int(np.floor((f0g/Qg/3.)/(f[1]-f[0])))
         hnumsmopts = int(np.amax([np.amin([hnumsmopts, 20]),0]))
@@ -166,7 +164,7 @@ class ResonanceFitterSingleTone():
         zm_inf = (zm[0]+zm[-1])/2.
         ezminf = zm_inf/np.abs(zm_inf)
         zm1_1 = zm/(-ezminf)
-        angm = np.angle(zm1_1) + np.angle(-ezminf) # before: np.angle(zm1_1) + np.angle(-ezminf) #phase2(zm1_1) #+ np.angle(-ezminf) #phase2(zm1_1) + np.angle(-ezminf) #phase2(zm1_1) + np.angle(-ezminf)
+        angm = phase2(zm) #np.angle(zm1_1) + np.angle(-ezminf) #phase2(zm) #np.angle(zm1_1) + np.angle(-ezminf) #phase2(zm1_1) #+ np.angle(-ezminf) #phase2(zm1_1) + np.angle(-ezminf) #phase2(zm1_1) + np.angle(-ezminf)
     
         dangm = angm[hnumsmopts_l:len(angm)] - angm[0:len(angm)-hnumsmopts+1]
 
@@ -205,11 +203,10 @@ class ResonanceFitterSingleTone():
         fphasetest = self.fphaselin(ft, popt[0], popt[1], popt[2])
 
         if self.verbose:
-            # print('initial guess for f0 and Q (given): ', f0g, Qg)
-            # print('guess for f0 from smoothed data: ', f0)
-            # print('guess from linear fit for phi, Q: ', phi,Q)
-            # print('fit results for Q, f0, and phi are ', popt)
-            pass
+            print('initial guess for f0 and Q (given): ', f0g, Qg)
+            print('guess for f0 from smoothed data: ', f0)
+            print('guess from linear fit for phi, Q: ', phi,Q)
+            print('fit results for Q, f0, and phi are ', popt)
     
         pherr = angt - fphasetest #np.abs(angt - fphasetest)
 
@@ -427,7 +424,7 @@ class ResonanceFitterSingleTone():
 
         z1_1 = z/(-ezinf) # z1 in matlab, renamed due to redundancy
 
-        ang = np.angle(z1_1) + np.angle(-ezinf) # before: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) #+ np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #8/11/24: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) # before: phase2(z1_1) + np.angle(-ezinf)
+        ang = phase2(z) #np.angle(z1_1) + np.angle(-ezinf) #phase2(z) #np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) #+ np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) #8/11/24: np.angle(z1_1) + np.angle(-ezinf) #phase2(z1_1) + np.angle(-ezinf) # before: phase2(z1_1) + np.angle(-ezinf)
 
         # linear regime used with estpara # -20 dBm data and linear fit # import data to test for now
         ft, angt = trimdata(f,ang,estv['f0'],estv['Q'],numspan)
@@ -494,9 +491,9 @@ class ResonanceFitterSingleTone():
         result['zc'] = circle_obj.zc
         result['c_residue'] = circle_obj.residue
     
-        # if self.verbose:
-        #     print('f0, Q, idf0, iddf guess ', f0g, Qg, idf0, iddf) # matches matlab
-        #     print('r, zc: ', result['r'],result['zc'])
+        if self.verbose:
+            print('f0, Q, idf0, iddf guess ', f0g, Qg, idf0, iddf) # matches matlab
+            print('r, zc: ', result['r'],result['zc'])
 
         # create estv
         estv = {}
@@ -511,7 +508,6 @@ class ResonanceFitterSingleTone():
         z2 = (result['zc'] - z1)*np.exp(-1.j*theta_zc)
     
         # now fit to data below
-        # print(self.f,z2)
         if use_bounds:
             popt, pcov, pherr, fit_result, x0_result, ft, zt, angt, ang, var, err, xt, flag, uncertainty_angt, ezinf = self.fitphasenlin_c2(self.f,z2,estv,numspan,use_bounds=use_bounds)
         else:
@@ -665,7 +661,7 @@ class ResonanceFitterSingleTone():
         plt.subplot(221)
         plt.plot(self.f,logmag(self.z1)) #,'o-') # bo
         plt.xlabel('Frequency (Hz)')
-        plt.ylabel('$|S_{21}|^2$')
+        plt.ylabel('|S21|2|S_{21}|^2')
 
 
         plt.subplot(222,polar=True)
@@ -711,3 +707,5 @@ class ResonanceFitterSingleTone():
 
         plt.tight_layout()
         plt.show()
+
+

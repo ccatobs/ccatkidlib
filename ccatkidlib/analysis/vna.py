@@ -8,8 +8,6 @@ import sys
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.analysis.pair as pair
 
-
-
 class VNA(Sweep):
     '''
     Class representing a vector network analyzer (VNA) esque sweep taken with a Radio Frequency System on a Chip (RFSoC). 
@@ -20,17 +18,63 @@ class VNA(Sweep):
         kwargs['data_type'] = 'vna'
         super().__init__(com_to, analysis_cfg, **kwargs)
 
-    def _get_res_s21z(self):
-        res_s21z = None
-        s21z = self.s21z
-        freqs = list(self.freqs)
-        res_freqs = self.res_freqs
-        if res_freqs is not None:
-            try:
-                res_s21z = [s21z[freqs.index(freq)] for freq in res_freqs]
-            except ValueError:
-                res_s21z = super()._get_res_s21z()
-        return res_s21z
+    ####################
+    # Analysis Methods #    
+    ####################
+
+    def filter_freqs(self, freqs = None, phases = None, res_freqs = None, w = 1, stitch = True):
+        """
+        classifies the peaks found by found_resonators into ones that are likely good resonators based on the slope of the complex phase at identified minima. 
+
+        Parameters:
+            res_freqs (list): The output list of resonators found using analysis._findResonators_alt in primecam_readout.
+            fs (list): the list of frequencies swept over in the VNA sweep
+            phase (list): the list of complex phase values returned by the VNA sweep. the function is structured this way in case you want to play
+            around with the phase values you input to the fitting (i.e. with bin stitching or not with bin stitching). 
+            w (int): the window size with which to fit the complex phase around identified minima. in testing, w = 1 or w = 2 works well when dealing
+            with data that may have phase bin discontinuities. Could be increased if phase bin stitching improved. 
+        Returns:
+            good_resonators (list): The frequencies of found resonators that are flagged as real resonators (positive phase slope). 
+            bad_resonators (list): The frequencies of found resonators that are flagged as bad (negative or zero phase slope). 
+            data (list): the windowed data used to make determination of each resonator. This is mostly included for troubleshooting and can be
+            discarded if desired. 
+            idx_res (list): the indexes of all flagged real resonators as taken from the total list of f_res.
+            idx_bad (list): the indexes of all bad or not real resonators as taken from the total list of f_res.
+        """
+        
+        if freqs is None: freqs = self.freqs
+        if res_freqs is None: res_freqs = self.res_freqs
+        if phases is None: phases = np.arctan2(np.imag(self.s21z), np.real(self.s21z))
+        
+        if stitch: phases = stitch_phase(freqs = freqs, phases=phases)
+
+        slopes = []
+        data = []
+        #variances = []
+        for i in range(len(res_freqs)):
+            peak_idx = np.where(fs == res_freqs[i])[0][0]
+            X = freqs[peak_idx-w: peak_idx+w+1] #defines window of data around peak_idx to fit
+            Y = phases[peak_idx-w: peak_idx+w+1]
+            
+            X = np.c_[np.ones(X.shape[0]), X]  # Adds a column of ones needed for y-int
+            
+            fit_params = np.linalg.inv(X.T @ X) @ X.T @ Y
+            slopes.append(fit_params[1])
+            
+            idx_res = np.where(np.array(slopes) > 0)[0]
+            idx_bad = np.where(np.array(slopes) <= 0)[0]
+            good_resonators = res_freqs[idx_res]
+            bad_resonators = res_freqs[idx_bad]
+            data.append(Y)
+
+            #below calculated the variances of eat fitted window, and flags those with high variance. not clear this offers substantial improvement
+            
+            #window_var = np.std(Y)
+            #variances.append(window_var)
+            #flagged_high_var = np.intersect1d(np.where(variances > np.median(variances) + 1*np.std(variances))[0],idx_res)
+            #var_flagged_good_res = f_res[flagged_high_var]
+            
+        return good_resonators, bad_resonators, data, idx_res, idx_bad
 
     def get_cable_delay(self, freqs = None, phases = None, stitch_phase = True):
         freqs = freqs if freqs is not None else self.freqs
@@ -50,8 +94,8 @@ class VNA(Sweep):
     def stitch_phase(self, freqs = None, phases = None, threshold = 1.9*np.pi, stitch_ends_factor = 10):
         # Get frequency and phase data
         # ----------------------------
-        freqs = freqs if freqs is not None else self.freqs
-        phases = phases if phases is not None else np.arctan2(np.imag(self.s21z), np.real(self.s21z))
+        if freqs is None: freqs = self.freqs
+        if phases is None: phases = np.arctan2(np.imag(self.s21z), np.real(self.s21z))
 
         # Stitch phase discontinuities caused by wrapping from -pi to pi
         # --------------------------------------------------------------
@@ -96,6 +140,22 @@ class VNA(Sweep):
         phase_bins[-1] -= curr_shift
 
         return phase_bins.flatten()
+
+    ############################
+    # Internal Loading Methods #
+    ############################
+
+    def _get_res_s21z(self):
+        res_s21z = None
+        s21z = self.s21z
+        freqs = list(self.freqs)
+        res_freqs = self.res_freqs
+        if res_freqs is not None:
+            try:
+                res_s21z = [s21z[freqs.index(freq)] for freq in res_freqs]
+            except ValueError:
+                res_s21z = super()._get_res_s21z()
+        return res_s21z
 
     #################
     # Magic Methods #
