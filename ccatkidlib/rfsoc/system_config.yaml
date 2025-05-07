@@ -1,3 +1,7 @@
+# ##############################################################################################
+# Parameters with * are measurment specific, ? are system specific, and - should not be edited #
+# ##############################################################################################
+
 ---
 sess_id: null
 
@@ -5,7 +9,7 @@ sess_id: null
 # External System Parameters #
 ##############################
 
-# Board properties
+# - Board properties
 boards:
   b1:
     avail_space: null
@@ -17,10 +21,6 @@ boards:
     pl_temp: null
 
 ---
-
-# ##############################################################################################
-# Parameters with * are measurment specific, ? are system specific, and - should not be edited #
-# ##############################################################################################
 
 # Create Jinja variables for values used more than once
 {% set measurement_name="primecam_readout_update" %}            # * Measurement Name
@@ -38,9 +38,9 @@ desc: "Test newest version of primecam_readout." # Description of measurement
 drone_list: ['1.1', '2.1'] # *List of boards/drones to use
 
 init:
-  initialize_boards: True  # * Whether to reintialize boards
-  initialize_drones: True  # * Whether to run drone initialize commands (e.g. set_atten and setNCLO)
-  restart: False           # * Whether to restart already running drones
+  initialize_boards: False  # * Whether to reintialize boards
+  initialize_drones: True   # * Whether to run drone initialize commands (e.g. set_atten and setNCLO)
+  restart: False            # * Whether to restart already running drones
 
 runtime:
   parallel_boards: -1 # * Number of boards to run in parallel (-1 for all boards in parallel)

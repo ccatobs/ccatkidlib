@@ -528,8 +528,6 @@ class R:
         if temps: ps_temps, pl_temps = self.get_temps(**kwargs) # Get temperatures
         if ADC_rms: rms_list = self.get_ADC_rms(**kwargs) # Get RMS power at ADCs
 
-        return avail_spaces, ps_temps, pl_temps, rms_list
-
     def get_ADC_rms(self, **kwargs):
         '''
         Get the root mean squared (RMS) power at the analog to digital converter (ADC) for
@@ -632,12 +630,12 @@ class R:
                 rfsoc_io.send_msg('INFO', f'Finished cleaning drones {drones_to_clean}', self.output)
                 avail_spaces = _get_space(bids)
 
-            if self.io_cfg['clean']['tmp']:
-                # Clean primecam_readout tmp directory
-                clean_io.cleanQueenTmpDir(testing=False, ftype='', olderThanDaysAgo=olderThanDaysAgo)
+                if self.io_cfg['clean']['tmp']:
+                    # Clean primecam_readout tmp directory
+                    clean_io.cleanQueenTmpDir(testing=False, ftype='', olderThanDaysAgo=olderThanDaysAgo)
 
-                # Clean ccatkidlib tmp directory
-                clean_io._cleanDir(str(self.tmp_dir), testing=False, ftype=ftype, olderThanDaysAgo=olderThanDaysAgo)
+                    # Clean ccatkidlib tmp directory
+                    clean_io._cleanDir(str(self.tmp_dir), testing=False, ftype=ftype, olderThanDaysAgo=olderThanDaysAgo)
         return avail_spaces
 
     def get_temps(self, **kwargs):
