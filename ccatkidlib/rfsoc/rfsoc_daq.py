@@ -517,13 +517,18 @@ class R:
             temps (bool): Whether to get RFSoC temperatures
             ADC_rms (bool): Whether to get RMS power at ADCs
         '''
+
+        # Start RFSoC temperature and storage space feeds if not running
+        # --------------------------------------------------------------
         if not self.rfsoc.feedMonitor.status().session['op_code'] == 2:
             self.rfsoc.feedMonitor.start()
             rfsoc_io.wait(60, desc="HK Feed Monitor Starting")
 
-        if space: avail_spaces = self.get_avail_space(**kwargs)
-        if temps: ps_temps, pl_temps = self.get_temps(**kwargs)
-        if ADC_rms: rms_list = self.get_ADC_rms(**kwargs)
+        if space: avail_spaces = self.get_avail_space(**kwargs) # Get storage space
+        if temps: ps_temps, pl_temps = self.get_temps(**kwargs) # Get temperatures
+        if ADC_rms: rms_list = self.get_ADC_rms(**kwargs) # Get RMS power at ADCs
+
+        return avail_spaces, ps_temps, pl_temps, rms_list
 
     def get_ADC_rms(self, **kwargs):
         '''
@@ -588,6 +593,9 @@ class R:
         Parameters:
             com (str): Bid of board to check available space
         '''
+        # Import clean_io from primecam_readout
+        import clean_io
+
         def _get_space(bids):
             space_dict = self.rfsoc.feedMonitor.status().session['data']['drone_free_spaces_GB']['data']
             avail_spaces = []
@@ -600,8 +608,8 @@ class R:
 
         com_to, bids = self._get_com_to(**kwargs)
 
-        threshold = self.io_cfg['clean']['threshold']  # Threshold after which to send warnings (in GB)
-        olderThanDaysAgo = self.io_cfg['clean']['olderThanDaysAgo'] # Days
+        threshold = self.io_cfg['clean']['threshold']  # [GB] Threshold after which clean board drone directories
+        olderThanDaysAgo = self.io_cfg['clean']['olderThanDaysAgo'] # [Days] 
         ftype = self.io_cfg['clean']['ftype']
 
         for key, value in kwargs.items():
@@ -623,6 +631,13 @@ class R:
                 self.rfsoc.cleanBoardDroneDirs(com_to=drones_to_clean, testing=False, leave_latest=True, ftype=ftype, olderThanDaysAgo=olderThanDaysAgo)
                 rfsoc_io.send_msg('INFO', f'Finished cleaning drones {drones_to_clean}', self.output)
                 avail_spaces = _get_space(bids)
+
+            if self.io_cfg['clean']['tmp']:
+                # Clean primecam_readout tmp directory
+                clean_io.cleanQueenTmpDir(testing=False, ftype='', olderThanDaysAgo=olderThanDaysAgo)
+
+                # Clean ccatkidlib tmp directory
+                clean_io._cleanDir(str(self.tmp_dir), testing=False, ftype=ftype, olderThanDaysAgo=olderThanDaysAgo)
         return avail_spaces
 
     def get_temps(self, **kwargs):
@@ -1837,7 +1852,7 @@ class R:
             if not load: return *tuple(files), False
 
             # Load most recent comb files
-            combs = [rfsoc_io.get_array(file, self.tmp_dir, action='cp', output = self.output, timestamp=True) for file in files]
+            combs = [rfsoc_io.get_array(file, self.tmp_dir, action='cp', output = self.output, timestamp=True, load=True) for file in files]
         except FileNotFoundError:
             # Parse com information
             bip = self.io_cfg['boards'][f'b{bid}']['board_ip']
@@ -1859,7 +1874,7 @@ class R:
                 if not load: return *tuple(files), True
 
                 # Load most recent comb files
-                combs = [rfsoc_io.get_array_board(c, bip, ssh_key, file, self.tmp_dir, output = self.output, timestamp=True) for file in files]
+                combs = [rfsoc_io.get_array_board(c, bip, ssh_key, file, self.tmp_dir, output = self.output, timestamp=True, load=True) for file in files]
 
         # Return loaded frequency, amplitude, and phase arrays
         return *tuple(combs),
