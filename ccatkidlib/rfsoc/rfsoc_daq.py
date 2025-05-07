@@ -83,7 +83,7 @@ class R:
 
         # Update Measurment Information 
         # -----------------------------
-        if self.io_cfg['io']['influx_output']: self.rfsoc.updateMeasurement(measurement_name = f"{self.io_cfg['name']}, Date: {self.curr_date}, Session ID: {self.sess_id}" , measurement_desc = self.io_cfg['desc'])
+        self.update_measurement(name = self.io_cfg['name'], desc = self.io_cfg['desc'])
 
         # Setup boards
         # ------------
@@ -506,6 +506,15 @@ class R:
     # Monitoring Methods #
     ######################
 
+    def update_measurement(self, name = None, desc = '', influx_output = None):
+        influx_output = influx_output if influx_output else self.io_cfg['io']['influx_output']
+
+        if influx_output: 
+            rtn = self.rfsoc.updateMeasurement(measurement_name = f"{name}, Date: {self.curr_date}, Session ID: {self.sess_id}", measurement_desc = desc)
+            return rtn
+        else:
+            return None 
+    
     @header
     @utils.method_timer
     def get_stats(self, space = True, temps = True, ADC_rms = True, **kwargs) -> None:
@@ -2026,4 +2035,4 @@ class R:
     ############
 
     def close(self):
-        if self.io_cfg['io']['influx_output']: self.rfsoc.updateMeasurement(measurement_name=None)
+        self.update_measurement(name = None, desc = '')
