@@ -38,7 +38,7 @@ desc: "Test newest version of primecam_readout." # Description of measurement
 drone_list: ['1.1', '2.1'] # *List of boards/drones to use
 
 init:
-  initialize_boards: False  # * Whether to reintialize boards
+  initialize_boards: True  # * Whether to reintialize boards
   initialize_drones: True   # * Whether to run drone initialize commands (e.g. set_atten and setNCLO)
   restart: False            # * Whether to restart already running drones
 

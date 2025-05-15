@@ -37,6 +37,7 @@ det_config:
 
   found_num_detectors: null # Number of detectors found using find_detectors method
   found_detector_freqs: null # Array of found detector frequencies
+  found_detector_freqs_filtered: null
 
 det_find:
   peak_prom_std: 5
@@ -88,6 +89,7 @@ det_config:
 
   found_num_detectors: null # Number of detectors found using find_detectors method
   found_detector_freqs: null # Array of found detector frequencies
+  found_detector_freqs_filtered: null
 
 det_find:
   peak_prom_std: 5
@@ -140,6 +142,7 @@ det_config:
 
   found_num_detectors: null # Number of detectors found using find_detectors method
   found_detector_freqs: null # Array of found detector frequencies
+  found_detector_freqs_filtered: null
 
 det_find:
   peak_prom_std: 5
@@ -191,6 +194,7 @@ det_config:
 
   found_num_detectors: null # Number of detectors found using find_detectors method
   found_detector_freqs: null   # Array of found detector frequencies
+  found_detector_freqs_filtered: null
 
 det_find:
   peak_prom_std: 5

@@ -1,57 +1,49 @@
 ###################
-# rfsoc101 Config #
+# rfsoc100 Config #
 ###################
 ---
 sess_id: null
 
 # bid.drid (Board ID & Drone ID)
-com_to: '2.1'
-udp_source_ip: '192.168.3.58'
+com_to: '1.1'
+udp_source_ip: '192.168.3.54'
 udp_source_port: 4096
 
 # Tone configuration
 tones:
   NCLO: 848                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
-  chan_bw: 0.5          # Bandwidth of each target sweep tone (in MHz) (currently needs to be changed in _cfg_board.py on board)
-  sweep_steps: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
+  chan_bw: 0.5                 # Bandwidth of each target sweep tone (in MHz) 
+  sweep_steps: 500             # Number of points of each target sweep tone
   num_tones: null
-  tone_freqs: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D1/combs/long_vna_freq_comb_1743578336.npy
-  tone_powers: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D1/combs/long_vna_amp_comb_1743578336.npy
-  tone_phis: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D1/combs/long_vna_phi_comb_1743578336.npy
+  tone_freqs: []
+  tone_powers: []
+  tone_phis: []
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
-  drive: 2 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 13  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 11  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
-  network: 1.3 # Array.Network
-  detector_type: "TiN" # Material of detectors
+  network: 1.1 # Array.Network
+  detector_type: "Al" # Material of detectors
   nominal_num_detectors: 570
   nominal_detector_freqs: [] # Units of Hz
 
   found_num_detectors: null # Number of detectors found using find_detectors method
   found_detector_freqs: null # Array of found detector frequencies
-  found_detector_freqs_filtered: null
-
-  # Crosstalk measurment config
-  network_in: 1.4
-  network_out: 1.4
-  LNA_in_on: True
-  LNA_out_on: True
 
 det_find:
   peak_prom_std: 5
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 600
+  width_max: 400
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
@@ -64,8 +56,8 @@ ADC_RMS: null
 sess_id: null
 
 # bid.drid (Board ID & Drone ID)
-com_to: '2.2'
-udp_source_ip: '192.168.3.59'
+com_to: '1.2'
+udp_source_ip: '192.168.3.55'
 udp_source_port: 4096
 
 # Tone configuration
@@ -73,40 +65,36 @@ tones:
   NCLO: 849                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5                 # Bandwidth of each target sweep tone
-  sweep_steps: 500                  # Number of points of each target sweep tone 
+  sweep_steps: 500             # Number of points of each target sweep tone 
   num_tones: null
-  tone_freqs: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D2/combs/long_vna_freq_comb_1743578336.npy
-  tone_powers: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D2/combs/long_vna_amp_comb_1743578336.npy
-  tone_phis: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D2/combs/long_vna_phi_comb_1743578336.npy
+  tone_freqs: []
+  tone_powers: []
+  tone_phis: []
   generation:
-    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-    rescale_step: 0.05           # Steps to rescale amplitudes
+    gen_attempts: 10            # Number of attempts to generate phases for given frequency and amplitude comb
+    rescale_power: False        # Whether to rescale amplitudes if power exceeds DAC limit
 
 # Attenuator configuration
 atten:
-  drive: 2 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 13 # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 10  # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 11  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
-  network: 1.4 # Array.Network
-  LNA_in_on: False
-  LNA_out_on: False
-  detector_type: "TiN" # Material of detectors
+  network: 1.2 # Array.Network
+  detector_type: "Al" # Material of detectors
   nominal_num_detectors: 570
   nominal_detector_freqs: [] # Units of Hz
 
   found_num_detectors: null # Number of detectors found using find_detectors method
   found_detector_freqs: null # Array of found detector frequencies
-  found_detector_freqs_filtered: null
 
 det_find:
   peak_prom_std: 5
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 600
+  width_max: 400
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
@@ -119,8 +107,8 @@ ADC_RMS: null
 sess_id: null
 
 # bid.drid (Board ID & Drone ID)
-com_to: '2.3'
-udp_source_ip: '192.168.3.60'
+com_to: '1.3'
+udp_source_ip: '192.168.3.56'
 udp_source_port: 4096
 
 
@@ -131,36 +119,34 @@ tones:
   chan_bw: 0.5                 # Bandwidth of each target sweep tone
   sweep_steps: 500                  # Number of points of each target sweep tone
   num_tones: null
-  tone_freqs: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D3/combs/long_vna_freq_comb_1743578336.npy
-  tone_powers: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D3/combs/long_vna_amp_comb_1743578336.npy
-  tone_phis: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D3/combs/long_vna_phi_comb_1743578336.npy
+  tone_freqs: []
+  tone_powers: []
+  tone_phis: []
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
-  drive: 31 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 31  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 11  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
-  network: 1.4
-  detector_type: "open" # Material of detectors
+  network: 1.3
+  detector_type: "Al" # Material of detectors
   nominal_num_detectors: 576
   nominal_detector_freqs: [] # Units of Hz
 
   found_num_detectors: null # Number of detectors found using find_detectors method
   found_detector_freqs: null # Array of found detector frequencies
-  found_detector_freqs_filtered: null
 
 det_find:
   peak_prom_std: 5
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 600
+  width_max: 400
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
@@ -173,47 +159,45 @@ ADC_RMS: null
 sess_id: null
 
 # bid.drid (Board ID & Drone ID)
-com_to: '2.4'
-udp_source_ip: '192.168.3.61'
+com_to: '1.4'
+udp_source_ip: '192.168.3.57'
 udp_source_port: 4096
 
 # Tone configuration
 tones:
   NCLO: 851                    # Numerically controlled oscillator frequency (in MHz)
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
-  chan_bw: 0.5               # Bandwidth of each target sweep tone
-  sweep_steps: 500                  # Number of points of each target sweep tone
+  chan_bw: 0.5          # Bandwidth of each target sweep tone
+  sweep_steps: 500             # Number of points of each target sweep tone
   num_tones: null
-  tone_freqs: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D4/combs/long_vna_freq_comb_1743578336.npy
-  tone_powers: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D4/combs/long_vna_amp_comb_1743578336.npy
-  tone_phis: /mnt/md0/cooldown_march/long_tstream/20250401/1743551115/config/B1D4/combs/long_vna_phi_comb_1743578336.npy
+  tone_freqs: []
+  tone_powers: []
+  tone_phis: []
   generation:
     gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
     rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-    rescale_step: 0.05           # Steps to rescale amplitudes
 
 # Attenuator configuration
 atten:
-  drive: 2 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 13 # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 11  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
 # Detector configuration
 det_config:
-  network: 1.5
-  detector_type: "TiN" # Material of detectors
+  network: 1.4
+  detector_type: "Al" # Material of detectors
   nominal_num_detectors: 576
   nominal_detector_freqs: [] # Units of Hz
 
   found_num_detectors: null # Number of detectors found using find_detectors method
   found_detector_freqs: null   # Array of found detector frequencies
-  found_detector_freqs_filtered: null
 
 det_find:
   peak_prom_std: 5
   peak_prom_db: 0
   peak_dis: 100
   width_min: 5
-  width_max: 600
+  width_max: 400
   stitch: True
   stitch_sw: 100
   continuum_wn: 300

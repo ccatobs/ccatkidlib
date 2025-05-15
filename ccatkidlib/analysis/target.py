@@ -1,5 +1,6 @@
 from .sweep import Sweep
 from pathlib import Path
+import gc
 import sys
 import numpy as np
 
@@ -24,7 +25,6 @@ class Target(Sweep):
         if isinstance(res_num, int): res_num = [res_num]
         self.res_num = res_num
     
-
     ####################
     # Analysis Methods #
     ####################
@@ -114,24 +114,35 @@ class Target(Sweep):
         return res_s21z
 
     def _load_sweep(self):
-        data = list(super()._load_sweep()) # Call the Sweep _load_sweep method
-        if self.res_num is not None: # Run if a specific resonator(s) is specified
+        data_dict = super()._load_sweep() # Call the Sweep _load_sweep method
+
+        res_num = self.res_num
+        num_res = len(res_num)
+
+        if res_num is not None: # Run if a specific resonator(s) is specified
+            data = [data_dict['fs']] + [data_dict['I']] + [data_dict['Q']]
             try:
                 sweep_steps = self.drone_cfg['tones']['sweep_steps']
             except KeyError:
                 sweep_steps = self.drone_cfg['tones']['N_step']
-            data = np.array(data).reshape((2, -1, sweep_steps))
+            data = np.array(data).reshape((3, -1, sweep_steps))
             try:
-                freqs, s21z = [], []
-                for res in self.res_num:
-                    f, z = data[:, res, :]
-                    freqs += list(f)
-                    s21z += list(z)
+                fs, Is, Qs = [], [], []
+                for res in res_num:
+                    f, I, Q = data[:, res, :]
+                    fs += [f]
+                    Is += [I]
+                    Qs += [Q]
+                fs, Is, Qs = np.array(fs), np.array(Is), np.array(Qs)
             except Exception as e:
-                freqs, s21z = None, None
-        else:
-            freqs, s21z = data
-        return np.real(freqs), s21z
+                fs, Is, Qs = num_res*[None], num_res*[None], num_res*[None]
+
+            data_dict = {}
+            for res, f, I, Q in zip(res_num, fs, Is, Qs):
+                data_dict[('fs', f'R_{res:04d}')] = f
+                data_dict[('I', f'R_{res:04d}')]  = I
+                data_dict[('Q', f'R_{res:04d}')]  = Q
+        return data_dict
 
     #################
     # Magic Methods #

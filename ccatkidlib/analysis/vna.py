@@ -3,6 +3,7 @@ from pathlib import Path
 from scipy.stats import linregress
 import numpy as np
 import sys
+import gc
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
@@ -22,7 +23,7 @@ class VNA(Sweep):
     # Analysis Methods #    
     ####################
 
-    def filter_freqs(self, freqs = None, phases = None, res_freqs = None, w = 1, stitch = True):
+    def filter_freqs(self, fs = None, phase = None, res_freqs = None, w = 1, stitch = True):
         """
         classifies the peaks found by found_resonators into ones that are likely good resonators based on the slope of the complex phase at identified minima. 
 
@@ -42,19 +43,19 @@ class VNA(Sweep):
             idx_bad (list): the indexes of all bad or not real resonators as taken from the total list of f_res.
         """
         
-        if freqs is None: freqs = self.freqs
+        if fs is None: fs = self.fs()
         if res_freqs is None: res_freqs = self.res_freqs
-        if phases is None: phases = np.arctan2(np.imag(self.s21z), np.real(self.s21z))
+        if phase is None: self.phase()
         
-        if stitch: phases = stitch_phase(freqs = freqs, phases=phases)
+        if stitch: phase = stitch_phase(fs = fs, phase=phase)
 
         slopes = []
         data = []
         #variances = []
         for i in range(len(res_freqs)):
             peak_idx = np.where(fs == res_freqs[i])[0][0]
-            X = freqs[peak_idx-w: peak_idx+w+1] #defines window of data around peak_idx to fit
-            Y = phases[peak_idx-w: peak_idx+w+1]
+            X = fs[peak_idx-w: peak_idx+w+1] #defines window of data around peak_idx to fit
+            Y = phase[peak_idx-w: peak_idx+w+1]
             
             X = np.c_[np.ones(X.shape[0]), X]  # Adds a column of ones needed for y-int
             
@@ -76,33 +77,32 @@ class VNA(Sweep):
             
         return good_resonators, bad_resonators, data, idx_res, idx_bad
 
-    def get_cable_delay(self, freqs = None, phases = None, stitch_phase = True):
-        freqs = freqs if freqs is not None else self.freqs
-        if phases is not None:
-            pass
-        else:
-            phases = np.arctan2(np.imag(self.s21z), np.real(self.s21z))
-            if stitch_phase: phases = self.stitch_phase(freqs, phases)
+    def get_cable_delay(self, fs = None, phase = None, stitch_phase = True):
+        if fs is None: fs = self.fs()
 
-        cable_delay, intercept, r, p, se = linregress(freqs, phases)
+        if phase is None:
+            phase = self.phase() 
+            if stitch_phase: phase = self.stitch_phase(fs, phase)
+
+        cable_delay, intercept, r, p, se = linregress(fs, phase)
 
         return cable_delay*1e9/(2*np.pi), se*1e9/(2*np.pi)
     
     def stitch_mag():
         pass
 
-    def stitch_phase(self, freqs = None, phases = None, threshold = 1.9*np.pi, stitch_ends_factor = 10):
+    def stitch_phase(self, fs = None, phase = None, threshold = 1.9*np.pi, stitch_ends_factor = 10):
         # Get frequency and phase data
         # ----------------------------
-        if freqs is None: freqs = self.freqs
-        if phases is None: phases = np.arctan2(np.imag(self.s21z), np.real(self.s21z))
+        if fs is None: fs = self.fs()
+        if phase is None: phase = self.phase()
 
         # Stitch phase discontinuities caused by wrapping from -pi to pi
         # --------------------------------------------------------------
         curr_shift = 0
-        for i in range(len(phases) - 1):
-            diff = phases[i+1] - phases[i]
-            phases[i] -= curr_shift
+        for i in range(len(phase) - 1):
+            diff = phase[i+1] - phase[i]
+            phase[i] -= curr_shift
             if diff > threshold:
                 curr_shift += 2*np.pi 
             elif diff < -1*threshold:
@@ -115,8 +115,8 @@ class VNA(Sweep):
         except KeyError:
             sweep_steps = self.drone_cfg['tones']['N_step']
 
-        phase_bins = np.array(phases).reshape(-1, sweep_steps)
-        freq_bins = np.array(freqs).reshape(-1, sweep_steps)
+        phase_bins = np.array(phase).reshape(-1, sweep_steps)
+        freq_bins = np.array(fs).reshape(-1, sweep_steps)
 
         # Stitch phase discontiuities at bin edges
         # ----------------------------------------
@@ -148,11 +148,11 @@ class VNA(Sweep):
     def _get_res_s21z(self):
         res_s21z = None
         s21z = self.s21z
-        freqs = list(self.freqs)
+        fs = list(self.fs())
         res_freqs = self.res_freqs
         if res_freqs is not None:
             try:
-                res_s21z = [s21z[freqs.index(freq)] for freq in res_freqs]
+                res_s21z = [s21z[fs.index(freq)] for freq in res_freqs]
             except ValueError:
                 res_s21z = super()._get_res_s21z()
         return res_s21z

@@ -35,7 +35,7 @@ class R:
     '''
 
     @utils.method_timer
-    def __init__(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml"):
+    def __init__(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml", initialize_boards = None, initialize_drones = None):
         '''
         Constructor for R. Creates directories for data storage, configures logger, and starts
         RFSoC PCS agent.
@@ -43,6 +43,7 @@ class R:
         Parameters:
             cfg_path (str) : Path to system configuration file.
         '''
+
         # Load config files and setup logging
         # -----------------------------------
 
@@ -87,11 +88,13 @@ class R:
 
         # Setup boards
         # ------------
-        if self.io_cfg['init']['initialize_boards']: self.setup_boards()
+        initialize_boards = initialize_boards if initialize_boards is not None else self.io_cfg['init']['initialize_boards']
+        if initialize_boards: self.setup_boards()
 
         # Setup drones
         # ------------
-        if self.io_cfg['init']['initialize_drones']: self.setup_drones()
+        initialize_drones = initialize_drones if initialize_drones is not None else self.io_cfg['init']['initialize_drones']
+        if initialize_drones: self.setup_drones()
         rfsoc_io.send_msg('INFO', f'Initialized RFSoC agent. Communicating with drones: {self.drone_list}!', self.output)
 
         # Initialize streamer attribute (As None, since it is only used when g3=False)
@@ -100,7 +103,7 @@ class R:
 
         # Set NCLO frequency RFSoC drones
         # -------------------------------------------------
-        if self.io_cfg['init']['initialize_drones']:
+        if initialize_drones:
             for com, cfg in zip(self.drone_list, self.drone_cfg):
                 # Set NCLO
                 rtn = self.rfsoc.setNCLO(com_to = com, f_lo = cfg['tones']['NCLO'], silent=True)
@@ -505,12 +508,12 @@ class R:
     ######################
     # Monitoring Methods #
     ######################
-
+    @header
     def update_measurement(self, name = None, desc = '', influx_output = None):
-        influx_output = influx_output if influx_output else self.io_cfg['io']['influx_output']
+        influx_output = influx_output if influx_output is not None else self.io_cfg['io']['influx_output']
 
         if influx_output: 
-            rtn = self.rfsoc.updateMeasurement(measurement_name = f"{name}, Date: {self.curr_date}, Session ID: {self.sess_id}", measurement_desc = desc)
+            rtn = self.rfsoc.updateMeasurement(measurement_name = f"{name}, Date: {self.curr_date}, Session ID: {self.sess_id}" if name is not None else name, measurement_desc = desc)
             return rtn
         else:
             return None 
@@ -1115,13 +1118,25 @@ class R:
 
             return rtn1
 
-        def _write_filtered_comb(com_to, vna_files):
+        def _write_filtered_comb(com_to, vna_files, save_files, found_freqs):
             rtns = []
-            for com, vna_file in zip(com_to, vna_files):
+            for com, vna_file, save_file, found_freq in zip(com_to, vna_files, save_files, found_freqs):
+                ind = self.drone_list.index(com)
                 vna = VNA(com = com, sweep_path = vna_file)
-                good_resonators, _ = vna.filter_freqs()
+                good_resonators, _ = vna.filter_freqs(res_freqs = found_freq)
                 rtn = self.write_config_comb(tone_freqs = good_resonators, tone_powers = 'gen', tone_phis = 'gen', rescale_power = True, gen_attempts = 5)
                 rtns.append(rtn)
+
+                res_dir = self.config_dirs[ind] / 'res'
+                fname = f"{self.io_cfg['save_file_names'][f'vna_sweep']}_res_filtered_{self.timestamp}.npy"
+                save_path = res_dir / fname
+                np.save(save_path, good_resonators)
+
+                self._edit_config(self.drone_cfg[ind], 'found_num_detectors', len(good_resonators))
+                self._edit_config(self.drone_cfg[ind], 'found_detector_freqs_filtered', save_path)
+
+                self.drone_cfg[ind] = rfsoc_io.save_config(save_file, self.drone_cfg[ind], self.save_cfg)
+            self.ext_cfg = rfsoc_io.save_config(self.log_dir / f"{self.io_cfg['save_file_names'][f'vna_sweep']}_config_ext_{self.timestamp}.yaml", self.ext_cfg, self.save_cfg)
             return rtns
 
         # Get com_to list
@@ -1185,8 +1200,8 @@ class R:
 
         # Take VNA sweep if new_sweep = True or if one does not already exist
         to_sweep = []
-        old_files = []
-        inds = []
+        vna_files = len(com_to)*[None]
+        timestamps = len(com_to)*[-1]
         for i, com in enumerate(com_to):
             ind = self.drone_list.index(com)
             # Check if a VNA sweep was taken in the last day
@@ -1194,18 +1209,19 @@ class R:
             if not vna_file.exists() or new_sweep:
                 to_sweep.append(str(com))
             else:
-                inds.append(i)
-                old_files.append(vna_file)
                 vna = VNA(com_to=com, sweep_path=vna_file)
                 stitch_bw[ind] = utils.dict_get(vna.drone_cfg, 'sweep_steps')
+                vna_files[ind] = vna_file
+                timestamps[ind] = pair.get_timestamp(vna_file)
 
         if len(to_sweep) != 0:
             # Take VNA sweep(s) without saving configs (saved later)
             self.save_cfg = False
             kwargs['com_to'] = to_sweep
-            vna_files = self.take_vna_sweep(**kwargs)
-            for i, vna_file in zip(inds, old_files): vna_files.insert(i, vna_file) # Add newly old vna files into list of new vna files sorted by drone com_to
-            self.save_cfg = True
+            new_files = self.take_vna_sweep(**kwargs)
+            for i in range(len(com_to)): 
+                if vna_files[i] is None: vna_files[i] = new_files.pop(0) # Add old vna files into list of new vna files sorted by drone com_to
+                if timestamps[i] == -1: timestamps[i] = self.timestamp
         rfsoc_io.send_msg('INFO', f"Finding resonators from VNA sweep for drones {com_to}!", output = self.output)
         for i, com in enumerate(com_to):
             # Find resonators from VNA sweep
@@ -1215,11 +1231,13 @@ class R:
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
         rfsoc_io.send_msg('INFO', f"Finished finding resonators from VNA sweep for drones {com_to}!", output = self.output)
 
-        found_nums = self._save_resonators(com_to, 'vna')
+        if not filter_freqs: self.save_cfg = True
+        found_nums, found_freqs, save_files = self._save_resonators(com_to, timestamps, 'vna')
+        self.save_cfg = True
 
         if write_targ_comb:
             rfsoc_io.send_msg('INFO', f"Writing target combs using found resonators for drones {com_to}!", output = self.output)
-            rtn = _write_filtered_comb(com_to, vna_files) if filter_freqs else self._run_parallel(_write_targ_comb, **kwargs)
+            rtn = _write_filtered_comb(com_to, vna_files, save_files, found_freqs) if filter_freqs else self._run_parallel(_write_targ_comb, **kwargs)
             rfsoc_io.send_msg('INFO', f'Finished writing target combs for drones {com_to}!', output = self.output)
 
             self.save_cfg = False
@@ -1271,7 +1289,8 @@ class R:
 
         # Take target sweep if new_sweep = True if one does not already exist
         to_sweep = []
-        targ_files = []
+        targ_files = len(com_to)*[None]
+        timestamps = len(com_to)*[-1]
         for com in com_to:
             ind = self.drone_list.index(com)
             # Check if a target sweep was taken in the last day
@@ -1279,15 +1298,18 @@ class R:
             if not targ_file.exists() or new_sweep:
                 to_sweep.append(com)
             else:
-                targ_files.append(targ_file)
                 target = Target(com_to=com, sweep_path=targ_file)
                 stitch_bw[ind] = utils.dict_get(target.drone_cfg, 'sweep_steps')
+                targ_files[ind] targ_file
+                timestamps[ind] = pair.get_timestamp(targ_file)
         if len(to_sweep) != 0:
             # Take target sweep(s) without saving config (saved later)
             self.save_cfg = False
             kwargs['com_to'] = to_sweep
-            targ_file = self.take_target_sweep(**kwargs)
-            targ_files.extend(targ_file)
+            new_files = self.take_target_sweep(**kwargs)
+            for i in range(len(com_to)): 
+                if targ_files[i] is None: targ_files[i] = new_files.pop(0) # Add old vna files into list of new vna files sorted by drone com_to
+                if timestamps[i] == -1: timestamps[i] = self.timestamp
             self.save_cfg = True
 
         rfsoc_io.send_msg('INFO', f"Finding resonators from target sweep for drones {com_to}!", output = self.output)
@@ -1297,7 +1319,7 @@ class R:
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
         rfsoc_io.send_msg('INFO', f"Finished finding resonators from target sweep for drones {com_to}!", output = self.output)
 
-        found_nums = self._save_resonators(com_to, 'targ')
+        found_nums, _ = self._save_resonators(com_to, timestamps, 'targ')
 
         if write_targ_comb:
             rfsoc_io.send_msg('INFO', f"Writing target comb using found resonators for drones {com_to}!", output = self.output)
@@ -1390,10 +1412,11 @@ class R:
 
         return files, paths
 
-    def _save_resonators(self, com_to, sweep):
+    def _save_resonators(self, com_to, timestamps, sweep):
 
         found_nums = []
-        for com in com_to:
+        save_files = []
+        for com, timestamp in zip(com_to, timestamps):
             # Parse com information
             ind = self.drone_list.index(com)
             bid, drid = com.split('.')
@@ -1401,7 +1424,6 @@ class R:
             # Define directory to temporary store resonator files
             res_dir = self.config_dirs[ind] / 'res'
             fname = f"{self.io_cfg['save_file_names'][f'{sweep}_sweep']}_res_{self.timestamp}.npy"
-
 
             try:
                 drone_id = f"*{bid}_{drid}*"
@@ -1431,10 +1453,13 @@ class R:
 
             self._edit_config(self.drone_cfg[ind], 'found_num_detectors', found_num)
             self._edit_config(self.drone_cfg[ind], 'found_detector_freqs', res_path)
-            self.drone_cfg[ind] = rfsoc_io.save_config(self.config_dirs[ind] / f"{self.io_cfg['save_file_names'][f'{sweep}_sweep']}_config_drone_{self.timestamp}.yaml", self.drone_cfg[ind], self.save_cfg)
+
+            save_file = self.config_dirs[ind] / f"{self.io_cfg['save_file_names'][f'{sweep}_sweep']}_config_drone_{self.timestamp}{f'_{timestamp}' if not timestamp == self.timestamp else ''}.yaml" 
+            save_files.append(save_file)
+            self.drone_cfg[ind] = rfsoc_io.save_config(save_file, self.drone_cfg[ind], self.save_cfg)
 
         self.ext_cfg = rfsoc_io.save_config(self.log_dir / f"{self.io_cfg['save_file_names'][f'{sweep}_sweep']}_config_ext_{self.timestamp}.yaml", self.ext_cfg, self.save_cfg)
-        return found_nums
+        return found_nums, found_freqs, save_files
 
     ########################
     # Arg Handling Methods #
