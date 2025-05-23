@@ -283,6 +283,17 @@ class Sweep(Data):
     # Data Getter Methods #
     #######################
 
+    #@method_timer
+    def transform_sweep(self, name, func, res_num = None):
+        '''
+        Method for adding data transformed by func to self.data pandas DataFrame.
+        '''
+        if not name in self.data.columns:
+            transformed_data = pd.DataFrame(func(None, None))
+            transformed_data.columns = [name]
+            self.data = pd.concat([self.data, transformed_data], axis=1).sort_index(axis=1)
+        return self.data[name]
+
     def fs(self):
         return self.data['fs']
 
@@ -294,7 +305,8 @@ class Sweep(Data):
         if name == 'data':
             if super().__getattribute__("data") is None:
                 self.data = pd.DataFrame(self._load_sweep()).sort_index(axis=1, level=0)
-                self.data.columns.names = ['Data', 'Resonators']
+                num_levels = len(super().__getattribute__("data").columns.names)
+                self.data.columns.names = ['Data'] if num_levels == 1 else ['Data', 'Resonators']
                 self.data.index.names = ['Sample']
             gc.collect()
         elif name == 'res_freqs':

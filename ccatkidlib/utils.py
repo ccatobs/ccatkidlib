@@ -13,6 +13,9 @@ def convert_timestamp(timestamp, timezone = 'America/New_York'):
     timestamp = int(timestamp)
     return datetime.fromtimestamp(timestamp, pytz.timezone(timezone)).strftime("%Y-%m-%d %H:%M:%S")
 
+def arr_to_list(arr):
+    if isinstance(arr, np.ndarray): arr = arr.tolist()
+    return arr
 
 def dict_get(dic, keys):
     '''

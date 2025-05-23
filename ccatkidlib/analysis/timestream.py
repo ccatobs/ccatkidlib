@@ -7,12 +7,19 @@ import so3g
 from spt3g import core
 import numpy as np
 import pandas as pd
+import multiprocessing as mp
+from multiprocessing import Pool, shared_memory, Lock
+from functools import partial
+import pickle
+import time
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
 import ccatkidlib.analysis.plot_utils as putils
+from ccatkidlib.analysis.mp_utils import init_worker, clear_shared_mem, frame_worker
+from ccatkidlib.utils import method_timer
 
 class Timestream(Data):
     '''
@@ -33,6 +40,19 @@ class Timestream(Data):
         '''
         kwargs['data_type'] = 'timestream'
         super().__init__(com_to, analysis_cfg, **kwargs)
+        
+
+        self.mp = True
+        self.processes = None
+        self.chunk_size = None
+        for key, value in kwargs.items():
+            if key == 'mp':
+                self.mp = value
+            elif key == 'processes':
+                self.processes = value
+            elif key == 'chunk_size':
+                self.chunk_size = value
+
 
         # Define array of resonator numbers
         # ---------------------------------
@@ -56,38 +76,37 @@ class Timestream(Data):
     #########################
 
 
-
     ########################
     # Data Loading Methods #
     ########################
 
     @classmethod
-    def load_frame(cls, *args):
+    def load_frame(cls, *args, **kwargs):
         if args and isinstance(args[0], cls):
-            return args[0]._load_frame(*args[1:])
+            return args[0]._load_frame(*args[1:], **kwargs)
     
-    def _load_frame(self, frame, start_time, time_precision):
+    def _load_frame(self, frame, start_time, time_precision, mask = None):
         if 'packet_counts' in frame: self.packet_counts += list(frame['packet_counts'])
 
-        
+        ts = []
         g3_data = frame['data']
-        ts = np.array(g3_data.times)/time_precision
         data = g3_data.data
 
-        t_diff = np.array(ts - start_time)
-        in_time = np.where((t_diff >= self.start) & (t_diff <= self.end), True, False)
+        if mask is None:
+            ts = np.array(g3_data.times)/time_precision
 
-        if self.res_num is None:
-            channel_count = frame['channel_count']
-            num_tones = self.drone_cfg['tones']['num_tones']
-            if not num_tones == channel_count: print('WARNING | There is a mismatch between the number of tones in the comb and the number of tones in the timestream packets!')
-            self.res_num = range(channel_count)
+            t_diff = np.array(ts - start_time)
+            mask = np.where((t_diff >= self.start) & (t_diff <= self.end), True, False)
+
         inds = 2*np.array(self.res_num)
 
-        I = data[list(inds)][:, in_time]
-        Q = data[list(inds+1)][:, in_time]
+        I = data[list(inds)][:, mask]
+        Q = data[list(inds+1)][:, mask]
 
-        return ts[in_time], I, Q
+        if not len(ts) == 0:
+            return ts[mask], I, Q
+        else:
+            return ts, I, Q
  
     def _load_npy(self, data, start_time, time_precision):
         '''
@@ -112,6 +131,7 @@ class Timestream(Data):
 
         return ts[in_time], I, Q
 
+    @method_timer
     def _load_timestream(self, time_precision = None):
         '''
         Load timestream I, Q data.
@@ -181,8 +201,7 @@ class Timestream(Data):
     def _load_g3_timestream(self, ftype, time_precision):
         '''
         Load g3 timestream data.
-        '''
-        ts, Is, Qs = [], None, None
+        '''           
 
         if time_precision == None: time_precision = 10e7
         start_time = -1
@@ -194,30 +213,109 @@ class Timestream(Data):
                     g3_files += file.readlines()
             else:
                 g3_files += [data_path]
-        
+
+        # Do initial pass through of frames in G3 file without fully loading the data to:
+        # 1. Aggregate frames from different G3 files into one list
+        # 2. Filter out frames that do not contain timestream data
+        # 3. Get the number of tones
+        # 4. Filter out frames that are not within the specified time range and construct the array of times
+        # --------------------------------------------------------------------------------------------------
         frames = []
+        masks = []
+        ts = []
         for g3_file in g3_files:
             g3_data = core.G3File(str(g3_file).strip())
             
             for frame in g3_data:
+                # Filter out frames that are not G3 Scan frames (those that contain the timestream data)
                 if frame.type == core.G3FrameType.Scan:
-                    times = frame['data'].times
+                    # Determine the number of tones used for timestream
+                    if self.res_num is None:
+                        channel_count = frame['channel_count'] # Get number of tones directly from G3 frame
+                        num_tones = self.drone_cfg['tones']['num_tones'] # Get number of tones from timestream config file
+
+                        # Send warning if there is a mismatch in the number of tones (but continue execution using the number in the G3 frame)
+                        if not num_tones == channel_count: print('WARNING | There is a mismatch between the number of tones in the comb and the number of tones in the timestream packets!')
+                        self.res_num = range(channel_count)
+
+                    # Filter out frames that are not within specified time range
+                    times = np.array(frame['data'].times)/time_precision
                     if start_time == -1:
-                        start_time = int(times[0])/time_precision
-                    if int(times[0])/time_precision - start_time <= self.end:
-                        if int(times[-1])/time_precision - start_time >= self.start: frames.append(frame)
+                        start_time = times[0]
+                    if times[0] - start_time <= self.end:
+                        if times[-1] - start_time >= self.start:
+                            t_diff = np.array(times - start_time)
+                            mask = np.where((t_diff >= self.start) & (t_diff <= self.end), True, False)
+                            frames.append(frame)
+                            masks.append(mask)
+                            ts = np.append(ts, times[mask])
                     else:
                         break
             else:
                 continue
             break
 
-        for frame in frames:
-            t, I, Q = self.load_frame(self, frame, start_time, time_precision)
-            ts = np.append(ts, t)
-            Is = np.append(Is, I, axis=1) if Is is not None else I
-            Qs = np.append(Qs, Q, axis=1) if Qs is not None else Q
-        
+        shape = (len(self.res_num), len(ts))
+
+        if self.mp:
+            nbytes = np.prod(shape) * np.dtype(np.int32).itemsize
+
+            # Close and unlink the I and Q shared memory blocks if they already exist (e.g. if the program crashed without cleaning them)
+            clear_shared_mem('I_mem')
+            clear_shared_mem('Q_mem')
+            clear_shared_mem('frames')
+            clear_shared_mem('masks')
+            
+            frames_pk = pickle.dumps(frames)
+            masks_pk = pickle.dumps(masks)
+
+            # Create shared memory blocks for storing the I and Q data arrays
+            I_mem = shared_memory.SharedMemory(name='I_mem', create=True, size=nbytes)
+            Q_mem = shared_memory.SharedMemory(name='Q_mem', create=True, size=nbytes)
+            frames_mem = shared_memory.SharedMemory(name='frames', create=True, size=len(frames_pk))
+            masks_mem = shared_memory.SharedMemory(name='masks', create=True, size=len(masks_pk))
+            
+            frames_mem.buf[:len(frames_pk)] = frames_pk
+            masks_mem.buf[:len(masks_pk)] = masks_pk
+
+            frames_info = (frames_mem.name, len(frames_pk))
+            masks_info = (masks_mem.name, len(masks_pk))
+            
+            I_name = I_mem.name
+            Q_name = Q_mem.name
+
+            args = [(i, self, shape, frames_info, masks_info, I_name, Q_name, start_time, time_precision) for i in range(len(frames))]
+
+            try:
+                lock = Lock()
+                if self.processes is None: self.processes=min([int(0.7*len(frames)) + 1, mp.cpu_count()])
+                if self.chunk_size is None: self.chunk_size = 1
+                start_time = time.time()
+                with Pool(processes=self.processes, initializer=init_worker, initargs=(lock,)) as pool:
+                    result = pool.starmap(frame_worker, args, self.chunk_size)          
+                Is = np.ndarray(shape, dtype=np.int32, buffer=I_mem.buf)
+                Qs = np.ndarray(shape, dtype=np.int32, buffer=Q_mem.buf) 
+                Is = np.array(Is[:])
+                Qs = np.array(Qs[:])
+            except Exception as e:
+                print(e)
+                Is = []
+                Qs = []
+            finally:
+                I_mem.close(), Q_mem.close(), frames_mem.close(), masks_mem.close()
+                I_mem.unlink(), Q_mem.unlink(), frames_mem.unlink(), masks_mem.unlink()
+        else:
+            Is, Qs = np.empty(shape, dtype=np.int32), np.empty(shape, dtype=np.int32)
+            curr_ind = 0
+            for i in range(len(frames)):
+                mask = masks[i]
+                t, I, Q = self.load_frame(self, frames[i], start_time, time_precision, mask = mask)
+
+                num_samps = int(np.sum(mask))
+                Is[:, curr_ind:num_samps + curr_ind] = I
+                Qs[:, curr_ind:num_samps + curr_ind] = Q
+                curr_ind += num_samps
+
         return ts, Is, Qs
           
     #######################

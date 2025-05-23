@@ -1,13 +1,16 @@
 from .sweep import Sweep
 from pathlib import Path
 from scipy.stats import linregress
+from numba import njit
 import numpy as np
+import pandas as pd
 import sys
 import gc
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.analysis.pair as pair
+from ccatkidlib.utils import method_timer
 
 class VNA(Sweep):
     '''
@@ -18,6 +21,13 @@ class VNA(Sweep):
     def __init__(self, com_to, analysis_cfg=str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
         kwargs['data_type'] = 'vna'
         super().__init__(com_to, analysis_cfg, **kwargs)
+
+    ##############################
+    # Data Getter/Setter Methods #
+    ##############################
+
+    def transform(self, name, func, res_num=None):
+        return super().transform_sweep(name, func, res_num)
 
     ####################
     # Analysis Methods #    
@@ -43,17 +53,20 @@ class VNA(Sweep):
             idx_bad (list): the indexes of all bad or not real resonators as taken from the total list of f_res.
         """
         
-        if fs is None: fs = self.fs()
+        if fs is None: fs = self.fs().to_numpy()
         if res_freqs is None: res_freqs = self.res_freqs
-        if phase is None: self.phase()
+        if phase is None: self.phase().to_numpy()
         
-        if stitch: phase = stitch_phase(fs = fs, phase=phase)
+        if stitch: phase = self.stitch_phase(fs = fs, phase=phase)
 
         slopes = []
-        data = []
         #variances = []
         for i in range(len(res_freqs)):
-            peak_idx = np.where(fs == res_freqs[i])[0][0]
+            try:
+                peak_idx = np.where(fs == res_freqs[i])[0][0]
+            except:
+                slopes.append(0)
+                continue
             X = fs[peak_idx-w: peak_idx+w+1] #defines window of data around peak_idx to fit
             Y = phase[peak_idx-w: peak_idx+w+1]
             
@@ -62,20 +75,19 @@ class VNA(Sweep):
             fit_params = np.linalg.inv(X.T @ X) @ X.T @ Y
             slopes.append(fit_params[1])
             
-            idx_res = np.where(np.array(slopes) > 0)[0]
-            idx_bad = np.where(np.array(slopes) <= 0)[0]
-            good_resonators = res_freqs[idx_res]
-            bad_resonators = res_freqs[idx_bad]
-            data.append(Y)
+        idx_res = np.where(np.array(slopes) > 0)[0]
+        idx_bad = np.where(np.array(slopes) <= 0)[0]
+        good_resonators = res_freqs[idx_res]
+        bad_resonators = res_freqs[idx_bad]
 
-            #below calculated the variances of eat fitted window, and flags those with high variance. not clear this offers substantial improvement
+        #below calculated the variances of eat fitted window, and flags those with high variance. not clear this offers substantial improvement
+        
+        #window_var = np.std(Y)
+        #variances.append(window_var)
+        #flagged_high_var = np.intersect1d(np.where(variances > np.median(variances) + 1*np.std(variances))[0],idx_res)
+        #var_flagged_good_res = f_res[flagged_high_var]
             
-            #window_var = np.std(Y)
-            #variances.append(window_var)
-            #flagged_high_var = np.intersect1d(np.where(variances > np.median(variances) + 1*np.std(variances))[0],idx_res)
-            #var_flagged_good_res = f_res[flagged_high_var]
-            
-        return good_resonators, bad_resonators, data, idx_res, idx_bad
+        return good_resonators, bad_resonators, idx_res, idx_bad
 
     def get_cable_delay(self, fs = None, phase = None, stitch_phase = True):
         if fs is None: fs = self.fs()
@@ -94,8 +106,8 @@ class VNA(Sweep):
     def stitch_phase(self, fs = None, phase = None, threshold = 1.9*np.pi, stitch_ends_factor = 10):
         # Get frequency and phase data
         # ----------------------------
-        if fs is None: fs = self.fs()
-        if phase is None: phase = self.phase()
+        if fs is None: fs = self.fs().to_numpy()
+        if phase is None: phase = self.phase().to_numpy()
 
         # Stitch phase discontinuities caused by wrapping from -pi to pi
         # --------------------------------------------------------------

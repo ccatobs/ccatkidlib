@@ -1,5 +1,6 @@
 import gc
 from pathlib import Path
+from numba import njit
 import sys
 import numpy as np
 import pandas as pd
@@ -9,6 +10,7 @@ import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
 import ccatkidlib.analysis.plot_utils as putils
+from ccatkidlib.utils import method_timer
 
 
 class Data:
@@ -70,6 +72,8 @@ class Data:
         else:
             self.timestamp = pair.get_timestamp(self.data_path)
         
+        if not isinstance(self.data_path, list): self.data_path=[data_path]
+        
         # Get io, ext, and drone configs associated with the sweep data file
         # ------------------------------------------------------------------
         self.configs = pair.get_config(self.data_path[0], all_cfg=False)
@@ -85,6 +89,7 @@ class Data:
     # Data Getter/Setter Methods # 
     ##############################
 
+    #@method_timer
     def transform(self, name, func, res_num = None):
         res_slice = self._res_slice(res_num)
         res_slice_idx = pd.Index(res_slice)
@@ -103,16 +108,23 @@ class Data:
         return self.data.loc[:, (name, res_slice)][name]
 
     def I(self, res_num = None, res_slice = None):
-        if res_slice is None: res_slice = self._res_slice(res_num)
-        return self.data.loc[:, ('I', res_slice)]['I']
+        if res_slice is None and not res_num is None: res_slice = self._res_slice(res_num)
+        return self.data.loc[:, ('I', res_slice)]['I'] if res_slice is not None else self.data['I']
     
     def Q(self, res_num = None, res_slice = None):
-        if res_slice is None: res_slice = self._res_slice(res_num)
-        return self.data.loc[:, ('Q', res_slice)]['Q']
+        if res_slice is None and not res_num is None: res_slice = self._res_slice(res_num)
+        return self.data.loc[:, ('Q', res_slice)]['Q'] if res_slice is not None else self.data['Q']
 
     def phase(self, res_num = None):
+        @njit
+        def _calc_phase(I, Q):
+            return np.arctan2(Q, I)
+
         def _phase(res_num, res_slice):
-            return np.arctan2(self.I(res_num, res_slice), self.Q(res_num, res_slice))
+            I = self.I(res_num, res_slice).to_numpy()
+            Q = self.Q(res_num, res_slice).to_numpy()
+            #return pd.DataFrame(_calc_phase(I, Q))
+            return np.arctan2(self.Q(res_num, res_slice), self.I(res_num, res_slice))
         
         return self.transform('Phase', _phase, res_num = res_num)
 
@@ -162,7 +174,7 @@ class Data:
         if res_num is not None:
             if isinstance(res_num, int): res_num = [res_num]
         else:
-            res_num = range(self.drone_cfg['tones']['num_tones'])
+            res_num = self.res_num if self.res_num is not None else range(self.drone_cfg['tones']['num_tones'])
         return [f'R_{res:04d}' for res in res_num]
 
 

@@ -194,7 +194,6 @@ def get_most_recent_file(path, file_identifier, output = False, time_past = 60*6
         for file_id in file_identifier:
             files.extend(path.glob(file_id))
         file = Path(sorted(files, key = get_creation_time, reverse = True)[0])
-        
         # Check if creation time is within the specified time_past 
         if abs(get_creation_time(file) - time.time()) < time_past:
             send_msg('DEBUG', f"Found most recent file '{file}' in {path}.", output = output)
@@ -482,7 +481,7 @@ def get_array_board(c, ip, ssh_key, remote_path, local_path, load = True, timest
     return loaded_array
 
 #@function_timer
-def save_array_board(c, path, saved_array, output = False):
+def save_array_board(ip, ssh_key, path, saved_array, tmp_dir, output = False):
     '''
     Save numpy array to RFSoC board.
 
@@ -495,11 +494,18 @@ def save_array_board(c, path, saved_array, output = False):
         result          (str) : Standard out of save command
     ''' 
 
-    # Define command for saving numpy array to RFSoC board
-    cmd = f'python3 -c \'import numpy as np; np.save(\"{path}\", {saved_array})\''
+    save_path = Path(tmp_dir) / Path(path).name
+    np.save(save_path, saved_array)
 
-    # Save numpy array on board
-    result = c.run(cmd, hide = 'out').stdout
+    # Define command for saving numpy array to RFSoC board
+    cmd = ['rsync', '-a', '--no-times', '--inplace', '-e', f"ssh -i {ssh_key}", f'{save_path}', f'xilinx@{ip}:{path}']
+    try:
+        result = subprocess.run(cmd, check=True)
+    except Exception as e:
+        # Send error message if failed to copy or load array
+        send_msg('ERROR', f'Failed to copy/load array with error {e}!')
+        result = None
+
     send_msg('DEBUG', f"Saved array to '{path}'.", output = output)
     return result
 

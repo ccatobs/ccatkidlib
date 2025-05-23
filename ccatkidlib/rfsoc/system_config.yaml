@@ -23,22 +23,24 @@ boards:
 ---
 
 # Create Jinja variables for values used more than once
-{% set measurement_name="primecam_readout_update" %}            # * Measurement Name
-{% set root_dir="/mnt/md0/" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
+{% set measurement_name="test" %}            # * Measurement Name
+{% set root_dir="/mnt/md0/cooldown_may" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
+{% set g3_root_dir="/mnt/md0" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
+
 
 sess_id: null
 name: {{measurement_name}} # * Measurement Name
-desc: "Test newest version of primecam_readout." # Description of measurement
+desc: "Test automatic cleaning." # Description of measurement
 
 ###########################
 # Drone/Board List Config #
 ###########################
 
 # Drone configuration
-drone_list: ['1.1', '2.1'] # *List of boards/drones to use
+drone_list: ['1', '2'] # *List of boards/drones to use
 
 init:
-  initialize_boards: True  # * Whether to reintialize boards
+  initialize_boards: False  # * Whether to reintialize boards
   initialize_drones: True   # * Whether to run drone initialize commands (e.g. set_atten and setNCLO)
   restart: False            # * Whether to restart already running drones
 
@@ -80,8 +82,10 @@ pcs_agents:
 # File paths
 file_paths:
   root_dir: "{{root_dir}}"
-  data_dir: "{{root_dir}}/{{measurement_name}}"                          # * Directory to save data in
-  g3_dir:   "{{root_dir}}/g3_temp/g3"                                    # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
+  g3_root_dir: "{{g3_root_dir}}"
+  data_dir: "{{root_dir}}/{{measurement_name}}"                              # * Directory to save data in
+  g3_dir:   "{{g3_root_dir}}/g3/g3"                                          # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
+  
   
   primecam_readout: "/home/pcs/primecam_readout/src/"                    # ? Primecam_readout source code directory
   master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # ? Master Drone List File

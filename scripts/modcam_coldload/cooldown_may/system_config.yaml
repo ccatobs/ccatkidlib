@@ -20,24 +20,32 @@ boards:
     ps_temp: null
     pl_temp: null
 
+# Add external system parameters that change over the course of data acquisiton here
+power_supply_current: null
+power_supply_voltage: null
+array_temp: null
+coldload_temp: null
+temp_time: null
+bath_temp: null
+
 ---
 
-# Create Jinja variables for values used more than once
-{% set measurement_name="test" %}            # * Measurement Name
+# Create Jinja variables for values used more than once 
+{% set measurement_name="coldload_sweep" %}            # * Measurement Name
 {% set root_dir="/mnt/md0/cooldown_may" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
-{% set g3_root_dir="/mnt/md0/" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
+{% set g3_root_dir="/mnt/md0" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
 
 
 sess_id: null
 name: {{measurement_name}} # * Measurement Name
-desc: "Test writing comb whenever custom comb parameters are provided." # Description of measurement
+desc: "Sweep through Mod-Cam coldload temperatures and take VNA sweeps, target sweeps, and timestreams." # Description of measurement
 
 ###########################
 # Drone/Board List Config #
 ###########################
 
 # Drone configuration
-drone_list: ['1.1', '1.2', '1.3', '1.4', '2.1', '2.2', '2.3', '2.4'] # *List of boards/drones to use
+drone_list: ['1', '2'] # *List of boards/drones to use
 
 init:
   initialize_boards: False  # * Whether to reintialize boards
@@ -55,15 +63,15 @@ boards:
     board_ip: '192.168.2.100' # ? Board IP address
     sampling_freq: 488.28 # - Timestream sampling frequency (in Hz)
     max_power: 32767 # - Max power at the drone DACs
-    drone_cfg: "/home/jovyan/ccatkidlib/scripts/jupyter/rfsoc100_config.yaml" # * Drone configuration file
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/modcam_coldload/cooldown_may/rfsoc100_config.yaml" # * Drone configuration file
   b2:
     name: rfsoc101 # ? Name of RFSoC (for readibility, not used for anything)
     board_ip: '192.168.2.101' # ? Board IP address
     sampling_freq: 488.28 # - Timestream sampling frequency
     max_power: 32767 # - Max power at the drone DACs
-    drone_cfg: "/home/jovyan/ccatkidlib/scripts/jupyter/rfsoc101_config.yaml" # * Drone configuration file
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/modcam_coldload/cooldown_may/rfsoc101_config.yaml" # * Drone configuration file
 
-# Timestream configuration15 —--- 28
+# Timestream configuration
 timestream:
   udp_ip: "192.168.3.40"  # ? Control computer UDP packet capture port IP address
   udp_port: 4096          # ? Control computer UDP packet capture port number
@@ -81,15 +89,15 @@ pcs_agents:
 
 # File paths
 file_paths:
-  root_dir: "{{root_dir}}"
-  g3_root_dir: "{{g3_root_dir}}"
+  root_dir: "{{root_dir}}"                                               # Root directory where the ccatkidlib data files are stored
+  g3_root_dir: "{{g3_root_dir}}"                                         # Root directory where g3 files are stored 
   data_dir: "{{root_dir}}/{{measurement_name}}"                          # * Directory to save data in
-  g3_dir:   "{{g3_root_dir}}/g3/g3"                                    # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
+  g3_dir:   "{{g3_root_dir}}/g3/g3"                                      # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
   
-  primecam_readout: "/home/jovyan/primecam_readout/src/"                    # ? Primecam_readout source code directory
-  master_drone_list: "/home/jovyan/primecam_readout/master_drone_list.yaml" # ? Master Drone List File
-  pcs_dir: "/home/jovyan/pcs-deployment-configs/"                           # ? PCS directory
-  ssh_key: "/home/jovyan/.ssh/id_ecdsa"                                     # ? Path to private ssh key (null if no key)
+  primecam_readout: "/home/pcs/primecam_readout/src/"                    # ? Primecam_readout source code directory
+  master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # ? Master Drone List File
+  pcs_dir: "/home/ocs/pcs-deployment-configs/"                           # ? PCS directory
+  ssh_key: "/home/pcs/.ssh/id_ecdsa"                                     # ? Path to private ssh key (null if no key)
   drone_dir: "/home/xilinx/primecam_readout/drones"                      # - Drone directory on the boards
 
 # * File names of saved data files
@@ -113,8 +121,9 @@ board_file_names:
     comb_amp:  'a_tones_comb'
     comb_phi:  'p_tones_comb'
 
+# * Board and control computer cleaning config
 clean:
-  threshold: 10       # * Remaining disk space in GB after which boards should be automatically cleaned (negative number for no auto cleaning)
+  threshold: 5        # * Remaining disk space in GB after which boards should be automatically cleaned (negative number for no auto cleaning)
   olderThanDaysAgo: 1 # * (days) Clean files older than specified number of days
   ftype: '.npy'       # * File type to clean
   tmp: True           # * Whether to clean tmp primecam_readout and ccatkidlib directories on control computer

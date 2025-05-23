@@ -11,10 +11,10 @@ import time
 import pickle
 import numpy as np
 import multiprocessing as mp
-mp.set_start_method('fork')
 
 from math import floor
 from pathlib import Path
+from functools import wraps
 from invoke import Responder
 
 # Import local modules
@@ -27,6 +27,8 @@ from ccatkidlib.analysis.target import Target
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
+
+if mp.get_start_method(allow_none=True) is None: mp.set_start_method('fork')
 
 class R:
     '''
@@ -43,6 +45,8 @@ class R:
         Parameters:
             cfg_path (str) : Path to system configuration file.
         '''
+
+        self.running = True
 
         # Load config files and setup logging
         # -----------------------------------
@@ -178,7 +182,7 @@ class R:
                         NCLO = 500
                     rtn = self.rfsoc.setNCLO(com_to = com, f_lo = NCLO, silent=True)
                     rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-                    time.sleep(2)
+                    time.sleep(1)
 
                 # Write VNA combs
                 rfsoc_io.send_msg('INFO', f'Writing VNA combs for board {board}!', self.output)
@@ -186,7 +190,15 @@ class R:
                     com = f'{board}.{i+1}'
                     rtn = self.rfsoc.writeNewVnaComb(com_to = com, silent=False)
                     rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-                    time.sleep(10)
+                    time.sleep(1)
+                
+                # Turn on timestreams
+                rfsoc_io.send_msg('INFO', f'Starting timestream chains for board {board}!', self.output)
+                for i in range(4):
+                    com = f'{board}.{i+1}'
+                    ret = self.rfsoc.startChains(com_to = com, silent=False)
+                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+                    time.sleep(1)
 
                 # Turn on timestreams
                 rfsoc_io.send_msg('INFO', f'Turning timestreams on for board {board}!', self.output)
@@ -194,7 +206,7 @@ class R:
                     com = f'{board}.{i+1}'
                     ret = self.rfsoc.timestreamOn(com_to = com, on = True, silent=False)
                     rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-                    time.sleep(10)
+                    time.sleep(1)
         ret = self.rfsoc.timestreamOn(com_to = None, on = False, silent=False) # Turn off all timestreams
         rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
         rfsoc_io.send_msg('INFO', f"Set NCLOs to {NCLOs} MHz for drones: {self.drone_list}!", self.output)
@@ -284,12 +296,13 @@ class R:
                     ip, to_run, running = ast.literal_eval(rtn.session['messages'][1][1].split(': ')[1])
                     rfsoc_io.send_msg('PCS', f"{rtn.session}", self.output)
 
-                    if running:
-                        running_drones.append(com)
-                    elif to_run and not running:
-                        rfsoc_io.send_msg('ERROR', f'Failed to start drone {com}')
+                    if to_run:
+                        if running:
+                            running_drones.append(com)
+                        elif not running:
+                            rfsoc_io.send_msg('ERROR', f'Failed to start drone {com}')
 
-        rfsoc_io.send_msg('INFO', f"Drones {running_drones} are currently running!", self.output)
+        rfsoc_io.send_msg('INFO', f"Drones {sorted(running_drones)} are currently running!", self.output)
 
     def load_system_config(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml"):
         '''
@@ -389,26 +402,30 @@ class R:
         Set drive/sense attenuations of RFSoC board frontend attenuations.
 
         Keyword Arguments:
-            com_to  (list of str) : List of drones for which to set attenuation
-            drive (list of float) : Values of drive (DAC) attenuations in dB (must be between 0 and 31.75)
-            sense (list of float) : Values of sense (ADC) attenuations in dB (must be between 0 and 31.75)
+            com_to     (str | List[str]) : List of drones for which to set attenuation
+            drive  (float | List[float]) : Values of drive (DAC) attenuations in dB (must be between 0 and 31.75)
+            sense  (float | List[float]) : Values of sense (ADC) attenuations in dB (must be between 0 and 31.75)
         '''
 
-        def _set_atten(com_to = None, direction = None, atten = None):
+        def _set_direction(com_to = None, direction = None, atten = None):
             '''
             Internal function for setting drone attenuations.
 
             Parameters:
-                com_to    (list of str) : List of drone com_to for which attenuations should be set
-                direction (list of str) : Which attenuator to set. Options are 'drive' for DAC and 'sense' for ADC
-                atten   (list of float) : List of attenuations. Attenuation must be a float between 0 and 31.75
+                com_to    (str | List[str]) : List of drone com_to for which attenuations should be set
+                direction             (str) : Which attenuator to set. Options are 'drive' for DAC and 'sense' for ADC
+                atten (float | List[float]) : List of attenuations. Attenuation must be a float between 0 and 31.75
             Returns:
                 attens: The set drone attenuations. None if invalid attenuations were used
             '''
+            def _set_atten(com, *args, **kwargs):
+                direction, att = args[0], args[1]
+                rtn = self.rfsoc.setAtten(com_to = com, direction = direction, atten = att, silent=True)
+                rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+                return rtn
 
             # Get attenuations
             # ----------------
-
             attens = self._get_drone_args(com_to, ['atten', f'{direction}']) # Get attenuations from drone config files
 
             # Override config attenuations with those passed as method argument (if any)
@@ -422,10 +439,22 @@ class R:
 
             # Set attenuations
             # ----------------
+            # Set attenuation of drones (can do max of one drone per board at a time since attenuations are set through serial communication)
+            
+            # Change number of drones in parallel to one
+            parallel_drones = self.parallel_drones
+            self.parallel_drones = 1
 
-            # Iterate over drones and set attenuation
-            for com, att in zip(com_to, attens):
-                self.rfsoc.setAtten(com_to = com, direction = direction, atten = att, silent=True)
+            # Group drones with the same attenuations
+            atten_dict = self._group_args(com_to, attens)
+            for att, com in atten_dict.items():
+                args = [direction, float(att)]
+                kwargs['com_to'] = com
+                self._run_parallel(_set_atten, *args, **kwargs)
+            
+            # Reset com_to and parallel_drones to what they were before
+            kwargs['com_to'] = com_to
+            self.parallel_drones = parallel_drones
             rfsoc_io.send_msg('INFO', f'Successfully set {direction} attenuation to {attens} for drones {com_to}!', self.output)
 
             return attens
@@ -434,10 +463,10 @@ class R:
         com_to, _ = self._get_com_to(**kwargs)
 
         # Set drive attenuation
-        drive_attens = _set_atten(com_to = com_to, direction = 'drive', atten = drive)
+        drive_attens = _set_direction(com_to = com_to, direction = 'drive', atten = drive)
 
         # Set sense attenuation
-        sense_attens = _set_atten(com_to = com_to, direction = 'sense', atten = sense)
+        sense_attens = _set_direction(com_to = com_to, direction = 'sense', atten = sense)
 
         return drive_attens, sense_attens
 
@@ -492,7 +521,7 @@ class R:
                 self._set_drone_args(com_to, ['tones', 'generation', 'rescale_power'], rescale_power)
             elif key == 'gen_attempts':
                 gen_attempts = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, ['tones', 'generation', 'gen_attempts'], gen_attemptss)
+                self._set_drone_args(com_to, ['tones', 'generation', 'gen_attempts'], gen_attempts)
 
         # Write custom comb for each drone
         # --------------------------------
@@ -568,6 +597,7 @@ class R:
 
         # Take data one board at a time (all drones transfers too much data through OCS)
         kwargs['parallel_boards'] = 1
+        kwargs['parallel_drones'] = 2
 
         # Get snap data of drones
         rtns = self._run_parallel(_getSnapData, **kwargs)
@@ -638,16 +668,16 @@ class R:
             if len(boards_to_clean) > 0:
                 drones_to_clean = [com for com in com_to if com.split('.')[0] in boards_to_clean]
                 rfsoc_io.send_msg('INFO', f'Cleaning drones {drones_to_clean}...', self.output)
-                self.rfsoc.cleanBoardDroneDirs(com_to=drones_to_clean, testing=False, leave_latest=True, ftype=ftype, olderThanDaysAgo=olderThanDaysAgo)
+                for com in drones_to_clean: self.rfsoc.cleanBoardDroneDirs(com_to=com, testing=False, leave_latest=True, olderThanDaysAgo=str(olderThanDaysAgo))
                 rfsoc_io.send_msg('INFO', f'Finished cleaning drones {drones_to_clean}', self.output)
                 avail_spaces = _get_space(bids)
 
                 if self.io_cfg['clean']['tmp']:
                     # Clean primecam_readout tmp directory
-                    clean_io.cleanQueenTmpDir(testing=False, ftype='', olderThanDaysAgo=olderThanDaysAgo)
+                    clean_io.cleanQueenTmpDir(testing=False, ftype='', olderThanDaysAgo=str(olderThanDaysAgo))
 
                     # Clean ccatkidlib tmp directory
-                    clean_io._cleanDir(str(self.tmp_dir), testing=False, ftype=ftype, olderThanDaysAgo=olderThanDaysAgo)
+                    clean_io._cleanDir(str(Path(self.tmp_dir).resolve()), testing=False, ftype=str(ftype), olderThanDaysAgo=str(olderThanDaysAgo))
         return avail_spaces
 
     def get_temps(self, **kwargs):
@@ -775,7 +805,7 @@ class R:
         com_to, boards = self._get_com_to(**kwargs)
 
         # Evaluate kwargs
-        write_comb = False
+        write_comb = any(key in kwargs for key in ['tone_powers', 'tone_freqs', 'tone_phis'])
         sweep_steps = self._get_drone_args(com_to, ['tones', 'sweep_steps'])
         chan_bw = self._get_drone_args(com_to, ['tones', 'chan_bw'])
         for key, value in kwargs.items():
@@ -1023,7 +1053,7 @@ class R:
 
         # Parse key word arguments
         g3 = self.io_cfg['timestream']['g3'] # Whether to take g3 timestream
-        write_comb = False
+        write_comb = any(key in kwargs for key in ['tone_powers', 'tone_freqs', 'tone_phis'])
         save_data = self.save_data
 
         for key, value in kwargs.items():
@@ -1119,31 +1149,52 @@ class R:
             return rtn1
 
         def _write_filtered_comb(com_to, vna_files, save_files, found_freqs):
-            rtns = []
-            for com, vna_file, save_file, found_freq in zip(com_to, vna_files, save_files, found_freqs):
-                ind = self.drone_list.index(com)
-                vna = VNA(com = com, sweep_path = vna_file)
-                good_resonators, _ = vna.filter_freqs(res_freqs = found_freq)
-                rtn = self.write_config_comb(tone_freqs = good_resonators, tone_powers = 'gen', tone_phis = 'gen', rescale_power = True, gen_attempts = 5)
-                rtns.append(rtn)
+            '''
+            '''
+            num_drones = len(com_to)
 
+            found_nums = num_drones*[None]
+            good_resonators = num_drones*[None]
+            for i, (com, vna_file, save_file, found_freq) in enumerate(zip(com_to, vna_files, save_files, found_freqs)):
+                # Filter out fake resonators from found detectors
+                # -----------------------------------------------
+                ind = self.drone_list.index(com)
+                vna = VNA(com_to = com, data_path = [vna_file]) # Create VNA object
+                good_resonator, _, _, _ = vna.filter_freqs(res_freqs = found_freq) # Filter out fake resonators
+                good_resonator = good_resonator.real
+                good_resonators[i] = good_resonator
+
+                # Save filter resonators to .npy file
+                # -----------------------------------
                 res_dir = self.config_dirs[ind] / 'res'
                 fname = f"{self.io_cfg['save_file_names'][f'vna_sweep']}_res_filtered_{self.timestamp}.npy"
                 save_path = res_dir / fname
-                np.save(save_path, good_resonators)
+                np.save(save_path, good_resonator)
 
-                self._edit_config(self.drone_cfg[ind], 'found_num_detectors', len(good_resonators))
-                self._edit_config(self.drone_cfg[ind], 'found_detector_freqs_filtered', save_path)
+                # Add filter resonators file path and number to config file
+                # ---------------------------------------------------------
+                drone_cfg = self.drone_cfg[ind]
+                found_num = len(good_resonator)
+                found_nums[i] = found_num
+                self._edit_config(drone_cfg, 'found_num_detectors', found_num)
+                self._edit_config(drone_cfg, 'found_detector_freqs_filtered', str(save_path))
+                rfsoc_io.send_msg('INFO', f'Kept {found_num} detectors after filtering for drone {com}!')
 
-                self.drone_cfg[ind] = rfsoc_io.save_config(save_file, self.drone_cfg[ind], self.save_cfg)
-            self.ext_cfg = rfsoc_io.save_config(self.log_dir / f"{self.io_cfg['save_file_names'][f'vna_sweep']}_config_ext_{self.timestamp}.yaml", self.ext_cfg, self.save_cfg)
-            return rtns
+                drone_cfg = rfsoc_io.save_config(save_file, drone_cfg, self.save_cfg)
+
+            # Write a new target comb using the filtered resonator frequencies
+            # ----------------------------------------------------------------
+            rtn = self.write_config_comb(com_to = com_to, tone_freqs = good_resonators, tone_powers = num_drones*['gen'], tone_phis = num_drones*['gen'], rescale_power = True, gen_attempts = 1)
+
+            return rtn, found_nums
 
         # Get com_to list
+        # ---------------
         com_to, boards = self._get_com_to(**kwargs)
         write_targ_comb = True
 
-        # Evaluate kwargs
+        # Get parameters from drone config files
+        # -------------------------------------
         peak_prom_std = self._get_drone_args(com_to, ['det_find', 'peak_prom_std'])
         peak_prom_db  = self._get_drone_args(com_to, ['det_find', 'peak_prom_db'])
         peak_dis      = self._get_drone_args(com_to, ['det_find', 'peak_dis'])
@@ -1158,6 +1209,7 @@ class R:
         noise_wn      = self._get_drone_args(com_to, ['det_find', 'noise_wn'])
 
         # Parse key word arguments
+        # ------------------------
         for key, value in kwargs.items():
             if key == 'peak_prom_std':
                 peak_prom_std = self._parse_args(com_to, value)
@@ -1198,7 +1250,8 @@ class R:
             elif key == 'write_targ_comb':
                 write_targ_comb = value
 
-        # Take VNA sweep if new_sweep = True or if one does not already exist
+        # Take VNA sweep(s) if new_sweep = True or if one does not already exist
+        # ----------------------------------------------------------------------
         to_sweep = []
         vna_files = len(com_to)*[None]
         timestamps = len(com_to)*[-1]
@@ -1222,6 +1275,10 @@ class R:
             for i in range(len(com_to)): 
                 if vna_files[i] is None: vna_files[i] = new_files.pop(0) # Add old vna files into list of new vna files sorted by drone com_to
                 if timestamps[i] == -1: timestamps[i] = self.timestamp
+            self.save_cfg = True
+
+        # Find resonators using VNA sweep(s)
+        # ----------------------------------
         rfsoc_io.send_msg('INFO', f"Finding resonators from VNA sweep for drones {com_to}!", output = self.output)
         for i, com in enumerate(com_to):
             # Find resonators from VNA sweep
@@ -1231,13 +1288,17 @@ class R:
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
         rfsoc_io.send_msg('INFO', f"Finished finding resonators from VNA sweep for drones {com_to}!", output = self.output)
 
-        if not filter_freqs: self.save_cfg = True
+        # Save found resonators files
+        # ---------------------------
         found_nums, found_freqs, save_files = self._save_resonators(com_to, timestamps, 'vna')
-        self.save_cfg = True
 
         if write_targ_comb:
             rfsoc_io.send_msg('INFO', f"Writing target combs using found resonators for drones {com_to}!", output = self.output)
-            rtn = _write_filtered_comb(com_to, vna_files, save_files, found_freqs) if filter_freqs else self._run_parallel(_write_targ_comb, **kwargs)
+            if filter_freqs: # Write target comb without fake resonators
+                rfsoc_io.send_msg('INFO', f"Filtering resonators for drones {com_to}!", output = self.output)
+                rtn, found_nums = _write_filtered_comb(com_to, vna_files, save_files, found_freqs)
+            else: # Write target comb using all found resonators
+                rtn = self._run_parallel(_write_targ_comb, **kwargs)
             rfsoc_io.send_msg('INFO', f'Finished writing target combs for drones {com_to}!', output = self.output)
 
             self.save_cfg = False
@@ -1300,7 +1361,7 @@ class R:
             else:
                 target = Target(com_to=com, sweep_path=targ_file)
                 stitch_bw[ind] = utils.dict_get(target.drone_cfg, 'sweep_steps')
-                targ_files[ind] targ_file
+                targ_files[ind] = targ_file
                 timestamps[ind] = pair.get_timestamp(targ_file)
         if len(to_sweep) != 0:
             # Take target sweep(s) without saving config (saved later)
@@ -1319,7 +1380,7 @@ class R:
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
         rfsoc_io.send_msg('INFO', f"Finished finding resonators from target sweep for drones {com_to}!", output = self.output)
 
-        found_nums, _ = self._save_resonators(com_to, timestamps, 'targ')
+        found_nums, found_freqs, save_files = self._save_resonators(com_to, timestamps, 'targ')
 
         if write_targ_comb:
             rfsoc_io.send_msg('INFO', f"Writing target comb using found resonators for drones {com_to}!", output = self.output)
@@ -1363,19 +1424,21 @@ class R:
             # Create fabric connection to RFSoC board
             # ---------------------------------------
             ind = self.drone_list.index(com)
-            path = dirs[ind] / fname
+            save_path = dirs[ind] / fname
 
             bid, drid = com.split('.')
             data = None
 
             try:
-                drone_id = f"*{bid}_{drid}*"
+                drone_id = f"_{bid}_{drid}*"
                 file = rfsoc_io.get_most_recent_file(self.tmp_data_dir, file_identifier = self.io_cfg['board_file_names'][f'{sweep}']['s21'] + drone_id, output = self.output, time_past=time.time() - float(self.timestamp))
 
                 # Save the data with name specified in system config file
                 if self.save_data:
-                    data = rfsoc_io.get_array(file, path, action = 'mv', load = False, output = self.output)
-                    if data is None: raise FileNotFoundError
+                    data = rfsoc_io.get_array(file, save_path, action = 'mv', load = False, output = self.output)
+                    if data is None:
+                        rfsoc_io.send_msg('WARNING', f'Failed to find {sweep} sweep file for drone {com} in {self.tmp_data_dir}! Fetching file directly from board instead.')
+                        raise FileNotFoundError
                 else:
                     data = file if Path(file).exists() else None
             except FileNotFoundError:
@@ -1388,7 +1451,7 @@ class R:
 
                     # Save the data with name specified in system config file
                     if self.save_data:
-                        data = rfsoc_io.get_array_board(c, bip, ssh_key, file, path, load = False, output = self.output)
+                        data = rfsoc_io.get_array_board(c, bip, ssh_key, file, save_path, load = False, output = self.output)
                     else:
                         data = file if rfsoc_io.path_exists(c, file) else None
 
@@ -1405,7 +1468,7 @@ class R:
             self._save_curr_comb(com, self.io_cfg['save_file_names'][f'{sweep}_sweep'])
 
             rfsoc_io.send_msg('DEBUG', f'Successfully copied {sweep} file from drone {com}!', self.output)
-            paths.append(path)
+            paths.append(save_path)
 
         # Save ext config
         self.ext_cfg = rfsoc_io.save_config(self.log_dir / f"{self.io_cfg['save_file_names'][f'{sweep}_sweep']}_config_ext_{self.timestamp}.yaml", self.ext_cfg, self.save_cfg)
@@ -1415,19 +1478,20 @@ class R:
     def _save_resonators(self, com_to, timestamps, sweep):
 
         found_nums = []
+        found_freqs = []
         save_files = []
         for com, timestamp in zip(com_to, timestamps):
             # Parse com information
             ind = self.drone_list.index(com)
             bid, drid = com.split('.')
 
-            # Define directory to temporary store resonator files
+            # Define directory to store resonator files
             res_dir = self.config_dirs[ind] / 'res'
             fname = f"{self.io_cfg['save_file_names'][f'{sweep}_sweep']}_res_{self.timestamp}.npy"
 
             try:
-                drone_id = f"*{bid}_{drid}*"
-                res_file = rfsoc_io.get_most_recent_file(self.tmp_data_dir, file_identifier = self.io_cfg["board_file_names"][f'{sweep}']['res'] + drone_id, output = self.output, time_past = time.time() - float(self.timestamp))
+                drone_id = f"_{bid}_{drid}*"
+                res_file = rfsoc_io.get_most_recent_file(self.tmp_data_dir, file_identifier = self.io_cfg["board_file_names"][f'{sweep}']['res'] + drone_id, output = self.output, time_past = time.time() - float(self.timestamp) + 30)
                 res_path = rfsoc_io.get_array(res_file, res_dir / fname, action = 'mv', load = False, output = self.output)
                 if res_path is None: raise FileNotFoundError
             except FileNotFoundError:
@@ -1437,17 +1501,18 @@ class R:
 
                 with rfsoc_io.get_connection(bip, ssh_key, output = self.output) as c:
                     # Get file with found resonators
-                    res_file = rfsoc_io.get_most_recent_file_board(c, path, file_identifier = self.io_cfg["board_file_names"][f'{sweep}']['res'], output = self.output, time_past = time.time() - float(self.timestamp))
+                    res_file = rfsoc_io.get_most_recent_file_board(c, path, file_identifier = self.io_cfg["board_file_names"][f'{sweep}']['res'], output = self.output, time_past = time.time() - float(self.timestamp) + 30)
                     res_path = rfsoc_io.get_array_board(c, bip, ssh_key, res_file, res_dir / fname, load = False, output = self.output)
 
             # Save resonator frequncies and number of found resonators to list
             try:
-                found_freqs = np.load(res_dir / fname, mmap_mode='r')
-                found_num = len(found_freqs)
+                found_freq = np.load(res_dir / fname, mmap_mode='r')
+                found_num = len(found_freq)
             except:
                 rfsoc_io.send_msg('ERROR', f"Failed to retrieve found resonators file!", self.output)
                 found_num = None
             found_nums.append(found_num)
+            found_freqs.append(found_freq)
 
             rfsoc_io.send_msg('INFO', f"Found {found_num} detectors for drone {com}!", self.output)
 
@@ -1631,7 +1696,7 @@ class R:
             tone_freqs  (float | list of float | str) : Custom tone frequencies
             tone_powers (float | list of float | str) : Custom tone powers
             tone_phis   (float | list of float | str) : Custom tone phases
-        Returns:
+        Returns:s
             tone_freqs  (list of float) : Comb frequencies used in written comb
             tone_powers (list of float) : Comb tone powers used in written comb
             tone_phis   (list of float) : Comb phases used in written comb
@@ -1641,15 +1706,15 @@ class R:
 
         def _check_comb_type(key, value):
             # Check if the tone frequencies are within the bandwidth of the RFSoC
+            if len(value) > 1024: value = value[:1024]
             if key == 'tone_freqs' and np.max(np.abs(np.array(value) - self.drone_cfg[ind]['tones']['NCLO']*1e6))  > self.drone_cfg[ind]['tones']['full_bandwidth']*1e6/2:
                 rfsoc_io.send_msg('WARNING', f"{value} contains frequencies outside of the RFSoC bandwidth. Not writing {key} custom comb!")
                 return None
-
             return value
 
-        def _reset_comb(comb_dict):
+        def _reset_comb(ip, ssh_key, comb_dict):
             for key, value in comb_dict.items():
-                rfsoc_io.save_array_board(c, value['path'], np.array(value['comb']).tolist())
+                rfsoc_io.save_array_board(ip, ssh_key, value['path'], utils.arr_to_list(value['comb']), self.tmp_dir)
 
             # Return unmodified comb
             return comb_dict['tone_freqs']['comb'], comb_dict['tone_powers']['comb'], comb_dict['tone_phis']['comb']
@@ -1662,6 +1727,11 @@ class R:
             x.real, x.imag = x.real.astype("int16"), x.imag.astype("int16")
             return np.max(np.abs(x.real + 1j*x.imag))
 
+        def _write_new_comb(ip, ssh_key, comb_dict, key, comb):
+            comb_dict[key]['num_tones'] = len(comb)
+            rfsoc_io.save_array_board(ip, ssh_key, comb_dict[key]['path'], utils.arr_to_list(comb), self.tmp_dir)
+            comb_dict[key]['new_comb'] = comb
+            return comb_dict
 
         ind = self.drone_list.index(com)
         bid, drid = com.split('.')
@@ -1674,21 +1744,29 @@ class R:
 
         # Evaluate passed key word arguments
         # ----------------------------------
+        connection = None
+        for key, value in kwargs.items():
+            if key == 'connection':
+                connection = value
 
+        if connection is None:  connection = rfsoc_io.get_connection(bip, ssh_key, output = self.output)
         # Open connection to RFSoC board
-        with rfsoc_io.get_connection(bip, ssh_key, output = self.output) as c:
+        with connection as c:
             # Get current comb and paths to custom comb files
             # -----------------------------------------------
             freq_comb, amp_comb, phi_comb = self._get_curr_comb(com, c = c)
+            if freq_comb[0] < 0: freq_comb = np.array(freq_comb) + self.drone_cfg[ind]['tones']['NCLO']*1e6
 
             freq_path = rfsoc_io.get_most_recent_file_board(c, custom_comb_dir, file_identifier = self.io_cfg["board_file_names"]['targ']["comb_freq"], output = self.output, time_past=np.inf)
             amp_path  = rfsoc_io.get_most_recent_file_board(c, custom_comb_dir, file_identifier = self.io_cfg["board_file_names"]['targ']["comb_amp"], output = self.output, time_past=np.inf)
             phi_path  = rfsoc_io.get_most_recent_file_board(c, custom_comb_dir, file_identifier = self.io_cfg["board_file_names"]['targ']["comb_phi"], output = self.output, time_past=np.inf)
 
             # Combine comb, paths, and num_tones into single dictionary
-            comb_dict = {"tone_freqs": {"path": freq_path, "comb": freq_comb, "num_tones": None},
-                         "tone_powers": {"path": amp_path, "comb": amp_comb, "num_tones": None},
-                         "tone_phis": {"path": phi_path, "comb": phi_comb, "num_tones": None}}
+            comb_dict = {"tone_freqs": {"path": freq_path, "comb": freq_comb, "new_comb": None, "num_tones": None},
+                         "tone_powers": {"path": amp_path, "comb": amp_comb, "new_comb": None, "num_tones": None},
+                         "tone_phis": {"path": phi_path, "comb": phi_comb, "new_comb": None, "num_tones": None}}
+
+            start_time = time.time()
 
             # Parse comb values
             # -----------------
@@ -1702,7 +1780,7 @@ class R:
                     curr_comb = comb_dict[key]["comb"]
                     rfsoc_io.send_msg('DEBUG', f'Modifying {key} for drone {com}!', self.output)
                 except:
-                    comb_dict[key]['num_tones'] = len(curr_comb)
+                    comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])
                     continue
 
                 # Check if value is a string or file path
@@ -1719,7 +1797,7 @@ class R:
                     # If value is a file path, ensure that it is a valid path
                     if not value.exists():
                         rfsoc_io.send_msg('WARNING', f"{value} is not a valid {key} custom comb file path for drone {com}!", self.output)
-                        comb_dict[key]['num_tones'] = len(curr_comb)
+                        comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])
                         continue
 
                     value = np.load(value)
@@ -1729,7 +1807,7 @@ class R:
                         # Assume an array is passed and check if its non-empty
                         if len(value) == 0:
                             rfsoc_io.send_msg('WARNING', f"'{value}' is an empty array, not writing to {key} custom comb file for drone {com}!", self.output)
-                            comb_dict[key]['num_tones'] = len(curr_comb)
+                            comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])
                             continue
                     except TypeError:
                         if isinstance(value, (int, float)): # Assume a number is passed and use the same number for all tones
@@ -1738,17 +1816,17 @@ class R:
                         else:
                             # Invalid value passed; ignore and move on to next comb
                             rfsoc_io.send_msg('WARNING', f"{value} is not a valid file path, array, or number! Not writing {key} custom comb file for drone {com}.")
-                            comb_dict[key]['num_tones'] = len(curr_comb)
+                            comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])
                             continue
 
                 value = _check_comb_type(key, value)
                 if value is None:
-                    comb_dict[key]['num_tones'] = len(curr_comb)
+                    comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])
                     continue
 
                 # Copy the array with custom parameters onto the rfsoc board
-                rfsoc_io.save_array_board(c, path, np.array(value).tolist())
-                comb_dict[key]['num_tones'] = len(value)
+                comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, value)
+            print('arg_parse_time', time.time() - start_time)
 
             # If num_tones entry is None, comb was not modified and the number of tones is that of the current comb
             # -----------------------------------------------------------------------------------------------------
@@ -1767,7 +1845,7 @@ class R:
                 elif num_tones != tone_num:
                     # Resetting back to current comb
                     rfsoc_io.send_msg('ERROR', f"The number of tones in the frequeny, power, and phase combs do not match. Reverting back to current comb!")
-                    return _reset_comb(comb_dict)
+                    return _reset_comb(bip, ssh_key, comb_dict)
 
 
             # Write comb for num_tone entries that are floats (only single number was passed)
@@ -1781,65 +1859,66 @@ class R:
                     comb_val = comb_val * np.ones(tone_num)
                     comb_val = _check_comb_type(key, comb_val)
                     if comb_val is not None:
-                        rfsoc_io.save_array_board(c, value['path'], np.array(comb_val).tolist())
-                        comb_dict[key]['num_tones'] = len(comb_val)
+                        comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_val)
                     else:
                         # Resetting back to current comb
                         rfsoc_io.send_msg('ERROR', f"The comb failed a check causing the number of tones in the frequeny, power, and phase combs to not match. Reverting back to current comb!")
-                        return _reset_comb(comb_dict)
+                        return _reset_comb(bip, ssh_key, comb_dict)
 
             # Generate phi comb - As done in primecam_readout
             # -----------------------------------------------
 
             # Define maximum RFSoC DAC power
             max_power = self.io_cfg['boards'][f'b{bid}']['max_power']
-            tone_freqs = rfsoc_io.get_array_board(c, bip, ssh_key, freq_path, self.tmp_dir, output = self.output)
+            tone_freqs = comb_dict['tone_freqs']['new_comb']
             tone_freqs_bb = np.array(tone_freqs) - self.drone_cfg[ind]['tones']['NCLO']*1e6
 
             # Determine if tone powers need to be generated
             # ---------------------------------------------
-            tone_powers = np.ones(tone_num)*comb_max/np.sqrt(tone_num) if gen_amps else rfsoc_io.get_array_board(c, bip, ssh_key, amp_path, self.tmp_dir, output = self.output)
+            tone_powers = np.ones(tone_num)*max_power/np.sqrt(tone_num) if gen_amps else comb_dict['tone_powers']['new_comb']
 
             # Generate tone phis and tone powers
             # ----------------------------------
             # Generate phis (as done in primecam_readout tones.py genAmpsAndPhis)
             if gen_phis:
                 best_peak = float('inf')  
-                best_phis = None
+                tone_phis = None
                 for _ in range(gen_attempts):
-                    tone_phis = np.random.uniform(-np.pi, np.pi, tone_num)
-                    comb_max = _comb_peak(tone_freqs_bb, tone_powers, tone_phis)
+                    phis = np.random.uniform(-np.pi, np.pi, tone_num)
+                    comb_max = _comb_peak(tone_freqs_bb, tone_powers, phis)
                     if comb_max < best_peak:
                         best_peak = comb_max
-                        best_phis = tone_phis
+                        tone_phis = phis
 
                 # Save phi comb and power comb (if necessary)
-                rfsoc_io.save_array_board(c, phi_path, np.array(best_phis).tolist())
+                rfsoc_io.save_array_board(bip, ssh_key, phi_path, utils.arr_to_list(tone_phis), self.tmp_dir)
             else:
-                tone_phis = rfsoc_io.get_array_board(c, bip, ssh_key, phi_path, self.tmp_dir, output = self.output)
+                tone_phis = comb_dict['tone_phis']['new_comb']
                 best_peak = _comb_peak(tone_freqs_bb, tone_powers, tone_phis)
 
             # Check if max comb power is less than max DAC power. Rescale power if specified
             if best_peak > max_power and rescale_power:
-                rfsoc_io.send_msg('DEBUG', f"The custom comb has points(s) with output power {comb_max} which exceeds the maximum DAC power of {max_power} when factor is {factor}! Rescaling to lower tone power.", self.output)
-                tone_powers = tone_powers*(max_power/best_peak)
+                rfsoc_io.send_msg('DEBUG', f"The custom comb has points(s) with output power {comb_max} which exceeds the maximum DAC power of {max_power}! Rescaling to lower tone power.", self.output)
+                tone_powers *= max_power/best_peak
             
-            if gen_amps or rescale_power: rfsoc_io.save_array_board(c, amp_path, np.array(tone_powers).tolist())
+            if gen_amps or rescale_power: rfsoc_io.save_array_board(bip, ssh_key, amp_path, utils.arr_to_list(tone_powers), self.tmp_dir)
             rfsoc_io.send_msg('INFO', f"Saved custom comb for drone {com}!", self.output)
 
+            start_time = time.time()
             # Edit comb saved in drone config files
             # -------------------------------------
             # Frequency comb
-            self._edit_config(self.drone_cfg[ind], 'tone_freqs', tone_freqs)
+            self._edit_config(self.drone_cfg[ind], 'tone_freqs', utils.arr_to_list(tone_freqs))
 
             # Amplitude comb
-            self._edit_config(self.drone_cfg[ind], 'tone_powers', tone_powers)
+            self._edit_config(self.drone_cfg[ind], 'tone_powers', utils.arr_to_list(tone_powers))
 
             # Phase comb
-            self._edit_config(self.drone_cfg[ind], 'tone_phis', tone_phis)
+            self._edit_config(self.drone_cfg[ind], 'tone_phis', utils.arr_to_list(tone_phis))
 
             # Number of tones
-            self._edit_config(self.drone_cfg[ind], 'num_tones', tone_num)
+            self._edit_config(self.drone_cfg[ind], 'num_tones', int(tone_num))
+            print('config_time', time.time() - start_time)
         return tone_freqs, tone_powers, tone_phis
 
     def _get_curr_comb(self, com, **kwargs):
@@ -1871,7 +1950,7 @@ class R:
 
         names = ["comb_freq", "comb_amp", "comb_phi"]
         try:
-            drone_id = f"*{bid}_{drid}*"
+            drone_id = f"_{bid}_{drid}*"
             # Get most recent comb file paths
             files = [rfsoc_io.get_most_recent_file(self.tmp_data_dir, file_identifier = [self.io_cfg["board_file_names"]['vna'][name] + drone_id, self.io_cfg["board_file_names"]['targ'][name] + drone_id], output=self.output, time_past = np.inf) for name in names]
             
@@ -2050,8 +2129,9 @@ class R:
 
         rtn_list = []
         for com_to in com_arrs:
-            rfsoc_io.send_msg('INFO', f'Running {s.func_name(name)} for drones {com_to}!')
-            rtn_list.append(func(str(com_to), *args, **kwargs))
+            if len(com_to) > 0:
+                rfsoc_io.send_msg('INFO', f'Running {s.func_name(name)} for drones {com_to}!')
+                rtn_list.append(func(str(com_to), *args, **kwargs))
 
         return rtn_list
 
@@ -2061,3 +2141,4 @@ class R:
 
     def close(self):
         self.update_measurement(name = None, desc = '')
+        self.running = False

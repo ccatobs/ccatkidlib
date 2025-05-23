@@ -3,6 +3,7 @@ from pathlib import Path
 import gc
 import sys
 import numpy as np
+import pandas as pd
 
 from bokeh.layouts import layout
 from bokeh.io import show
@@ -19,16 +20,32 @@ class Target(Sweep):
     Subclass of Sweep class.  
     '''
 
-    def __init__(self, com_to, res_num = None, analysis_cfg=str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to, res_num = -1, analysis_cfg=str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
         kwargs['data_type'] = 'targ'
         super().__init__(com_to, analysis_cfg, **kwargs)
-        if isinstance(res_num, int): res_num = [res_num]
+        if isinstance(res_num, int) and res_num > 0: res_num = [res_num]
         self.res_num = res_num
     
+    #@method_timer
+    def transform(self, name, func, res_num = None):
+        '''
+        Method for adding data transformed by func to self.data pandas DataFrame.
+        '''
+
+        if res_num is None and self.res_num == -1:
+            data = super().transform_sweep(name, func, res_num)
+        else:
+            data = super().transform(name, func, res_num)
+        return data
+
+    def resonator(self, res_num = None):
+        if not self.res_num == -1:
+            return super().resonator(res_num = res_num)
+        else:
+            return None
     ####################
     # Analysis Methods #
     ####################
-
 
     ####################
     # Plotting Methods #
@@ -116,10 +133,11 @@ class Target(Sweep):
     def _load_sweep(self):
         data_dict = super()._load_sweep() # Call the Sweep _load_sweep method
 
+        if self.res_num is None: self.res_num = range(self.drone_cfg['tones']['num_tones'])
         res_num = self.res_num
-        num_res = len(res_num)
 
-        if res_num is not None: # Run if a specific resonator(s) is specified
+        if not res_num == -1: # Run if a specific resonator(s) is specified
+            num_res = len(res_num)
             data = [data_dict['fs']] + [data_dict['I']] + [data_dict['Q']]
             try:
                 sweep_steps = self.drone_cfg['tones']['sweep_steps']
@@ -140,8 +158,8 @@ class Target(Sweep):
             data_dict = {}
             for res, f, I, Q in zip(res_num, fs, Is, Qs):
                 data_dict[('fs', f'R_{res:04d}')] = f
-                data_dict[('I', f'R_{res:04d}')]  = I
-                data_dict[('Q', f'R_{res:04d}')]  = Q
+                data_dict[('I',  f'R_{res:04d}')]  = I
+                data_dict[('Q',  f'R_{res:04d}')]  = Q
         return data_dict
 
     #################
