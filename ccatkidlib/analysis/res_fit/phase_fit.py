@@ -1,4 +1,3 @@
-
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats as stats
@@ -8,7 +7,17 @@ from ccatkidlib.analysis.res_fit.phase_utils.utils import *
 
 from ccatkidlib.analysis.res_fit.phase_utils.fit_single_det import ResonanceFitterSingleTone as fit
 
-def fit_single_res(fs, z, numspan=1, **kwargs):
+
+"""
+Development Log:
+
+8.29 2025:
+        Fixed noisy fit model in ccatkidlib
+        Removed flags and turned into 0 good 1 error
+
+"""
+
+def fit_single_res(fs, z, numspan=2, **kwargs):
 
     tau = findcabledelay(fs/1e9, z)
     #print('tau',tau)
@@ -25,7 +34,7 @@ def fit_single_res(fs, z, numspan=1, **kwargs):
 
 #     fig, ax = plt.subplots()
 
-def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_model=False,  **kwargs):
+def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, keep_model=False,  **kwargs):
     '''
     fits target sweep using data from targ_file. cfg_file is the config of that target sweep.
     returns a dictionary of numpy arrays for fitted values. Also filters some of the
@@ -58,7 +67,7 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
             'f0':     np.array,
             'chi_sq': np.array,
             'flag':   np.array, An array of flags corresponding to each fit
-                               0 is good fit; 1 is bad fit; 2 is failed fit; 3 is code error
+                                0 is fit successful, 1 is fit failed
             'fs':     np.array, 
             'fit_z':  np.array, will return if keep_model is True
             'data_z': np.array,
@@ -113,7 +122,7 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
             models['fs'].append(f)
             models['data_z'].append(z)
 
-            nonlinear_result = fit_single_res(f,z,numspan=span,**kwargs)
+            nonlinear_result = fit_single_res(f,z, **kwargs)
             #print('test', np.shape(nonlinear_result['fit_result2'])) # fit_result by comparison have different sizes
             if keep_model: 
                 models['fit_z'].append(nonlinear_result['ang_to_z'])
@@ -137,7 +146,7 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
 
             for k in ret.keys():
                 ret[k].append(None)
-            ret['flag'][-1] = 3
+            ret['flag'][-1] = 1
             
     for k in models.keys():
         ret[k] = models[k]
@@ -155,14 +164,14 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
     
     # print(len(np.argwhere(ret['flag'] == 2)))
     
-    for i, (Q, Qi, Qc) in enumerate(zip(ret['Q'], ret['Qi'], ret['Qc'])):
-        if Q is not None and (Q < 10 and Qi < 10 and Qc < 10): ret['flag'][i] = 2
+    for i, f in enumerate(ret['flag']):
+        if f!= 1: ret['flag'][i] = 0
+
+    
 
     total = len(ret['Q']) 
     good = len(np.argwhere(ret['flag'] == 0))
-    bad = len(np.argwhere(ret['flag'] == 1))
-    fail = len(np.argwhere(ret['flag'] == 2))
-    err = len(np.argwhere(ret['flag'] == 3))
+    fail = len(np.argwhere(ret['flag'] == 1))
 
         # for i, q in enumerate(ret['alpha']):
         #         if q < 0:  
@@ -170,11 +179,8 @@ def fit_target_sweep(targ_file=None, cfg_file=None, verb=False, span=1, keep_mod
             
 
     if verb: 
-        print(f"Successful Fit of {good + bad} / {total} detectors")
-        print(f"Good Fit of {good} / {total} detectors")
-        print(f"Bad Fit of {bad} / {total} detectors")
-        print(f"Failed Fit of {fail} / {total} detectors")
-        print(f"Error Fit of {err} / {total} detectors")
+        print(f"Successful Fit of {good} / {total} detectors")
+        print(f"Error Fit of {fail} / {total} detectors")
     
     return ret
 

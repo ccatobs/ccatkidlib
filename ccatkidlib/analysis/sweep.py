@@ -1,6 +1,9 @@
+from .data import Data
 from pathlib import Path
 import sys
 import numpy as np
+import gc
+import pandas as pd
 
 # Bokeh Imports
 from bokeh.models import CheckboxButtonGroup, CustomJS, ColumnDataSource
@@ -15,79 +18,18 @@ import ccatkidlib.analysis.pair as pair
 import ccatkidlib.analysis.plot_utils as putils
 
 
-class Sweep:
+class Sweep(Data):
     '''
     Class representing a sweep over a range of frequencies.
     '''
 
     def __init__(self, com_to, analysis_cfg = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
-        # Define sweep attributes
-        # -----------------------
-        self.bid, self.drid = com_to.split('.') # Baard and drone sweep was taken with
-
-        # Sweep frequency and complex S21 data
-        self.freqs = None
-        self.s21z  = None
+        super().__init__(com_to, analysis_cfg, **kwargs)
 
         self.res_freqs = None
         self.res_s21z  = None
-
-        self.sweep_path = None # File path of sweep
-        self.analysis_cfg, self.plot_cfg = rfsoc_io.load_config(analysis_cfg) # File path of analysis config
-
-        # Parse key word arguments
-        for key, value in kwargs.items():
-            if key == 'sweep_path':
-                self.sweep_path = value
-            elif key == 'freqs':
-                self.freqs = value
-            elif key == 's21z':
-                self.s21z = value
-
-        # If full sweep path is not provided, find sweep data file based on timestamp and (optional) file path parts
-        # ----------------------------------------------------------------------------------------------------------
-        if self.sweep_path is None:
-            # Find sweep data file using 
-            data_type  = None
-            timestamp  = None
-
-            # Parse sweep data file part key word arguments
-            # ---------------------------------------------
-            root_data_dir = self.analysis_cfg['data_load']['root_data_dir']
-            data_dir = '**'
-            date = '**'
-            sess_id = '**'
-
-            for key, value in kwargs.items():
-                if key == 'data_type':
-                    data_type = value
-                elif key == 'timestamp':
-                    timestamp = value
-                elif key == 'root_data_dir':
-                    root_data_dir = value
-                elif key == 'data_dir':
-                    data_dir = value
-                elif key == 'date':
-                    date = value
-                elif key == 'sess_id':
-                    sess_id = value
-
-            # Ensure that timestamp and type of sweep are provided to uniquely find sweep data file
-            assert (timestamp is not None and data_type is not None), "Need to provide either the full path to the sweep or the sweep timestamp and type ('vna' or 'targ')!"
-            
-            # Try to find sweep data file using given information
-            try:
-                self.sweep_path = pair.get_data_file(com_to, timestamp, data_dir = data_dir, date = date, sess_id = sess_id, data_type = data_type, root_data_dir=root_data_dir)[0]
-                self.timestamp = timestamp
-            except:
-                raise FileNotFoundError(f'Could not find {data_type} file for board {self.bid}, drone {self.drid} with timestamp {timestamp}! Check that all optional file path segments are correct!')
-        else:
-            self.timestamp = pair.get_timestamp(self.sweep_path)
-        # Get io, ext, and drone configs associated with the sweep data file
-        self.sweep_configs = pair.get_config(self.sweep_path, all_cfg=False)
-        self.io_cfg = None
-        self.ext_cfg = None
-        self.drone_cfg = None
+        
+        self.data_path = self.data_path[0]
 
     ####################
     # Plotting Methods #
@@ -326,34 +268,50 @@ class Sweep:
         return res_s21z
 
     def _load_sweep(self):
-        freqs, s21z = np.load(self.sweep_path, mmap_mode='r')
-        return np.real(freqs), s21z        
+        '''
+        Load VNA/target sweep file
+        '''
+        data = {'fs': None, 'I': None, 'Q': None}
+        fs, s21z = np.load(self.data_path, mmap_mode='r')
+        I, Q = s21z.real, s21z.imag
+
+        data['fs'], data['I'], data['Q'] = fs.real, I, Q
+
+        return data
     
-    def _load_cfg(self, id):
-        cfg = None
-        for i, config_path in enumerate(self.sweep_configs):
-            if id in str(config_path): 
-                cfg = rfsoc_io.load_config(config_path)
-                self.sweep_configs.pop(i)
-                break
-        return cfg
+    #######################
+    # Data Getter Methods #
+    #######################
+
+    #@method_timer
+    def transform_sweep(self, name, func, res_num = None):
+        '''
+        Method for adding data transformed by func to self.data pandas DataFrame.
+        '''
+        if not name in self.data.columns:
+            transformed_data = pd.DataFrame(func(None, None))
+            transformed_data.columns = [name]
+            self.data = pd.concat([self.data, transformed_data], axis=1).sort_index(axis=1)
+        return self.data[name]
+
+    def fs(self):
+        return self.data['fs']
 
     #################
     # Magic Methods #
     #################
 
     def __getattribute__(self, name):
-        if name == 'freqs' or name == 's21z':
-            if super().__getattribute__("freqs")  is None: self.freqs, self.s21z = self._load_sweep()
+        if name == 'data':
+            if super().__getattribute__("data") is None:
+                self.data = pd.DataFrame(self._load_sweep()).sort_index(axis=1, level=0)
+                num_levels = len(super().__getattribute__("data").columns.names)
+                self.data.columns.names = ['Data'] if num_levels == 1 else ['Data', 'Resonators']
+                self.data.index.names = ['Sample']
+            gc.collect()
         elif name == 'res_freqs':
             if super().__getattribute__("res_freqs") is None: self.res_freqs = self._load_res_freqs()
         elif name == 'res_s21z':
             if super().__getattribute__("res_s21z") is None: self.res_s21z = self._get_res_s21z()
-        elif name == 'io_cfg':
-            if super().__getattribute__("io_cfg") is None: self.io_cfg = self._load_cfg('_io')
-        elif name == 'ext_cfg':
-            if super().__getattribute__("ext_cfg") is None: self.ext_cfg = self._load_cfg('_ext')
-        elif name == 'drone_cfg':
-            if super().__getattribute__("drone_cfg") is None: self.drone_cfg = self._load_cfg('_drone')
 
         return super().__getattribute__(name)

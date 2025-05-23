@@ -1,93 +1,339 @@
+from .data import Data
+
 from pathlib import Path
+import gc
+
+import so3g
+from spt3g import core
+import numpy as np
+import pandas as pd
+import multiprocessing as mp
+from multiprocessing import Pool, shared_memory, Lock
+from functools import partial
+import pickle
+import time
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
 import ccatkidlib.analysis.plot_utils as putils
+from ccatkidlib.analysis.mp_utils import init_worker, clear_shared_mem, frame_worker
+from ccatkidlib.utils import method_timer
 
-class Timestream():
+class Timestream(Data):
     '''
     Class representing a timestream taken with a Radio Frequency System on a Chip
     '''
 
-    def __init__(self, com_to, res_num = None, analysis_cfg = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
-        # Define timestream attributes
-        # -----------------------
-        self.bid, self.drid = com_to.split('.') # Baard and drone timestream was taken with
+    def __init__(self, com_to, res_num = None, start = 0, end = -1, analysis_cfg = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+        '''
+        Constructor for Timestream. 
 
-        self.res_num = res_num # Resonators timestream correspond to
+        Parameters:
+            com_to (str): Which board and drone were used to take the timestream (in form 'bid.drid')
+            res_num (list): List of resonators to use
+            start (float): Start time in seconds (0 seconds is beginning of timestream) 
+            end (float): End time in seconds (relative to start time, -1 for no end time)
+            analysis_cfg (str): File path of analysis config 
 
-        self.timestream_path = None
-        self.analysis_cfg, self.plot_cfg = rfsoc_io.load_cfg(analysis_cfg)
+        '''
+        kwargs['data_type'] = 'timestream'
+        super().__init__(com_to, analysis_cfg, **kwargs)
+        
 
+        self.mp = True
+        self.processes = None
+        self.chunk_size = None
         for key, value in kwargs.items():
-            if key == 'timestream_path':
-                self.timestream_path = value
+            if key == 'mp':
+                self.mp = value
+            elif key == 'processes':
+                self.processes = value
+            elif key == 'chunk_size':
+                self.chunk_size = value
 
-        if self.timestream_path is None:
-            # Find timstream data file 
-            timestamp = None
-            data_type = 'timestream'
 
-            # Parse sweep data file part key word arguments
-            # ---------------------------------------------
-            root_data_dir = self.analysis_cfg['data_load']['root_data_dir']
-            data_dir = '**'
-            date = '**'
-            sess_id = '**'
+        # Define array of resonator numbers
+        # ---------------------------------
+        if isinstance(res_num, int): res_num = [res_num]
+        self.res_num = res_num
 
-            for key, value in kwargs.items():
-                if key == 'timestamp':
-                    timestamp = value
-                elif key == 'root_data_dir':
-                    root_data_dir = value
-                elif key == 'data_dir':
-                    data_dir = value
-                elif key == 'date':
-                    date = value
-                elif key == 'sess_id':
-                    sess_id = value
+        # Define timestream start and end times
+        # -------------------------------------
+        self.start = start
+        self.end = np.inf if end < 0 else end
 
-            # Ensure that timestamp and type of sweep are provided to uniquely find sweep data file
-            assert (timestamp is not None), "Need to provide either the full path to the timestream or the timestream timestamp!"
-            
-            # Try to find sweep data file using given information
-            try:
-                self.timstream_path = pair.get_data_file(com_to, timestamp, data_dir = data_dir, date = date, sess_id = sess_id, data_type = data_type, root_data_dir=root_data_dir)[0]
-                self.timestamp = timestamp
-            except:
-                raise FileNotFoundError(f'Could not find {data_type} file for board {self.bid}, drone {self.drid} with timestamp {timestamp}! Check that all optional file path segments are correct!')
+        # End time should be larger than start time
+        assert self.end - self.start > 0, "End time must be greater than start time!"
+
+        # Create packet count attribute
+        # -----------------------------
+        self.packet_counts = []
+
+    #########################
+    # Data Plotting Methods #
+    #########################
+
+
+    ########################
+    # Data Loading Methods #
+    ########################
+
+    @classmethod
+    def load_frame(cls, *args, **kwargs):
+        if args and isinstance(args[0], cls):
+            return args[0]._load_frame(*args[1:], **kwargs)
+    
+    def _load_frame(self, frame, start_time, time_precision, mask = None):
+        if 'packet_counts' in frame: self.packet_counts += list(frame['packet_counts'])
+
+        ts = []
+        g3_data = frame['data']
+        data = g3_data.data
+
+        if mask is None:
+            ts = np.array(g3_data.times)/time_precision
+
+            t_diff = np.array(ts - start_time)
+            mask = np.where((t_diff >= self.start) & (t_diff <= self.end), True, False)
+
+        inds = 2*np.array(self.res_num)
+
+        I = data[list(inds)][:, mask]
+        Q = data[list(inds+1)][:, mask]
+
+        if not len(ts) == 0:
+            return ts[mask], I, Q
         else:
-            self.timestamp = pair.get_timestamp(self.sweep_path)
-        # Get io, ext, and drone configs associated with the sweep data file
-        self.sweep_configs = pair.get_config(self.sweep_path, all_cfg=False)
-        self.io_cfg = None
-        self.ext_cfg = None
-        self.drone_cfg = None
+            return ts, I, Q
+ 
+    def _load_npy(self, data, start_time, time_precision):
+        '''
+        Load timestream I, Q data from npy file generated by python timestream
+        '''
 
-    def _load_timestream():
-        return
+        start_ind = 0
 
+        # If data has two more rows than the number of tones than both packet counts and timestamps were recorded
+        if len(data) % 2 == 0: 
+            self.packet_counts += list(data[0])
+            start_ind += 1
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+        ts = data[start_ind].real/time_precision
+        t_diff = np.array(ts - start_time)
+        in_time = np.where((t_diff >= self.start) & (t_diff <= self.end), True, False)
 
+        inds = 2*np.array(self.res_num) + start_ind + 1
 
+        I = data[list(inds)][:, in_time]
+        Q = data[list(inds+1)][:, in_time]
+
+        return ts[in_time], I, Q
+
+    @method_timer
+    def _load_timestream(self, time_precision = None):
+        '''
+        Load timestream I, Q data.
+        '''
+    
+        ftype = self.data_path[0].suffix
+        data = {}
+
+        # Load g3 timestreams
+        # -------------------
+        if ftype == '.g3' or ftype == '.txt':
+            ts, Is, Qs = self._load_g3_timestream(ftype, time_precision)
+        # Load python timestreams (.npy or .npz)
+        # --------------------------------------
+        elif ftype == '.npz' or ftype == '.npy':
+            ts, Is, Qs = self._load_npy_timestream(ftype, time_precision)
+        else:
+            print(f'Invalid timestream file type: "{ftype}"!')
+            return {}
+        
+        ts, Is, Qs = np.array(ts), np.array(Is, dtype=np.float64), np.array(Qs, dtype=np.float64)
+        data[('ts', 'ts')] = ts
+        for res, I, Q in zip(self.res_num, Is, Qs):
+            data[('I',f'R_{res:04d}')]  = I
+            data[('Q',f'R_{res:04d}')]  = Q
+        return data
+
+    def _load_npy_timestream(self, ftype, time_precision):
+        '''
+        Load timestream data from .npz or .npy file
+        '''
+        ts, Is, Qs = [], None, None
+        
+        if time_precision == None: time_precision = 10e4
+        tstamp_ind = 0
+        start_time = -1
+
+        # Do an initial iteration through the timestream data without fully loading into memory to determine which files lie within the specified time span
+        # -------------------------------------------------------------------------------------------------------------------------------------------------
+
+        data_arr = []
+        for data_path in self.data_path:
+            npy_file = np.load(data_path, mmap_mode='r').values() if ftype == '.npz' else [np.load(data_path, mmap_mode='r')]
+        
+            for npy_data in npy_file:
+                if start_time == -1:
+                    if len(npy_data) % 2 == 0: tstamp_ind += 1
+                    start_time = npy_data[tstamp_ind][0]/time_precision
+                if npy_data[tstamp_ind][0]/time_precision - start_time <= self.end:
+                    if npy_data[tstamp_ind][-1]/time_precision - start_time >= self.start: data_arr.append(npy_data)
+                else:
+                    break
+            else:
+                continue
+            break
+
+        # Load the data within the specified timespan
+        # -------------------------------------------
+        for npy_data in data_arr:
+            t, I, Q = self._load_npy(npy_data, start_time, time_precision)
+            ts = np.append(ts, t)
+            Is = np.append(Is, I, axis=1) if Is is not None else I
+            Qs = np.append(Qs, Q, axis=1) if Qs is not None else Q
+        
+        return ts, Is, Qs
+
+    def _load_g3_timestream(self, ftype, time_precision):
+        '''
+        Load g3 timestream data.
+        '''           
+
+        if time_precision == None: time_precision = 10e7
+        start_time = -1
+
+        g3_files = []
+        for data_path in self.data_path:
+            if ftype == '.txt':
+                with open(data_path, 'r') as file:
+                    g3_files += file.readlines()
+            else:
+                g3_files += [data_path]
+
+        # Do initial pass through of frames in G3 file without fully loading the data to:
+        # 1. Aggregate frames from different G3 files into one list
+        # 2. Filter out frames that do not contain timestream data
+        # 3. Get the number of tones
+        # 4. Filter out frames that are not within the specified time range and construct the array of times
+        # --------------------------------------------------------------------------------------------------
+        frames = []
+        masks = []
+        ts = []
+        for g3_file in g3_files:
+            g3_data = core.G3File(str(g3_file).strip())
+            
+            for frame in g3_data:
+                # Filter out frames that are not G3 Scan frames (those that contain the timestream data)
+                if frame.type == core.G3FrameType.Scan:
+                    # Determine the number of tones used for timestream
+                    if self.res_num is None:
+                        channel_count = frame['channel_count'] # Get number of tones directly from G3 frame
+                        num_tones = self.drone_cfg['tones']['num_tones'] # Get number of tones from timestream config file
+
+                        # Send warning if there is a mismatch in the number of tones (but continue execution using the number in the G3 frame)
+                        if not num_tones == channel_count: print('WARNING | There is a mismatch between the number of tones in the comb and the number of tones in the timestream packets!')
+                        self.res_num = range(channel_count)
+
+                    # Filter out frames that are not within specified time range
+                    times = np.array(frame['data'].times)/time_precision
+                    if start_time == -1:
+                        start_time = times[0]
+                    if times[0] - start_time <= self.end:
+                        if times[-1] - start_time >= self.start:
+                            t_diff = np.array(times - start_time)
+                            mask = np.where((t_diff >= self.start) & (t_diff <= self.end), True, False)
+                            frames.append(frame)
+                            masks.append(mask)
+                            ts = np.append(ts, times[mask])
+                    else:
+                        break
+            else:
+                continue
+            break
+
+        shape = (len(self.res_num), len(ts))
+
+        if self.mp:
+            nbytes = np.prod(shape) * np.dtype(np.int32).itemsize
+
+            # Close and unlink the I and Q shared memory blocks if they already exist (e.g. if the program crashed without cleaning them)
+            clear_shared_mem('I_mem')
+            clear_shared_mem('Q_mem')
+            clear_shared_mem('frames')
+            clear_shared_mem('masks')
+            
+            frames_pk = pickle.dumps(frames)
+            masks_pk = pickle.dumps(masks)
+
+            # Create shared memory blocks for storing the I and Q data arrays
+            I_mem = shared_memory.SharedMemory(name='I_mem', create=True, size=nbytes)
+            Q_mem = shared_memory.SharedMemory(name='Q_mem', create=True, size=nbytes)
+            frames_mem = shared_memory.SharedMemory(name='frames', create=True, size=len(frames_pk))
+            masks_mem = shared_memory.SharedMemory(name='masks', create=True, size=len(masks_pk))
+            
+            frames_mem.buf[:len(frames_pk)] = frames_pk
+            masks_mem.buf[:len(masks_pk)] = masks_pk
+
+            frames_info = (frames_mem.name, len(frames_pk))
+            masks_info = (masks_mem.name, len(masks_pk))
+            
+            I_name = I_mem.name
+            Q_name = Q_mem.name
+
+            args = [(i, self, shape, frames_info, masks_info, I_name, Q_name, start_time, time_precision) for i in range(len(frames))]
+
+            try:
+                lock = Lock()
+                if self.processes is None: self.processes=min([int(0.7*len(frames)) + 1, mp.cpu_count()])
+                if self.chunk_size is None: self.chunk_size = 1
+                start_time = time.time()
+                with Pool(processes=self.processes, initializer=init_worker, initargs=(lock,)) as pool:
+                    result = pool.starmap(frame_worker, args, self.chunk_size)          
+                Is = np.ndarray(shape, dtype=np.int32, buffer=I_mem.buf)
+                Qs = np.ndarray(shape, dtype=np.int32, buffer=Q_mem.buf) 
+                Is = np.array(Is[:])
+                Qs = np.array(Qs[:])
+            except Exception as e:
+                print(e)
+                Is = []
+                Qs = []
+            finally:
+                I_mem.close(), Q_mem.close(), frames_mem.close(), masks_mem.close()
+                I_mem.unlink(), Q_mem.unlink(), frames_mem.unlink(), masks_mem.unlink()
+        else:
+            Is, Qs = np.empty(shape, dtype=np.int32), np.empty(shape, dtype=np.int32)
+            curr_ind = 0
+            for i in range(len(frames)):
+                mask = masks[i]
+                t, I, Q = self.load_frame(self, frames[i], start_time, time_precision, mask = mask)
+
+                num_samps = int(np.sum(mask))
+                Is[:, curr_ind:num_samps + curr_ind] = I
+                Qs[:, curr_ind:num_samps + curr_ind] = Q
+                curr_ind += num_samps
+
+        return ts, Is, Qs
+          
+    #######################
+    # Data Getter Methods #
+    #######################
+
+    def ts(self):
+        return self.data['ts']['ts']
 
     #################
     # Magic Methods #
     #################
-
+ 
     def __getattribute__(self, name):
-        if name == 'freqs' or name == 's21z':
-            if super().__getattribute__("freqs")  is None: self.freqs, self.s21z = self._load_sweep()
-        elif name == 'res_freqs':
-            if super().__getattribute__("res_freqs") is None: self.res_freqs = self._load_res_freqs()
-        elif name == 'res_s21z':
-            if super().__getattribute__("res_s21z") is None: self.res_s21z = self._get_res_s21z()
-        elif name == 'io_cfg':
-            if super().__getattribute__("io_cfg") is None: self.io_cfg = self._load_cfg('_io_')
-        elif name == 'ext_cfg':
-            if super().__getattribute__("ext_cfg") is None: self.ext_cfg = self._load_cfg('_ext_')
-        elif name == 'drone_cfg':
-            if super().__getattribute__("drone_cfg") is None: self.drone_cfg = self._load_cfg('_drone_')
-
+        if name == 'data':
+            if super().__getattribute__("data") is None: 
+                self.data = pd.DataFrame(self._load_timestream()).sort_index(axis=1, level=0)
+                self.data.columns.names = ['Data', 'Resonators']
+                self.data.index.names = ['Sample']
+            gc.collect()
         return super().__getattribute__(name)

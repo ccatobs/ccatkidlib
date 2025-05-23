@@ -9,6 +9,13 @@ import time
 
 from ccatkidlib.analysis.res_fit.jordan_utils.fitting import fit_nonlinear_iq_multi, fit_nonlinear_iq, fit_nonlinear_iq_ss
 
+
+"""
+
+Note: Use fit_target_sweep_ss for most cases. Multiprocessing function is still under development
+
+"""
+
 def multiprocess_fit_ss(fs=None, dets=None,targ_file=None, cfg_file=None, keep_model=False, verb=False, num_cores=40):
     '''
     Uses multiprocessing to make jordan's code run faster for a target sweep

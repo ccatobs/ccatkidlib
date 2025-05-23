@@ -6,7 +6,7 @@ class Streamer:
     '''
     Class for capturing UDP packets of timestreams taken with a radio frequency system on a chip (RFSoC).
     '''
-    def __init__(self, udp_ip, udp_port):
+    def __init__(self, udp_ip, udp_port, timeout = 1):
         '''
         Initialize Streamer object by creating udp_ip, udp_port, and timestamp attributes.
         
@@ -26,7 +26,9 @@ class Streamer:
         # Bind socket to timestream UDP IP & port
         self.sock.bind((udp_ip, udp_port))
 
-    def capture_packets(self, N, buffer_size = 9000):
+        self.sock.settimeout(timeout)
+
+    def capture_packets(self, t_sec, buffer_size = 9000, q = None):
         '''
         Capture N UDP packets from the timestream. 
 
@@ -38,22 +40,39 @@ class Streamer:
             ips: Source IP of each captured packet
             ports: Source port of each captured packet
         '''
-        packs, addrs = [], []
+        sock = self.sock
 
-        self.timestamp = time.time()
-        # Capture N packets from socket
-        for i in range(int(N)):
-            # Get single packet data and source address
-            pack, addr = self.sock.recvfrom(buffer_size)
-            packs.append(bytearray(pack))
-            addrs.append(list(addr))
+        # Flush buffer of any old packets
+        for i in range(50):
+            sock.recvfrom(buffer_size)
 
-        addrs = np.array(addrs)
-        ips = addrs[:, 0]
-        ports = addrs[:, 1]
-        return packs, ips, ports
+        timestamp = time.time()
 
-    def parse_packets(self, packets):
+        # Capture t_seconds seconds of packets from socket
+        curr_time = time.time()
+        if q is not None:
+            while True:
+                q.put_nowait(sock.recvfrom(buffer_size))
+        else:
+            packet_data = []
+            for i in range(t_sec):
+                packet_data.append(sock.recvfrom(buffer_size))
+            
+            #while curr_time - timestamp < t_sec:
+            #    # Get single packet data and source address
+            #    packet_data.append(sock.recvfrom(buffer_size))
+            #    curr_time = time.time()
+            packs, addrs = zip(*packet_data)
+            packs = [bytearray(pack) for pack in packs]
+            addrs = [list(addr) for addr in addrs]
+            
+            addrs = np.array(addrs)
+            ips = addrs[:, 0]
+            ports = addrs[:, 1]
+
+            return packs, ips, ports
+
+    def parse_packets(self, packets, timestamp = None, time_diff = None):
         '''
         Parse the bytearray data contents of UPD packets.
 
@@ -63,31 +82,33 @@ class Streamer:
             data: Array of timestream I and Q (main data)
             aux: Array of auxiliary data: packet info, channel count, packet count, and packet PTP timestamp
         '''
+        
+
         data, aux = [], []
 
-        time_diff = None
+        if timestamp is None: timestamp = self.timestamp
         # Parse all packets
         for pack in packets:
             # Parse (extra) packet info and number of active tones
-            info, chan_count = np.frombuffer(pack, dtype = ">H", count = 2, offset = 8192).astype("float")
+            info, chan_count = np.frombuffer(pack, dtype = ">H", count = 2, offset = 8192).astype("int32")
 
             # Parse packet count
-            pack_count = np.frombuffer(pack, dtype = ">i", count = 1, offset = 8196).astype("int")[0]
+            pack_count = np.frombuffer(pack, dtype = ">i", count = 1, offset = 8196).astype("int32")[0]
 
             # Parse timestamp
             tstamp = self.get_utc(np.frombuffer(pack, dtype = ">I", offset = 8200, count = 3), -37)
 
             # Get the difference between PTP timestamp and actual time
             if time_diff is None:
-                time_diff = tstamp - self.timestamp
+                time_diff = tstamp - timestamp
 
             # Parse timestream data
-            dat = np.frombuffer(pack, dtype = "<i", count = int(2*chan_count)).astype("float")
+            dat = np.frombuffer(pack, dtype = "<i", count = int(2*chan_count)).astype("int32")
             data.append(dat)
-            aux.append([info, int(chan_count), pack_count, tstamp - time_diff])
-        return data, aux
+            aux.append([info, chan_count, pack_count, np.int64(100000*(tstamp - time_diff))])
+        return data, aux, time_diff
 
-    def take_timestream(self, N, offset = 30):
+    def take_timestream(self, t_sec, offset = 10):
         '''
         Take a timestream of N packets.
 
@@ -104,10 +125,10 @@ class Streamer:
         '''
 
         # Capture N packets
-        packs, ips, ports = self.capture_packets(N)
+        packs, ips, ports = self.capture_packets(t_sec)
 
         # Parse packet info
-        data, aux = self.parse_packets(packs)
+        data, aux, _ = self.parse_packets(packs)
 
         return data[offset:], aux[offset:], ips[offset:], ports[offset:]
 
