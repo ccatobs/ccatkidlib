@@ -24,23 +24,23 @@ boards:
 
 # Create Jinja variables for values used more than once
 {% set measurement_name="test" %}            # * Measurement Name
-{% set root_dir="/mnt/md0/cooldown_may" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
-{% set g3_root_dir="/mnt/md0" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
+{% set root_dir="/home/rfsoc/ccatkidlib_data" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
+{% set g3_root_dir="/home/rfsoc/ccatkidlib_data" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
 
 
 sess_id: null
 name: {{measurement_name}} # * Measurement Name
-desc: "Test automatic cleaning." # Description of measurement
+desc: "Test taking data with ccatkidlib." # Description of measurement
 
 ###########################
 # Drone/Board List Config #
 ###########################
 
 # Drone configuration
-drone_list: ['1', '2'] # *List of boards/drones to use
+drone_list: ['1'] # *List of boards/drones to use
 
 init:
-  initialize_boards: False  # * Whether to reintialize boards
+  initialize_boards: True  # * Whether to reintialize boards
   initialize_drones: True   # * Whether to run drone initialize commands (e.g. set_atten and setNCLO)
   restart: False            # * Whether to restart already running drones
 
@@ -51,17 +51,11 @@ runtime:
 # Board configuration
 boards:
   b1: 
-    name: rfsoc100 # ? Name of RFSoC (for readibility, not used for anything)
-    board_ip: '192.168.2.100' # ? Board IP address
+    name: rfsoc102 # ? Name of RFSoC (for readibility, not used for anything)
+    board_ip: '192.168.2.99' # ? Board IP address
     sampling_freq: 488.28 # - Timestream sampling frequency (in Hz)
     max_power: 32767 # - Max power at the drone DACs
-    drone_cfg: "/home/pcs/ccatkidlib/ccatkidlib/rfsoc/rfsoc100_config.yaml" # * Drone configuration file
-  b2:
-    name: rfsoc101 # ? Name of RFSoC (for readibility, not used for anything)
-    board_ip: '192.168.2.101' # ? Board IP address
-    sampling_freq: 488.28 # - Timestream sampling frequency
-    max_power: 32767 # - Max power at the drone DACs
-    drone_cfg: "/home/pcs/ccatkidlib/ccatkidlib/rfsoc/rfsoc101_config.yaml" # * Drone configuration file
+    drone_cfg: "/home/rfsoc/ccatkidlib/scripts/loopback/loopback_drone_config.yaml" # * Drone configuration file
 
 # Timestream configuration
 timestream:
@@ -87,10 +81,10 @@ file_paths:
   g3_dir:   "{{g3_root_dir}}/g3/g3"                                          # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
   
   
-  primecam_readout: "/home/pcs/primecam_readout/src/"                    # ? Primecam_readout source code directory
-  master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # ? Master Drone List File
-  pcs_dir: "/home/ocs/pcs-deployment-configs/"                           # ? PCS directory
-  ssh_key: "/home/pcs/.ssh/id_ecdsa"                                     # ? Path to private ssh key (null if no key)
+  primecam_readout: "/home/rfsoc/primecam_readout/src/"                    # ? Primecam_readout source code directory
+  master_drone_list: "/home/rfsoc/primecam_readout/master_drone_list.yaml" # ? Master Drone List File
+  pcs_dir: "/home/rfsoc/ocs-site-configs/"                           # ? PCS directory
+  ssh_key: "/home/rfsoc/.ssh/id_ecdsa"                                     # ? Path to private ssh key (null if no key)
   drone_dir: "/home/xilinx/primecam_readout/drones"                      # - Drone directory on the boards
 
 # * File names of saved data files
@@ -122,7 +116,7 @@ clean:
 
 # Runtime IO config
 io:
-  logging_level: 'INFO'   # * Logging level
+  logging_level: 'DEBUG'   # * Logging level
   logging_fname: "rfsoc_daq_log.txt" # * Log file name
   terminal_output: True   # * Whether to print logs to terminal
   influx_output: True     # * Whether to push measurement info to InfluxDB through the queen_agent

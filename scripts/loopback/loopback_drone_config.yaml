@@ -15,13 +15,17 @@ tones:
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5                 # Bandwidth of each target sweep tone (in MHz) 
   sweep_steps: 500             # Number of points of each target sweep tone
-  num_tones: 1
-  tone_freqs: [512e6]
-  tone_powers: [30000]
-  tone_phis: [0]
-  generation:
-    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+  num_tones: null
+  tone_freqs: null
+  tone_powers: null
+  tone_phis: null
+  custom:
+    tone_freqs: [512000000]
+    tone_powers: [30000]
+    tone_phis: [0]
+    generation:
+      gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+      rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
 
 # Attenuator configuration
 atten:
@@ -67,13 +71,17 @@ tones:
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5                 # Bandwidth of each target sweep tone
   sweep_steps: 500             # Number of points of each target sweep tone 
-  num_tones: 1
-  tone_freqs: [512e6]
-  tone_powers: [30000]
-  tone_phis: [0]
-  generation:
-    gen_attempts: 10            # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False        # Whether to rescale amplitudes if power exceeds DAC limit
+  num_tones: null
+  tone_freqs: null
+  tone_powers: null
+  tone_phis: null
+  custom:
+    tone_freqs: [512000000]
+    tone_powers: [30000]
+    tone_phis: [0]
+    generation:
+      gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+      rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
 
 # Attenuator configuration
 atten:
@@ -120,13 +128,17 @@ tones:
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5                 # Bandwidth of each target sweep tone
   sweep_steps: 500                  # Number of points of each target sweep tone
-  num_tones: 1
-  tone_freqs: [512e6]
-  tone_powers: [30000]
-  tone_phis: [0]
-  generation:
-    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+  num_tones: null
+  tone_freqs: null
+  tone_powers: null
+  tone_phis: null
+  custom:
+    tone_freqs: [512000000]
+    tone_powers: [30000]
+    tone_phis: [0]
+    generation:
+      gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+      rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
 
 # Attenuator configuration
 atten:
@@ -172,13 +184,17 @@ tones:
   full_bandwidth: 512          # Full bandwidth of sweeps (in MHz)
   chan_bw: 0.5          # Bandwidth of each target sweep tone
   sweep_steps: 500             # Number of points of each target sweep tone
-  num_tones: 1
-  tone_freqs: [512e6]
-  tone_powers: [30000]
-  tone_phis: [0]
-  generation:
-    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+  num_tones: null
+  tone_freqs: null
+  tone_powers: null
+  tone_phis: null
+  custom:
+    tone_freqs: [512000000]
+    tone_powers: [30000]
+    tone_phis: [0]
+    generation:
+      gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+      rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
 
 # Attenuator configuration
 atten:

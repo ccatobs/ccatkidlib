@@ -510,11 +510,11 @@ class R:
         # ------------------------
         com_to, _ = self._get_com_to(**kwargs)
 
-        tone_freqs    = self._get_drone_args(com_to, ['tones', 'tone_freqs'])
-        tone_powers   = self._get_drone_args(com_to, ['tones', 'tone_powers'])
-        tone_phis     = self._get_drone_args(com_to, ['tones', 'tone_phis'])
-        rescale_power = self._get_drone_args(com_to, ['tones', 'generation', 'rescale_power'])
-        gen_attempts  = self._get_drone_args(com_to, ['tones', 'generation', 'gen_attempts'])
+        tone_freqs    = self._get_drone_args(com_to, ['tones', 'custom', 'tone_freqs'])
+        tone_powers   = self._get_drone_args(com_to, ['tones', 'custom', 'tone_powers'])
+        tone_phis     = self._get_drone_args(com_to, ['tones', 'custom', 'tone_phis'])
+        rescale_power = self._get_drone_args(com_to, ['tones', 'custom', 'generation', 'rescale_power'])
+        gen_attempts  = self._get_drone_args(com_to, ['tones', 'custom', 'generation', 'gen_attempts'])
 
         # Evaluate kwargs
         for key, value in kwargs.items():
@@ -526,14 +526,15 @@ class R:
                 tone_phis = self._parse_args(com_to, value)
             elif key == 'rescale_power':
                 rescale_power = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, ['tones', 'generation', 'rescale_power'], rescale_power)
+                self._set_drone_args(com_to, ['tones', 'custom', 'generation', 'rescale_power'], rescale_power)
             elif key == 'gen_attempts':
                 gen_attempts = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, ['tones', 'generation', 'gen_attempts'], gen_attempts)
+                self._set_drone_args(com_to, ['tones', 'custom', 'generation', 'gen_attempts'], gen_attempts)
 
         # Write custom comb for each drone
         # --------------------------------
         for com, rescale, attempts, freq, power, phi in zip(com_to, rescale_power, gen_attempts, tone_freqs, tone_powers, tone_phis):
+            print(freq)
             self._write_custom_comb(com, rescale_power = rescale, gen_attempts = attempts, tone_freqs = freq, tone_powers = power, tone_phis = phi)
 
         # Write sweep comb based on custom parameters
@@ -1835,8 +1836,6 @@ class R:
                          "tone_powers": {"path": amp_path, "comb": amp_comb, "new_comb": None, "num_tones": None},
                          "tone_phis": {"path": phi_path, "comb": phi_comb, "new_comb": None, "num_tones": None}}
 
-            start_time = time.time()
-
             # Parse comb values
             # -----------------
             for key, value in kwargs.items():
@@ -1895,7 +1894,6 @@ class R:
 
                 # Copy the array with custom parameters onto the rfsoc board
                 comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, value)
-            print('arg_parse_time', time.time() - start_time)
 
             # If num_tones entry is None, comb was not modified and the number of tones is that of the current comb
             # -----------------------------------------------------------------------------------------------------
@@ -1973,21 +1971,19 @@ class R:
             if gen_amps or rescale_power: rfsoc_io.save_array_board(bip, ssh_key, amp_path, utils.arr_to_list(tone_powers), self.tmp_dir)
             rfsoc_io.send_msg('INFO', f"Saved custom comb for drone {com}!", self.output)
 
-            start_time = time.time()
             # Edit comb saved in drone config files
             # -------------------------------------
             # Frequency comb
-            self._edit_config(self.drone_cfg[ind], 'tone_freqs', utils.arr_to_list(tone_freqs))
+            self._edit_config(self.drone_cfg[ind], ['tones', 'tone_freqs'], utils.arr_to_list(tone_freqs))
 
             # Amplitude comb
-            self._edit_config(self.drone_cfg[ind], 'tone_powers', utils.arr_to_list(tone_powers))
+            self._edit_config(self.drone_cfg[ind], ['tones', 'tone_powers'], utils.arr_to_list(tone_powers))
 
             # Phase comb
-            self._edit_config(self.drone_cfg[ind], 'tone_phis', utils.arr_to_list(tone_phis))
+            self._edit_config(self.drone_cfg[ind], ['tones', 'tone_phis'], utils.arr_to_list(tone_phis))
 
             # Number of tones
-            self._edit_config(self.drone_cfg[ind], 'num_tones', int(tone_num))
-            print('config_time', time.time() - start_time)
+            self._edit_config(self.drone_cfg[ind], ['tones', 'num_tones'], int(tone_num))
         return tone_freqs, tone_powers, tone_phis
 
     def _get_curr_comb(self, com, **kwargs):
@@ -2108,11 +2104,11 @@ class R:
             amp_path  = rfsoc_io.get_array(amp_file,  amp_name, action='cp', load = False, output = self.output, timestamp=timestamp)
             phi_path  = rfsoc_io.get_array(phi_file,  phi_name, action='cp', load = False, output = self.output, timestamp=timestamp)
 
-        self._edit_config(self.drone_cfg[ind], 'tone_freqs', freq_path)
-        self._edit_config(self.drone_cfg[ind], 'tone_powers', amp_path)
-        self._edit_config(self.drone_cfg[ind], 'tone_phis', phi_path)
+        self._edit_config(self.drone_cfg[ind], ['tones', 'tone_freqs'], freq_path)
+        self._edit_config(self.drone_cfg[ind], ['tones', 'tone_powers'], amp_path)
+        self._edit_config(self.drone_cfg[ind], ['tones', 'tone_phis'], phi_path)
 
-        if freq_path is not None: self._edit_config(self.drone_cfg[ind], 'num_tones', len(np.load(freq_path, mmap_mode='r')))
+        if freq_path is not None: self._edit_config(self.drone_cfg[ind], ['tones', 'num_tones'], len(np.load(freq_path, mmap_mode='r')))
 
         # Save drone config
         self.drone_cfg[ind] = rfsoc_io.save_config(self.config_dirs[ind] / f"{name}_config_drone_{self.timestamp}.yaml", self.drone_cfg[ind], self.save_cfg)

@@ -16,12 +16,16 @@ tones:
   chan_bw: 0.5          # Bandwidth of each target sweep tone (in MHz) (currently needs to be changed in _cfg_board.py on board)
   sweep_steps: 500                  # Number of points of each target sweep tone (currently needs to be changed in _cfg_board.py on board)
   num_tones: null
-  tone_freqs: []
-  tone_powers: []
-  tone_phis: []
-  generation:
-    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+  tone_freqs: null
+  tone_powers: null
+  tone_phis: null
+  custom:
+    tone_freqs: []
+    tone_powers: []
+    tone_phis: []
+    generation:
+      gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+      rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
 
 # Attenuator configuration
 atten:
@@ -68,13 +72,16 @@ tones:
   chan_bw: 0.5                 # Bandwidth of each target sweep tone
   sweep_steps: 500                  # Number of points of each target sweep tone 
   num_tones: null
-  tone_freqs: []
-  tone_powers: []
-  tone_phis: []
-  generation:
-    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-
+  tone_freqs: null
+  tone_powers: null
+  tone_phis: null
+  custom:
+    tone_freqs: []
+    tone_powers: []
+    tone_phis: []
+    generation:
+      gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+      rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
 # Attenuator configuration
 atten:
   drive: 20 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
@@ -121,12 +128,16 @@ tones:
   chan_bw: 0.5                 # Bandwidth of each target sweep tone
   sweep_steps: 500                  # Number of points of each target sweep tone
   num_tones: null
-  tone_freqs: []
-  tone_powers: []
-  tone_phis: []
-  generation:
-    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+  tone_freqs: null
+  tone_powers: null
+  tone_phis: null
+  custom:
+    tone_freqs: []
+    tone_powers: []
+    tone_phis: []
+    generation:
+      gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+      rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
 
 # Attenuator configuration
 atten:
@@ -173,13 +184,17 @@ tones:
   chan_bw: 0.5               # Bandwidth of each target sweep tone
   sweep_steps: 500                  # Number of points of each target sweep tone
   num_tones: null
-  tone_freqs: []
-  tone_powers: []
-  tone_phis: []
-  generation:
-    gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
-    rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
-
+  tone_freqs: null
+  tone_powers: null
+  tone_phis: null
+  custom:
+    tone_freqs: []
+    tone_powers: []
+    tone_phis: []
+    generation:
+      gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
+      rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
+      
 # Attenuator configuration
 atten:
   drive: 20 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
