@@ -72,7 +72,7 @@ class Data:
         else:
             self.timestamp = pair.get_timestamp(self.data_path)
         
-        if not isinstance(self.data_path, list): self.data_path=[data_path]
+        if not isinstance(self.data_path, list): self.data_path=[self.data_path]
         
         # Get io, ext, and drone configs associated with the sweep data file
         # ------------------------------------------------------------------

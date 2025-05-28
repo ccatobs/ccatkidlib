@@ -430,7 +430,7 @@ class R:
 
             # Override config attenuations with those passed as method argument (if any)
             if atten is not None:
-                attens = self._parse_args(com_to, atten) # Parse attenuations passed as argument
+                attens = [int(atten) for atten in self._parse_args(com_to, atten)] # Parse attenuations passed as argument and cast to int
 
                 # Return None if invalid attenuations were passed
                 if attens is None: return None
@@ -1878,7 +1878,7 @@ class R:
                             comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])
                             continue
                     except TypeError:
-                        if isinstance(value, (int, float)): # Assume a number is passed and use the same number for all tones
+                        if np.issubdtype(type(value), (np.integer, np.floating)): # Assume a number is passed and use the same number for all tones
                             comb_dict[key]['num_tones'] = float(value) # Store the number in num_tones as a float for processing later since the number of tones in the comb may be unknown
                             continue
                         else:

@@ -20,9 +20,9 @@ tones:
   tone_powers: null
   tone_phis: null
   custom:
-    tone_freqs: [512000000]
-    tone_powers: [30000]
-    tone_phis: [0]
+    tone_freqs: []
+    tone_powers: []
+    tone_phis: []
     generation:
       gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
       rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
@@ -76,9 +76,9 @@ tones:
   tone_powers: null
   tone_phis: null
   custom:
-    tone_freqs: [512000000]
-    tone_powers: [30000]
-    tone_phis: [0]
+    tone_freqs: []
+    tone_powers: []
+    tone_phis: []
     generation:
       gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
       rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
@@ -133,9 +133,9 @@ tones:
   tone_powers: null
   tone_phis: null
   custom:
-    tone_freqs: [512000000]
-    tone_powers: [30000]
-    tone_phis: [0]
+    tone_freqs: []
+    tone_powers: []
+    tone_phis: []
     generation:
       gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
       rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
@@ -189,9 +189,9 @@ tones:
   tone_powers: null
   tone_phis: null
   custom:
-    tone_freqs: [512000000]
-    tone_powers: [30000]
-    tone_phis: [0]
+    tone_freqs: []
+    tone_powers: []
+    tone_phis: []
     generation:
       gen_attempts: 10             # Number of attempts to generate phases for given frequency and amplitude comb
       rescale_power: False         # Whether to rescale amplitudes if power exceeds DAC limit
