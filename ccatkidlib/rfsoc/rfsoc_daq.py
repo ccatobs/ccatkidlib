@@ -407,7 +407,7 @@ class R:
             sense  (float | List[float]) : Values of sense (ADC) attenuations in dB (must be between 0 and 31.75)
         '''
 
-        def _set_direction(com_to = None, direction = None, atten = None):
+        def _set_direction(com_to = None, direction = None, atten = None, curr_attens = None):
             '''
             Internal function for setting drone attenuations.
 
@@ -420,7 +420,7 @@ class R:
             '''
             def _set_atten(com, *args, **kwargs):
                 direction, att = args[0], args[1]
-                rtn = self.rfsoc.setAtten(com_to = com, direction = direction, atten = att, silent=True)
+                rtn = self.rfsoc.setAtten2025(com_to = com, direction = direction, atten = att, silent=True)
                 rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
                 return rtn
 
@@ -436,6 +436,12 @@ class R:
                 if attens is None: return None
 
                 self._set_drone_args(com_to, direction, attens) # Update attenuations in drone config files
+
+            diff_attens = [[com, atten] for com, atten, curr_atten in zip(com_to, attens, curr_attens) if not atten == curr_atten]
+            if len(diff_attens) == 0:
+                return curr_attens
+            else:
+                com_to, attens = list(zip(*diff_attens)) # Get the transpose of diff_attens
 
             # Set attenuations
             # ----------------
@@ -455,20 +461,22 @@ class R:
             # Reset com_to and parallel_drones to what they were before
             kwargs['com_to'] = com_to
             self.parallel_drones = parallel_drones
-            rfsoc_io.send_msg('INFO', f'Successfully set {direction} attenuation to {attens} for drones {com_to}!', self.output)
+            rfsoc_io.send_msg('INFO', f'Successfully set {direction} attenuation to {list(attens)} for drones {list(com_to)}!', self.output)
 
             return attens
 
         # Specify which attenuators to change
         com_to, _ = self._get_com_to(**kwargs)
 
+        drive_attens, sense_attens = self.get_atten(com_to = com_to)
+
         # Set drive attenuation
-        drive_attens = _set_direction(com_to = com_to, direction = 'drive', atten = drive)
+        _set_direction(com_to = com_to, direction = 'drive', atten = drive, curr_attens = drive_attens)
 
         # Set sense attenuation
-        sense_attens = _set_direction(com_to = com_to, direction = 'sense', atten = sense)
+        _set_direction(com_to = com_to, direction = 'sense', atten = sense, curr_attens = sense_attens)
 
-        return drive_attens, sense_attens
+        return self.get_atten(com_to = com_to)
 
     @header
     @utils.method_timer
@@ -591,7 +599,7 @@ class R:
             '''
             rtn = self.rfsoc.getSnapData(com_to = com, mux_sel = 0, silent = False)
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-            return rtn.session['messages'][1][1][:-3].split('}, ')
+            return ast.literal_eval(' '.join(rtn.session['messages'][1][1].split(' ')[1:]))[1:][0] # Parse OCS message to get returned data
 
         com_to, _ = self._get_com_to(**kwargs)
 
@@ -608,7 +616,7 @@ class R:
         # -----------------------------------
         rms_list, inds = [], []
         for rtn in rtns:
-            data_dic = pickle.loads(ast.literal_eval(rtn.split(': ')[-1])) # Load pickled data dictionary
+            data_dic = pickle.loads(rtn['data']) # Load pickled data dictionary
             ind = self.drone_list.index(f"{data_dic['bid']}.{data_dic['drid']}") # Determine which drone the Snap data corresponds to
             inds.append(ind)
 
@@ -699,6 +707,67 @@ class R:
 
         return ps_temps, pl_temps
 
+    def get_atten(self, **kwargs):
+        '''
+        Set drive/sense attenuations of RFSoC board frontend attenuations.
+
+        Keyword Arguments:
+            com_to     (str | List[str]) : List of drones for which to get attenuation
+        '''
+
+        def _get_direction(com_to = None, direction = None):
+            '''
+            Internal function for getting drone attenuations.
+
+            Parameters:
+                com_to    (str | List[str]) : List of drone com_to for which attenuations should be gotten
+                direction             (str) : Which attenuator to get. Options are 'drive' for DAC and 'sense' for ADC
+            Returns:
+                attens: The drone attenuations
+            '''
+            def _get_atten(com, *args, **kwargs):
+                direction = args[0]
+                rtn = self.rfsoc.getAtten(com_to = com, direction = direction, silent=False)
+                rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+                return ast.literal_eval(' '.join(rtn.session['messages'][1][1].split(' ')[1:]))[1:][0]
+
+            # Get attenuations
+            # ----------------
+            # Get attenuation of drones (can do max of one drone per board at a time since attenuations are set through serial communication)
+            
+            # Change number of drones in parallel to one
+            parallel_drones = self.parallel_drones
+            self.parallel_drones = 1
+
+            args = [direction]
+            rtns = self._run_parallel(_get_atten, *args, **kwargs)
+            rtns = np.array([drone for drones in rtns for drone in drones])
+
+            attens, inds = [], []
+            for rtn in rtns:
+                attens.append(pickle.loads(rtn['data'])) # Load pickled data dictionary
+                ind = self.drone_list.index(str(rtn['pattern']).split('_')[-2]) # Determine which drone the Snap data corresponds to
+                inds.append(ind)
+
+            # Create list of ADC rms values for all drones, sort by drone bid.drid
+            attens = [atten for _, atten in sorted(zip(inds, attens))]
+            
+            # Reset parallel_drones to what it was before
+            self.parallel_drones = parallel_drones
+            rfsoc_io.send_msg('INFO', f'Successfully got {direction} attenuations {attens} for drones {com_to}!', self.output)
+
+            return attens
+
+        # Specify which attenuators to change
+        com_to, _ = self._get_com_to(**kwargs)
+
+        # Set drive attenuation
+        drive_attens = _get_direction(com_to = com_to, direction = 'drive')
+
+        # Set sense attenuation
+        sense_attens = _get_direction(com_to = com_to, direction = 'sense')
+
+        return drive_attens, sense_attens
     ############################
     # Data Acquisition Methods #
     ############################
@@ -2130,7 +2199,7 @@ class R:
         rtn_list = []
         for com_to in com_arrs:
             if len(com_to) > 0:
-                rfsoc_io.send_msg('INFO', f'Running {s.func_name(name)} for drones {com_to}!')
+                #rfsoc_io.send_msg('INFO', f'Running {s.func_name(name)} for drones {com_to}!')
                 rtn_list.append(func(str(com_to), *args, **kwargs))
 
         return rtn_list
