@@ -42,7 +42,7 @@ class Timestream(Data):
         super().__init__(com_to, analysis_cfg, **kwargs)
         
 
-        self.mp = True
+        self.mp = False
         self.processes = None
         self.chunk_size = None
         for key, value in kwargs.items():

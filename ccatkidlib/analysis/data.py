@@ -30,7 +30,7 @@ class Data:
         # Parse key word arguments
         for key, value in kwargs.items():
             if key == 'data_path':
-                self.data_path = value
+                self.data_path = Path(value)
 
         # If full data path is not provided, find data file based on timestamp and (optional) file path parts
         # ----------------------------------------------------------------------------------------------------------
