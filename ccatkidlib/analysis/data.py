@@ -23,6 +23,7 @@ class Data:
         self.bid, self.drid = com_to.split('.') # Baard and drone data was taken with
 
         self.data = None
+        self.num_tones = None
 
         self.data_path = None # Path of data file
         self.analysis_cfg, self.plot_cfg = rfsoc_io.load_config(analysis_cfg) # File path of analysis config
@@ -174,7 +175,7 @@ class Data:
         if res_num is not None:
             if isinstance(res_num, int): res_num = [res_num]
         else:
-            res_num = self.res_num if self.res_num is not None else range(self.drone_cfg['tones']['num_tones'])
+            res_num = self.res_num if self.res_num is not None else range(self.num_tones)
         return [f'R_{res:04d}' for res in res_num]
 
 
@@ -194,5 +195,7 @@ class Data:
         elif name == 'comb':
             if super().__getattribute__("comb") is None: self.comb = self._load_comb()
             gc.collect()
+        elif name == 'num_tones':
+            if super().__getattribute__("num_tones") is None: self.num_tones = self.drone_cfg['tones']['num_tones']
 
         return super().__getattribute__(name)

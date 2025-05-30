@@ -232,10 +232,11 @@ class Timestream(Data):
                     # Determine the number of tones used for timestream
                     if self.res_num is None:
                         channel_count = frame['channel_count'] # Get number of tones directly from G3 frame
-                        num_tones = self.drone_cfg['tones']['num_tones'] # Get number of tones from timestream config file
 
                         # Send warning if there is a mismatch in the number of tones (but continue execution using the number in the G3 frame)
-                        if not num_tones == channel_count: print('WARNING | There is a mismatch between the number of tones in the comb and the number of tones in the timestream packets!')
+                        if not self.num_tones == channel_count: 
+                            print('WARNING | There is a mismatch between the number of tones in the comb and the number of tones in the timestream packets!')
+                            self.num_tones = channel_count
                         self.res_num = range(channel_count)
 
                     # Filter out frames that are not within specified time range
