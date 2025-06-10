@@ -1,11 +1,13 @@
-# Dont want images from scripts
-*.png
-
 # Drone List
 *override_drone_list*
 
 # Temp data directory
 tmp/
+
+# Config files
+*rfsoc/system_config.yaml
+*rfsoc/drone_configs*
+
 
 
 # Byte-compiled / optimized / DLL files
