@@ -5,9 +5,10 @@
 tmp/
 
 # Config files
-*rfsoc/system_config.yaml
-*rfsoc/drone_configs*
+system_config.yaml
+drone_configs/
 
+ccatkidlib/_version.py
 
 
 # Byte-compiled / optimized / DLL files
@@ -35,5 +36,3 @@ docs/_build/
 profile_default/
 ipython_config.py
 
-# Version files
-*_version.py
