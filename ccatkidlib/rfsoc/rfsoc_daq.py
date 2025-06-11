@@ -191,14 +191,6 @@ class R:
                     rtn = self.rfsoc.writeNewVnaComb(com_to = com, silent=False)
                     rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
                     time.sleep(1)
-                
-                # Turn on timestreams
-                rfsoc_io.send_msg('INFO', f'Starting timestream chains for board {board}!', self.output)
-                for i in range(4):
-                    com = f'{board}.{i+1}'
-                    ret = self.rfsoc.startChains(com_to = com, silent=False)
-                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-                    time.sleep(1)
 
                 # Turn on timestreams
                 rfsoc_io.send_msg('INFO', f'Turning timestreams on for board {board}!', self.output)
