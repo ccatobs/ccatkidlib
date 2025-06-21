@@ -325,8 +325,12 @@ def setup_logging(log_path, level, name = __name__, output = False):
 
     # Setup logger config
     # -------------------
-    logging.basicConfig(filename=log_path, filemode = "w",
-    format='%(levelname)s | %(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p", level = logging.getLevelName(level))
+    log = logging.FileHandler(log_path, mode='a')
+    log.setLevel(logging.getLevelName(level))
+    log.setFormatter(logging.Formatter(fmt='%(levelname)8s | %(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p"))
+
+    logger.setLevel(logging.getLevelName(level))
+    logger.addHandler(log)
 
     # Test logging/confirm successful logger setup
     send_msg('INFO', f"Successfully initialized logger: {name}", output = output, name = name)
@@ -352,9 +356,9 @@ def send_msg(level, msg, output = True, name = __name__):
         logger.log(log_level, msg)
         
         # Write message to terminal
-        if output and logger.isEnabledFor(log_level): tqdm.write(f'{Style().log_begin(level, getattr(Style, level))} {msg}')
+        style = Style()
+        if output and logger.isEnabledFor(log_level): tqdm.write(f'{style.log_begin(level, getattr(style, level))} {msg}')
     except Exception as e:
-        print(e)
         # Log error message
         logger.log(logging.ERROR, 'Error logging message. Ensure that the message is a string!')
 

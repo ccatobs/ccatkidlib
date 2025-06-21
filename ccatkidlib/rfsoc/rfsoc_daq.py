@@ -294,7 +294,8 @@ class R:
                         elif not running:
                             rfsoc_io.send_msg('ERROR', f'Failed to start drone {com}')
 
-        rfsoc_io.send_msg('INFO', f"Drones {sorted(running_drones)} are currently running!", self.output)
+        # Log the currently running drones at INFO level if a change was made otherwise log to DEBUG
+        rfsoc_io.send_msg('INFO' if wait else 'DEBUG' , f"Drones {sorted(running_drones)} are currently running!", self.output)
 
     def load_system_config(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml"):
         '''
@@ -399,7 +400,7 @@ class R:
             sense  (float | List[float]) : Values of sense (ADC) attenuations in dB (must be between 0 and 31.75)
         '''
 
-        def _set_direction(com_to = None, direction = None, atten = None, curr_attens = None):
+        def _set_direction(com_to = None, direction = None, atten = None):
             '''
             Internal function for setting drone attenuations.
 
@@ -429,12 +430,6 @@ class R:
 
                 self._set_drone_args(com_to, direction, attens) # Update attenuations in drone config files
 
-            diff_attens = [[com, atten] for com, atten, curr_atten in zip(com_to, attens, curr_attens) if not atten == curr_atten]
-            if len(diff_attens) == 0:
-                return curr_attens
-            else:
-                com_to, attens = list(zip(*diff_attens)) # Get the transpose of diff_attens
-
             # Set attenuations
             # ----------------
             # Set attenuation of drones (can do max of one drone per board at a time since attenuations are set through serial communication)
@@ -460,15 +455,13 @@ class R:
         # Specify which attenuators to change
         com_to, _ = self._get_com_to(**kwargs)
 
-        drive_attens, sense_attens = self.get_atten(com_to = com_to)
-
         # Set drive attenuation
-        _set_direction(com_to = com_to, direction = 'drive', atten = drive, curr_attens = drive_attens)
+        _set_direction(com_to = com_to, direction = 'drive', atten = drive)
 
         # Set sense attenuation
-        _set_direction(com_to = com_to, direction = 'sense', atten = sense, curr_attens = sense_attens)
+        _set_direction(com_to = com_to, direction = 'sense', atten = sense)
 
-        return self.get_atten(com_to = com_to)
+        return drive, sense
 
     @header
     @utils.method_timer
@@ -526,7 +519,6 @@ class R:
         # Write custom comb for each drone
         # --------------------------------
         for com, rescale, attempts, freq, power, phi in zip(com_to, rescale_power, gen_attempts, tone_freqs, tone_powers, tone_phis):
-            print(freq)
             self._write_custom_comb(com, rescale_power = rescale, gen_attempts = attempts, tone_freqs = freq, tone_powers = power, tone_phis = phi)
 
         # Write sweep comb based on custom parameters
@@ -638,9 +630,10 @@ class R:
         import clean_io
 
         def _get_space(bids):
-            space_dict = self.rfsoc.feedMonitor.status().session['data']['drone_free_spaces_GB']['data']
             avail_spaces = []
+            session_data = self.rfsoc.feedMonitor.status().session['data']
             for bid in bids:
+                space_dict = session_data[f'drone_free_spaces_GB_board_{bid}']['data']
                 avail_space = space_dict[f'spc_{bid}_1']
                 avail_spaces.append(avail_space)
                 self._edit_config(self.ext_cfg, ['boards', f'b{bid}', 'avail_space'], avail_space, append = True)
@@ -688,13 +681,14 @@ class R:
         def _get_temps(bids, loc):
             temps = []
             for bid in bids:
+                temp_dict = session_data[f'drone_temperatures_C_board_{bid}']['data']
                 temp = float(np.mean([temp_dict[f'temp_{bid}_{drid + 1}_{loc}'] for drid in range(4)]))
                 temps.append(temp)
                 self._edit_config(self.ext_cfg, ['boards', f'b{bid}', f'{loc}_temp'], temp, append = True)
             rfsoc_io.send_msg('INFO', f'{loc} temperatures are {temps} \xb0C for boards {bids}!', self.output)
 
         com_to, bids = self._get_com_to(**kwargs)
-        temp_dict = self.rfsoc.feedMonitor.status().session['data']['drone_temperatures_C']['data']
+        session_data = self.rfsoc.feedMonitor.status().session['data']
         ps_temps = _get_temps(bids, 'ps')
         pl_temps = _get_temps(bids, 'pl')
 
@@ -1221,7 +1215,7 @@ class R:
                 # Filter out fake resonators from found detectors
                 # -----------------------------------------------
                 ind = self.drone_list.index(com)
-                vna = VNA(com_to = com, data_path = [vna_file]) # Create VNA object
+                vna = VNA(com_to = com, data_path = vna_file) # Create VNA object
                 good_resonator, _, _, _ = vna.filter_freqs(res_freqs = found_freq) # Filter out fake resonators
                 good_resonator = good_resonator.real
                 good_resonators[i] = good_resonator

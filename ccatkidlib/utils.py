@@ -98,7 +98,7 @@ def dict_set(dic, keys, value):
             return False
     return _dict_set_r(dic, keys[-1], value)
 
-def convert_from_dB(power):
+def from_dB(power):
     '''
     Convert a power from dB into normal units.
     '''
@@ -107,7 +107,7 @@ def convert_from_dB(power):
     except:
         return 10**(power/20)
 
-def convert_to_dB(power):
+def to_dB(power):
     '''
     Convert a power from normal units into dB.
     '''

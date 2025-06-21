@@ -19,28 +19,47 @@ boards:
     avail_space: null
     ps_temp: null
     pl_temp: null
+  b3:
+    avail_space: null
+    ps_temp: null
+    pl_temp: null
+  b4:
+    avail_space: null
+    ps_temp: null
+    pl_temp: null
+  b5:
+    avail_space: null
+    ps_temp: null
+    pl_temp: null
+  b6:
+    avail_space: null
+    ps_temp: null
+    pl_temp: null
+  b7:
+    avail_space: null
+    ps_temp: null
+    pl_temp: null
 
 ---
 
 # Create Jinja variables for values used more than once
-{% set measurement_name="loopback_rfsoc102" %}            # * Measurement Name
-{% set root_dir="/home/rfsoc/ccatkidlib_data/loopback" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
-{% set g3_root_dir="/home/rfsoc/ccatkidlib_data" %} # * Root data directory (the part of the path that would change when transferring data to different drive)
-
+{% set measurement_name="loopback" %}   # * Measurement Name
+{% set root_dir="/mnt/md0/" %}       # * Root data directory for storing ccatkidlib data files (the part of the path that would change when transferring data to different drive)
+{% set g3_root_dir="/mnt/md0" %} # * Root data directory for storing timestream G3 files (the part of the path that would change when transferring data to different drive)
 
 sess_id: null
 name: {{measurement_name}} # * Measurement Name
-desc: "Loopback measurements of rfsoc102." # Description of measurement
+desc: "Loopback measurements of rfsoc102."          # * Description of measurement
 
 ###########################
 # Drone/Board List Config #
 ###########################
 
 # Drone configuration
-drone_list: ['1'] # *List of boards/drones to use
+drone_list: ['3'] # *List of boards/drones to use. Can either specify entire boards (e.g. '1') or individual drones (e.g. '1.2')
 
 init:
-  initialize_boards: True  # * Whether to reintialize boards
+  initialize_boards: True   # * Whether to reintialize boards
   initialize_drones: True   # * Whether to run drone initialize commands (e.g. set_atten and setNCLO)
   restart: False            # * Whether to restart already running drones
 
@@ -51,19 +70,55 @@ runtime:
 # Board configuration
 boards:
   b1: 
-    name: rfsoc102 # ? Name of RFSoC (for readibility, not used for anything)
-    board_ip: '192.168.2.99' # ? Board IP address
-    sampling_freq: 488.28 # - Timestream sampling frequency (in Hz)
+    name: rfsoc100 # ? Name of RFSoC (for readibility, not used for anything)
+    board_ip: '192.168.2.100' # ? Board IP address
+    sampling_freq: 488.28 # - Timestream sampling frequency (in Hz) (Does not currently set the sampling frequency)
     max_power: 32767 # - Max power at the drone DACs
-    drone_cfg: "/home/rfsoc/ccatkidlib/scripts/loopback/loopback_drone_config.yaml" # * Drone configuration file
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/loopback/drone_configs/rfsoc100_config.yaml" # * Drone configuration file
+  b2: 
+    name: rfsoc101 # ? Name of RFSoC (for readibility, not used for anything)
+    board_ip: '192.168.2.101' # ? Board IP address
+    sampling_freq: 488.28 # - Timestream sampling frequency (in Hz) (Does not currently set the sampling frequency)
+    max_power: 32767 # - Max power at the drone DACs
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/loopback/drone_configs/rfsoc101_config.yaml" # * Drone configuration file
+  b3: 
+    name: rfsoc102 # ? Name of RFSoC (for readibility, not used for anything)
+    board_ip: '192.168.2.102' # ? Board IP address
+    sampling_freq: 488.28 # - Timestream sampling frequency (in Hz) (Does not currently set the sampling frequency)
+    max_power: 32767 # - Max power at the drone DACs
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/loopback/drone_configs/rfsoc102_config.yaml" # * Drone configuration file
+  b4: 
+    name: rfsoc103 # ? Name of RFSoC (for readibility, not used for anything)
+    board_ip: '192.168.2.103' # ? Board IP address
+    sampling_freq: 488.28 # - Timestream sampling frequency (in Hz) (Does not currently set the sampling frequency)
+    max_power: 32767 # - Max power at the drone DACs
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/loopback/drone_configs/rfsoc103_config.yaml" # * Drone configuration file
+  b5: 
+    name: rfsoc104 # ? Name of RFSoC (for readibility, not used for anything)
+    board_ip: '192.168.2.104' # ? Board IP address
+    sampling_freq: 488.28 # - Timestream sampling frequency (in Hz) (Does not currently set the sampling frequency)
+    max_power: 32767 # - Max power at the drone DACs
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/loopback/drone_configs/rfsoc104_config.yaml" # * Drone configuration file
+  b6: 
+    name: rfsoc105 # ? Name of RFSoC (for readibility, not used for anything)
+    board_ip: '192.168.2.105' # ? Board IP address
+    sampling_freq: 488.28 # - Timestream sampling frequency (in Hz) (Does not currently set the sampling frequency)
+    max_power: 32767 # - Max power at the drone DACs
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/loopback/drone_configs/rfsoc105_config.yaml" # * Drone configuration file
+  b7: 
+    name: rfsoc106 # ? Name of RFSoC (for readibility, not used for anything)
+    board_ip: '192.168.2.106' # ? Board IP address
+    sampling_freq: 488.28 # - Timestream sampling frequency (in Hz) (Does not currently set the sampling frequency)
+    max_power: 32767 # - Max power at the drone DACs
+    drone_cfg: "/home/pcs/ccatkidlib/scripts/loopback/drone_configs/rfsoc106_config.yaml" # * Drone configuration file
 
 # Timestream configuration
 timestream:
   udp_ip: "192.168.3.40"  # ? Control computer UDP packet capture port IP address
   udp_port: 4096          # ? Control computer UDP packet capture port number
-  g3: True               # * Whether to save timestreams as g3 files
-  file_rotation_time: 600 # * Length of timestream files (in seconds)
-  save_interval: 3
+  g3: True                # * Whether to save timestreams as g3 files
+  file_rotation_time: 600 # * Length of timestream files (in seconds) (for npy timestreams)
+  save_interval: 3        # * Length of time after which to save data in timestream buffer (in seconds) (for npy timestreams)
 
 # PCS agent IDs
 pcs_agents:
@@ -75,16 +130,16 @@ pcs_agents:
 
 # File paths
 file_paths:
-  root_dir: "{{root_dir}}"
-  g3_root_dir: "{{g3_root_dir}}"
-  data_dir: "{{root_dir}}/{{measurement_name}}"                              # * Directory to save data in
-  g3_dir:   "{{g3_root_dir}}/g3/g3"                                          # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
+  root_dir: "{{root_dir}}"                       # * Root data directory for storing ccatkidlib data files (the part of the path that would change when transferring data to different drive)
+  g3_root_dir: "{{g3_root_dir}}"                 # * Root data directory for storing timestream G3 files (the part of the path that would change when transferring data to different drive)
+  data_dir: "{{root_dir}}/{{measurement_name}}"  # * Directory to save data in
+  g3_dir:   "{{g3_root_dir}}/g3/g3"              # ? Directory where g3 files are saved (as specified in rfsoc-streamer config)
   
   
-  primecam_readout: "/home/rfsoc/primecam_readout/src/"                    # ? Primecam_readout source code directory
-  master_drone_list: "/home/rfsoc/primecam_readout/master_drone_list.yaml" # ? Master Drone List File
-  pcs_dir: "/home/rfsoc/ocs-site-configs/"                           # ? PCS directory
-  ssh_key: "/home/rfsoc/.ssh/id_ecdsa"                                     # ? Path to private ssh key (null if no key)
+  primecam_readout: "/home/pcs/primecam_readout/src/"                    # ? Primecam_readout source code directory
+  master_drone_list: "/home/pcs/primecam_readout/master_drone_list.yaml" # ? Master drone list config file path
+  pcs_dir: "/home/ocs/git/pcs-deployment-configs/prime-cam"              # ? OCS directory with default.yaml file
+  ssh_key: "/home/pcs/.ssh/id_ecdsa"                                     # ? Path to private ssh key (null if no key)
   drone_dir: "/home/xilinx/primecam_readout/drones"                      # - Drone directory on the boards
 
 # * File names of saved data files
@@ -116,10 +171,10 @@ clean:
 
 # Runtime IO config
 io:
-  logging_level: 'INFO'   # * Logging level
-  logging_fname: "rfsoc_daq_log.txt" # * Log file name
-  terminal_output: True   # * Whether to print logs to terminal
-  influx_output: True     # * Whether to push measurement info to InfluxDB through the queen_agent
-  save_data: True         # * Whether to save data
-  save_config_copy: True  # * Whether to save copy of config (Recommended to use True)
+  logging_level: 'INFO'                                # * Logging level
+  logging_fname: "ccatkidlib_{{measurement_name}}.log" # * Log file name
+  terminal_output: True                                # * Whether to print logs to terminal
+  influx_output: True                                  # * Whether to push measurement info to InfluxDB through the queen_agent
+  save_data: True                                      # * Whether to save data
+  save_config_copy: True                               # * Whether to save copy of config (Recommended to use True)
 ...
