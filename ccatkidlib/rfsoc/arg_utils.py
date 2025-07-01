@@ -2,6 +2,9 @@ import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import numpy as np
 
+from ..utils import function_timer
+
+#@function_timer
 def group_args(com_to, *args):
     arg_list = []
     for arg in zip(*args):
@@ -75,6 +78,7 @@ def set_drone_args(R, com_to, key, args):
         rtn_list.append(rtn)
     return rtn_list
 
+#@function_timer
 def get_com_to(R, **kwargs):
     '''
     Parses a list of drone com_to and sets up these drones. The drone_list specified in the system config is used if no com_to is passed as a key word argument.

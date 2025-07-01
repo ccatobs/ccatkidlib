@@ -109,14 +109,11 @@ class R:
         # Set NCLO frequency RFSoC drones
         # -------------------------------------------------
         if initialize_drones:
-            for com, cfg in zip(self.drone_list, self.drone_cfg):
-                # Set NCLO
-                rtn = self.rfsoc.setNCLO(com_to = com, f_lo = cfg['tones']['NCLO'], silent=True)
-                rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-            rfsoc_io.send_msg('INFO', f"Set NCLO to {[cfg['tones']['NCLO'] for cfg in self.drone_cfg]} MHz for drones: {self.drone_list}!", self.output)
+            # Set NCLOs from drone config files
+            self.set_NCLO(setup=False)
 
-            # Set drone attenuations
-            self.set_atten()
+            # Set attenuations from drone config files
+            self.set_atten(setup=False)
 
         # Save init configs
         # -----------------
@@ -151,7 +148,7 @@ class R:
         # Get which boards to initialize (only initialize boards with at least on running drone)
         # --------------------------------------------------------------------------------------
         kwargs['setup'] = False
-        com_to, boards = autils.get_com_to(self, **kwargs)
+        _, boards = autils.get_com_to(self, **kwargs)
 
         # Iterate over boards
         # -------------------
@@ -361,6 +358,41 @@ class R:
         # Assign data directories as class attributes
         self.config_dirs, self.targ_dirs, self.timestream_dirs, self.vna_dirs = new_dir_paths
 
+    def set_NCLO(self, NCLO = None, **kwargs):
+        def _set_NCLO(com, *args, **kwargs):
+            NCLO = args[0]
+            rtn = self.rfsoc.setNCLO(com_to = com, f_lo = NCLO, silent=True) # Set NCLO frequency
+            rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+            return rtn
+
+        com_to, _ = autils.get_com_to(self, **kwargs) # Get com_to
+
+        # Get NCLO from drone config files
+        # --------------------------------
+        NCLOs = autils.get_drone_args(self, com_to, ['tones', 'NCLO']) # Get NCLOs from drone config files
+
+        # Override config attenuations with those passed as method argument (if any)
+        if NCLO is not None:
+            LOs = autils.parse_args(self, com_to, NCLO) # Parse NCLOs passed as argument
+            if LOs is None: return None # Return None if invalid NCLOs were passed
+
+            NCLOs = [int(LO) for LO in LOs] # Parse NCLOs passed as argument and cast as int
+
+            autils.set_drone_args(self, com_to, NCLOs) # Update NCLOs in drone config files
+        
+        # Group drones with the same NCLO
+        NCLO_dict = autils.group_args(com_to, NCLOs)
+        for NCLO, com in NCLO_dict.items():
+            args = [NCLO]
+            kwargs['com_to'] = com
+            self._run_parallel(_set_NCLO, *args, **kwargs)
+        
+        # Reset com_to and parallel_drones to what they were before
+        kwargs['com_to'] = com_to
+        rfsoc_io.send_msg('INFO', f'Successfully set NCLO to {list(NCLOs)} for drones {list(com_to)}!', self.output)
+
+        return NCLOs
+
     @header
     @utils.method_timer
     def set_atten(self, drive = None, sense = None, **kwargs):
@@ -452,12 +484,15 @@ class R:
             ADC_rms (bool): Whether to get RMS power at ADCs
         '''
 
+        if kwargs['setup']: self.setup_drones(**kwargs) # Setup drones 
+
         # Start RFSoC temperature and storage space feeds if not running
         # --------------------------------------------------------------
         if not self.rfsoc.feedMonitor.status().session['op_code'] == 2:
             self.rfsoc.feedMonitor.start()
             rfsoc_io.wait(60, desc="HK Feed Monitor Starting")
 
+        kwargs['setup'] = False # Do not set up drones again
         if space: avail_spaces = self.get_avail_space(**kwargs) # Get storage space
         if temps: ps_temps, pl_temps = self.get_temps(**kwargs) # Get temperatures
         if ADC_rms: rms_list = self.get_ADC_rms(**kwargs) # Get RMS power at ADCs
@@ -685,6 +720,7 @@ class R:
 
         # Get com_to
         com_to, boards = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False # Do not set up drones again
 
         # Parse key word arguments
         write_comb = True
@@ -760,6 +796,7 @@ class R:
             return rtn
 
         com_to, boards = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False # Do not set up drones again
 
         # Evaluate kwargs
         write_comb = any(key in kwargs for key in ['tone_powers', 'tone_freqs', 'tone_phis'])
@@ -1007,6 +1044,7 @@ class R:
             return stream_paths
 
         com_to, _ = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False # Do not set up drones again
 
         # Parse key word arguments
         g3 = self.io_cfg['timestream']['g3'] # Whether to take g3 timestream
@@ -1098,6 +1136,7 @@ class R:
         # Parse key word arguments
         # ------------------------
         com_to, _ = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False # Do not set up drones again
 
         tone_freqs    = autils.get_drone_args(self, com_to, ['tones', 'custom', 'tone_freqs'])
         tone_powers   = autils.get_drone_args(self, com_to, ['tones', 'custom', 'tone_powers'])
@@ -1212,6 +1251,7 @@ class R:
         # Get com_to list
         # ---------------
         com_to, boards = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False # Do not set up drones again
         write_targ_comb = True
 
         # Get parameters from drone config files
@@ -1357,6 +1397,7 @@ class R:
             return rtn1
 
         com_to, boards = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False # Do not set up drones again
 
         # Evaluate kwargs
         stitch_bw = autils.get_drone_args(self, com_to, ['tones', 'sweep_steps'])
@@ -1981,8 +2022,8 @@ class R:
             com_arrs[ind].append(float(com))
             board_arrs[ind].add(bid)
 
-        s = Style()
-        name = func.__name__
+        #s = Style()
+        #name = func.__name__
 
         rtn_list = []
         for com_to in com_arrs:
