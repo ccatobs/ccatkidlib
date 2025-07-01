@@ -1,6 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import collections
-from collections import deque
 
 @dataclass
 class Style:
@@ -24,7 +23,7 @@ class Style:
     TIMER:    str = '\033[96;7m'
 
     # Create stack for changing header/footer colors
-    #HEADER_STACK: collections.deque = deque()
+    HEADER_STACK: collections.deque = field(default_factory=collections.deque)
 
     # Style Properties
     LONGEST_DESC: int = 8

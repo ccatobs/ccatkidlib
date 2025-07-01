@@ -18,15 +18,16 @@ from functools import wraps
 from invoke import Responder
 
 # Import local modules
-from ccatkidlib.rfsoc.rfsoc_timestream import Streamer
-from ccatkidlib.rfsoc_io import header
-from ccatkidlib.style import Style
-from ccatkidlib.analysis.vna import VNA
-from ccatkidlib.analysis.target import Target
+from .rfsoc_timestream import Streamer
+from ..rfsoc_io import header
+from ..style import Style
+from ..analysis.vna import VNA
+from ..analysis.target import Target
 
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
+import ccatkidlib.rfsoc.arg_utils as autils
 
 if mp.get_start_method(allow_none=True) is None: mp.set_start_method('fork')
 
@@ -39,14 +40,13 @@ class R:
     @utils.method_timer
     def __init__(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml", initialize_boards = None, initialize_drones = None):
         '''
-        Constructor for R. Creates directories for data storage, configures logger, and starts
-        RFSoC PCS agent.
+        Constructor for R. Creates directories for data storage, configures logger, and starts RFSoC PCS agent.
 
         Parameters:
-            cfg_path (str) : Path to system configuration file.
+            cfg_path (str) : Path to system configuration file (default: system_config.yaml in ccatkidlib/rfsoc directory)
+            initialize_boards (bool) : Whether to initialize RFSoC boards (default: False)
+            initialize_drones (bool) : Whether to initialize RFSoC drones (default: False)
         '''
-
-        self.running = True
 
         # Load config files and setup logging
         # -----------------------------------
@@ -77,18 +77,15 @@ class R:
         sys.path.append(self.io_cfg['file_paths']['pcs_dir'])
         sys.path.append(str(primecam_readout / 'alcove_commands'))
 
-        rfsoc_io.send_msg('DEBUG', 'Finished appending file paths!', self.output)
+        rfsoc_io.send_msg('DEBUG', f'Finished appending file paths! Paths in sys.path: {sys.path}', self.output)
 
-        # Load local modules
-        from ocs.ocs_client import OCSClient # Import PCS client module
+        # Import OCSClient 
+        from ocs.ocs_client import OCSClient
 
         # Initialize PCS clients
         # ----------------------
         self.rfsoc = OCSClient(self.io_cfg['pcs_agents']['rfsoc_agent'], args=[])
-
-        # Update Measurment Information 
-        # -----------------------------
-        self.update_measurement(name = self.io_cfg['name'], desc = self.io_cfg['desc'])
+        rfsoc_io.send_msg('INFO', f'Connected to RFSoC PCS agent!', self.output)
 
         # Setup boards
         # ------------
@@ -99,7 +96,11 @@ class R:
         # ------------
         initialize_drones = initialize_drones if initialize_drones is not None else self.io_cfg['init']['initialize_drones']
         if initialize_drones: self.setup_drones()
-        rfsoc_io.send_msg('INFO', f'Initialized RFSoC agent. Communicating with drones: {self.drone_list}!', self.output)
+        rfsoc_io.send_msg('INFO', f'Communicating with drones: {self.drone_list}!', self.output)
+
+        # Update Measurment Information 
+        # -----------------------------
+        self.update_measurement(name = self.io_cfg['name'], desc = self.io_cfg['desc'])
 
         # Initialize streamer attribute (As None, since it is only used when g3=False)
         # ----------------------------------------------------------------------------
@@ -117,10 +118,6 @@ class R:
             # Set drone attenuations
             self.set_atten()
 
-        # Get RFSoC temperature and storge space
-        # --------------------------------------
-        self.get_stats(com_to = self.drone_list, ADC_rms = False)
-
         # Save init configs
         # -----------------
         rfsoc_io.save_config(self.log_dir / f'init_config_ext_{self.timestamp}.yaml', self.ext_cfg, self.save_cfg)
@@ -131,19 +128,30 @@ class R:
     #################
     # Setup Methods #
     #################
+    @header
+    def update_measurement(self, name = None, desc = '', influx_output = None):
+        influx_output = influx_output if influx_output is not None else self.io_cfg['io']['influx_output']
+
+        if influx_output: 
+            rtn = self.rfsoc.updateMeasurement(measurement_name = f"{name}, Date: {self.curr_date}, Session ID: {self.sess_id}" if name is not None else name, measurement_desc = desc)
+            return rtn
+        else:
+            return None 
 
     @header
     @utils.method_timer
     def setup_boards(self, **kwargs):
         '''
-        (Re)initialize RFSoC boards one at time and run queen commands to safely set accumulation length and start timestreaming.
+        (Re)initialize RFSoC boards one at time without setting up tone comb.
+
+        Parameters:
+            com_to (list[str]) : List of boards to initialize (default: all boards in system config)
         '''
 
         # Get which boards to initialize (only initialize boards with at least on running drone)
         # --------------------------------------------------------------------------------------
         kwargs['setup'] = False
-        com_to, boards = self._get_com_to(**kwargs)
-        NCLOs = []
+        com_to, boards = autils.get_com_to(self, **kwargs)
 
         # Iterate over boards
         # -------------------
@@ -167,41 +175,6 @@ class R:
                 # Restart all drones
                 # ------------------
                 self.setup_drones(com_to=[f'{board}.1', f'{board}.2', f'{board}.3', f'{board}.4'], restart = True)
-
-                # Initialize drones in safe state for streaming (one at a time)
-                # -------------------------------------------------------------
-                # Set NCLOs
-                rfsoc_io.send_msg('INFO', f'Setting NCLOs for board {board}!', self.output)
-                for i in range(4):
-                    com = f'{board}.{i+1}'
-                    try:
-                        ind = self.drone_list.index(com)
-                        NCLO = self.drone_cfg[ind]['tones']['NCLO']
-                        NCLOs.append(NCLO)
-                    except:
-                        NCLO = 500
-                    rtn = self.rfsoc.setNCLO(com_to = com, f_lo = NCLO, silent=True)
-                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-                    time.sleep(1)
-
-                # Write VNA combs
-                rfsoc_io.send_msg('INFO', f'Writing VNA combs for board {board}!', self.output)
-                for i in range(4):
-                    com = f'{board}.{i+1}'
-                    rtn = self.rfsoc.writeNewVnaComb(com_to = com, silent=False)
-                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-                    time.sleep(1)
-
-                # Turn on timestreams
-                rfsoc_io.send_msg('INFO', f'Turning timestreams on for board {board}!', self.output)
-                for i in range(4):
-                    com = f'{board}.{i+1}'
-                    ret = self.rfsoc.timestreamOn(com_to = com, on = True, silent=False)
-                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-                    time.sleep(1)
-        ret = self.rfsoc.timestreamOn(com_to = None, on = False, silent=False) # Turn off all timestreams
-        rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-        rfsoc_io.send_msg('INFO', f"Set NCLOs to {NCLOs} MHz for drones: {self.drone_list}!", self.output)
 
     def setup_drones(self, **kwargs):
         '''
@@ -327,7 +300,7 @@ class R:
             self.drone_list = [self.drone_list]
             self.drone_num = len(self.drone_list)
 
-        self.drone_list, bids = self._get_com_to(com_to = self.drone_list, setup = False)
+        self.drone_list, bids = autils.get_com_to(self, com_to = self.drone_list, setup = False)
         self.board_list = bids
 
         self.all_boards = [board[1:] for board in self.io_cfg['boards']]
@@ -376,10 +349,10 @@ class R:
 
         # Save session ID to config files
         # -------------------------------
-        self._edit_config(self.ext_cfg, 'sess_id', self.sess_id)
-        self._edit_config(self.io_cfg, 'sess_id', self.sess_id)
+        rfsoc_io.edit_config(self.ext_cfg, 'sess_id', self.sess_id)
+        rfsoc_io.edit_config(self.io_cfg, 'sess_id', self.sess_id)
         for cfg in self.drone_cfg:
-            self._edit_config(cfg, 'sess_id', self.sess_id)
+            rfsoc_io.edit_config(cfg, 'sess_id', self.sess_id)
 
         # Create file directory structure for saving data
         # -----------------------------------------------
@@ -419,16 +392,16 @@ class R:
 
             # Get attenuations
             # ----------------
-            attens = self._get_drone_args(com_to, ['atten', f'{direction}']) # Get attenuations from drone config files
+            attens = autils.get_drone_args(self, com_to, ['atten', f'{direction}']) # Get attenuations from drone config files
 
             # Override config attenuations with those passed as method argument (if any)
             if atten is not None:
-                attens = [int(atten) for atten in self._parse_args(com_to, atten)] # Parse attenuations passed as argument and cast to int
+                attens = [int(atten) for atten in autils.parse_args(self, com_to, atten)] # Parse attenuations passed as argument and cast to int
 
                 # Return None if invalid attenuations were passed
                 if attens is None: return None
 
-                self._set_drone_args(com_to, direction, attens) # Update attenuations in drone config files
+                autils.set_drone_args(self, com_to, direction, attens) # Update attenuations in drone config files
 
             # Set attenuations
             # ----------------
@@ -439,7 +412,7 @@ class R:
             self.parallel_drones = 1
 
             # Group drones with the same attenuations
-            atten_dict = self._group_args(com_to, attens)
+            atten_dict = autils.group_args(com_to, attens)
             for att, com in atten_dict.items():
                 args = [direction, float(att)]
                 kwargs['com_to'] = com
@@ -453,7 +426,7 @@ class R:
             return attens
 
         # Specify which attenuators to change
-        com_to, _ = self._get_com_to(**kwargs)
+        com_to, _ = autils.get_com_to(self, **kwargs)
 
         # Set drive attenuation
         _set_direction(com_to = com_to, direction = 'drive', atten = drive)
@@ -463,82 +436,9 @@ class R:
 
         return drive, sense
 
-    @header
-    @utils.method_timer
-    def write_config_comb(self, **kwargs):
-        '''
-        Write custom comb using comb parameters from config file. Config file parameters are
-        superseceded by key word argument parameters. If no parameters are passed through the config file
-        or as key word arguments, the most recent comb is used instead.
-
-        Parameters:
-            tone_freqs  (float | list | str) : Custom tone frequencies (Hz)
-            tone_powers (float | list | str) : Custom tone powers
-            tone_phis   (float | list | str) : Custom tone phases
-        '''
-
-        def _write_targ_comb(com, *args, **kwargs):
-            '''
-            Internal function for writing target comb using custom list.
-
-            Parameters:
-                com (str) : Drone for which custom comb should be written
-            Returns:
-                rtn : OCS reply object
-
-            '''
-            rtn = self.rfsoc.writeTargCombFromCustomList(com_to = com, silent=False)
-            rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-            return rtn
-
-        # Parse key word arguments
-        # ------------------------
-        com_to, _ = self._get_com_to(**kwargs)
-
-        tone_freqs    = self._get_drone_args(com_to, ['tones', 'custom', 'tone_freqs'])
-        tone_powers   = self._get_drone_args(com_to, ['tones', 'custom', 'tone_powers'])
-        tone_phis     = self._get_drone_args(com_to, ['tones', 'custom', 'tone_phis'])
-        rescale_power = self._get_drone_args(com_to, ['tones', 'custom', 'generation', 'rescale_power'])
-        gen_attempts  = self._get_drone_args(com_to, ['tones', 'custom', 'generation', 'gen_attempts'])
-
-        # Evaluate kwargs
-        for key, value in kwargs.items():
-            if key == 'tone_freqs':
-                tone_freqs = self._parse_args(com_to, value)
-            elif key == 'tone_powers':
-                tone_powers = self._parse_args(com_to, value)
-            elif key == 'tone_phis':
-                tone_phis = self._parse_args(com_to, value)
-            elif key == 'rescale_power':
-                rescale_power = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, ['tones', 'custom', 'generation', 'rescale_power'], rescale_power)
-            elif key == 'gen_attempts':
-                gen_attempts = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, ['tones', 'custom', 'generation', 'gen_attempts'], gen_attempts)
-
-        # Write custom comb for each drone
-        # --------------------------------
-        for com, rescale, attempts, freq, power, phi in zip(com_to, rescale_power, gen_attempts, tone_freqs, tone_powers, tone_phis):
-            self._write_custom_comb(com, rescale_power = rescale, gen_attempts = attempts, tone_freqs = freq, tone_powers = power, tone_phis = phi)
-
-        # Write sweep comb based on custom parameters
-        # -------------------------------------------
-        rtn = self._run_parallel(_write_targ_comb, **kwargs)
-        rfsoc_io.send_msg('INFO', f'Sucessfully wrote custom comb for drones {com_to}!', self.output)
-        return rtn
-
-    ######################
-    # Monitoring Methods #
-    ######################
-    @header
-    def update_measurement(self, name = None, desc = '', influx_output = None):
-        influx_output = influx_output if influx_output is not None else self.io_cfg['io']['influx_output']
-
-        if influx_output: 
-            rtn = self.rfsoc.updateMeasurement(measurement_name = f"{name}, Date: {self.curr_date}, Session ID: {self.sess_id}" if name is not None else name, measurement_desc = desc)
-            return rtn
-        else:
-            return None 
+    #===========================#
+    # Monitoring Getter Methods #
+    #===========================#
     
     @header
     @utils.method_timer
@@ -586,7 +486,7 @@ class R:
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
             return ast.literal_eval(' '.join(rtn.session['messages'][1][1].split(' ')[1:]))[1:][0] # Parse OCS message to get returned data
 
-        com_to, _ = self._get_com_to(**kwargs)
+        com_to, _ = autils.get_com_to(self, **kwargs)
 
         # Take data one board at a time (all drones transfers too much data through OCS)
         kwargs['parallel_boards'] = 1
@@ -612,7 +512,7 @@ class R:
             rms = float(np.real(np.sqrt(np.mean(z * np.conj(z))))) # Calculate RMS value at the ADC
             rms_list.append(rms)
 
-            self._edit_config(self.drone_cfg[ind], 'ADC_RMS', rms)  # Add ADC rms to drone config
+            rfsoc_io.edit_config(self.drone_cfg[ind], 'ADC_RMS', rms)  # Add ADC rms to drone config
 
         # Create list of ADC rms values for all drones, sort by drone bid.drid
         rms_list = [rms for _, rms in sorted(zip(inds, rms_list))]
@@ -636,11 +536,11 @@ class R:
                 space_dict = session_data[f'drone_free_spaces_GB_board_{bid}']['data']
                 avail_space = space_dict[f'spc_{bid}_1']
                 avail_spaces.append(avail_space)
-                self._edit_config(self.ext_cfg, ['boards', f'b{bid}', 'avail_space'], avail_space, append = True)
+                rfsoc_io.edit_config(self.ext_cfg, ['boards', f'b{bid}', 'avail_space'], avail_space, append = True)
             rfsoc_io.send_msg('INFO', f'Storage space is {avail_spaces} GB for boards {bids}!', self.output)
             return avail_spaces
 
-        com_to, bids = self._get_com_to(**kwargs)
+        com_to, bids = autils.get_com_to(self, **kwargs)
 
         threshold = self.io_cfg['clean']['threshold']  # [GB] Threshold after which clean board drone directories
         olderThanDaysAgo = self.io_cfg['clean']['olderThanDaysAgo'] # [Days] 
@@ -684,10 +584,10 @@ class R:
                 temp_dict = session_data[f'drone_temperatures_C_board_{bid}']['data']
                 temp = float(np.mean([temp_dict[f'temp_{bid}_{drid + 1}_{loc}'] for drid in range(4)]))
                 temps.append(temp)
-                self._edit_config(self.ext_cfg, ['boards', f'b{bid}', f'{loc}_temp'], temp, append = True)
+                rfsoc_io.edit_config(self.ext_cfg, ['boards', f'b{bid}', f'{loc}_temp'], temp, append = True)
             rfsoc_io.send_msg('INFO', f'{loc} temperatures are {temps} \xb0C for boards {bids}!', self.output)
 
-        com_to, bids = self._get_com_to(**kwargs)
+        com_to, bids = autils.get_com_to(self, **kwargs)
         session_data = self.rfsoc.feedMonitor.status().session['data']
         ps_temps = _get_temps(bids, 'ps')
         pl_temps = _get_temps(bids, 'pl')
@@ -746,7 +646,7 @@ class R:
             return attens
 
         # Specify which attenuators to change
-        com_to, _ = self._get_com_to(**kwargs)
+        com_to, _ = autils.get_com_to(self, **kwargs)
 
         # Set drive attenuation
         drive_attens = _get_direction(com_to = com_to, direction = 'drive')
@@ -755,6 +655,7 @@ class R:
         sense_attens = _get_direction(com_to = com_to, direction = 'sense')
 
         return drive_attens, sense_attens
+    
     ############################
     # Data Acquisition Methods #
     ############################
@@ -783,25 +684,25 @@ class R:
             return rtn
 
         # Get com_to
-        com_to, boards = self._get_com_to(**kwargs)
+        com_to, boards = autils.get_com_to(self, **kwargs)
 
         # Parse key word arguments
         write_comb = True
-        sweep_steps = self._get_drone_args(com_to, ['tones', 'sweep_steps'])
+        sweep_steps = autils.get_drone_args(self, com_to, ['tones', 'sweep_steps'])
         for key, value in kwargs.items():
             if key == 'NCLO':
-                NCLO = self._parse_args(com_to, value)
+                NCLO = autils.parse_args(self, com_to, value)
                 for com, N in zip(com_to, NCLO):
                     rtn = self.rfsoc.setNCLO(com_to = com, f_lo = N, silent=True)
                     rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
 
-                self._set_drone_args(com_to, "NCLO", NCLO)
+                autils.set_drone_args(self, com_to, "NCLO", NCLO)
                 rfsoc_io.send_msg('INFO', f'Set NCLO to {NCLO} MHz for drones {com_to}!', self.output)
             elif key == 'write_comb':
                 write_comb = value
             elif key == 'sweep_steps':
-                sweep_steps = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "sweep_steps", sweep_steps)
+                sweep_steps = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "sweep_steps", sweep_steps)
 
         # Write VNA comb
         # --------------
@@ -816,7 +717,7 @@ class R:
         self.timestamp = str(time.time()).split('.')[0]
         rfsoc_io.send_msg('INFO', 'Taking VNA sweeps...', self.output)
 
-        sweep_dict = self._group_args(com_to, sweep_steps)
+        sweep_dict = autils.group_args(com_to, sweep_steps)
         for sweep_steps, com in sweep_dict.items():
             args = [int(sweep_steps)]
             kwargs['com_to'] = com
@@ -858,29 +759,29 @@ class R:
             rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
             return rtn
 
-        com_to, boards = self._get_com_to(**kwargs)
+        com_to, boards = autils.get_com_to(self, **kwargs)
 
         # Evaluate kwargs
         write_comb = any(key in kwargs for key in ['tone_powers', 'tone_freqs', 'tone_phis'])
-        sweep_steps = self._get_drone_args(com_to, ['tones', 'sweep_steps'])
-        chan_bw = self._get_drone_args(com_to, ['tones', 'chan_bw'])
+        sweep_steps = autils.get_drone_args(self, com_to, ['tones', 'sweep_steps'])
+        chan_bw = autils.get_drone_args(self, com_to, ['tones', 'chan_bw'])
         for key, value in kwargs.items():
             if key == 'write_comb':
                 write_comb = value
             elif key == 'NCLO':
-                NCLO = self._parse_args(com_to, value)
+                NCLO = autils.parse_args(self, com_to, value)
                 for com, N in zip(com_to, NCLO):
                     rtn = self.rfsoc.setNCLO(com_to = com, f_lo = N, silent=True)
                     rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
 
-                self._set_drone_args(com_to, "NCLO", NCLO)
+                autils.set_drone_args(self, com_to, "NCLO", NCLO)
                 rfsoc_io.send_msg('INFO', f'Set NCLO to {NCLO} MHz for drones {com_to}!', self.output)
             elif key == 'sweep_steps':
-                sweep_steps = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "sweep_steps", sweep_steps)
+                sweep_steps = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "sweep_steps", sweep_steps)
             elif key == 'chan_bw':
-                chan_bw = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "chan_bw", chan_bw)
+                chan_bw = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "chan_bw", chan_bw)
 
         # Write new target sweep comb
         if write_comb:
@@ -891,7 +792,7 @@ class R:
         self.timestamp = str(time.time()).split('.')[0]
         rfsoc_io.send_msg('INFO', 'Taking target sweeps!', output = self.output)
 
-        sweep_dict = self._group_args(com_to, sweep_steps, chan_bw)
+        sweep_dict = autils.group_args(com_to, sweep_steps, chan_bw)
 
         for arg, com in sweep_dict.items():
             sweep_steps, chan_bw = arg.split(', ')
@@ -950,7 +851,7 @@ class R:
                 gc.collect()
 
 
-                drone_ips = self._get_drone_args(com_to, 'udp_source_ip')
+                drone_ips = autils.get_drone_args(self, com_to, 'udp_source_ip')
                 drone_data = [[] for _ in range(len(com_to))]
                 for dat, aux, ip in zip(data, auxs, ips):
                     drone_ind = drone_ips.index(str(ip))
@@ -1105,7 +1006,7 @@ class R:
                 stream_paths.append(tstream_file)
             return stream_paths
 
-        com_to, _ = self._get_com_to(**kwargs)
+        com_to, _ = autils.get_com_to(self, **kwargs)
 
         # Parse key word arguments
         g3 = self.io_cfg['timestream']['g3'] # Whether to take g3 timestream
@@ -1165,6 +1066,70 @@ class R:
     ##################
     # Tuning Methods #
     ##################
+
+    @header
+    @utils.method_timer
+    def write_config_comb(self, **kwargs):
+        '''
+        Write custom comb using comb parameters from config file. Config file parameters are
+        superseceded by key word argument parameters. If no parameters are passed through the config file
+        or as key word arguments, the most recent comb is used instead.
+
+        Parameters:
+            tone_freqs  (float | list | str) : Custom tone frequencies (Hz)
+            tone_powers (float | list | str) : Custom tone powers
+            tone_phis   (float | list | str) : Custom tone phases
+        '''
+
+        def _write_targ_comb(com, *args, **kwargs):
+            '''
+            Internal function for writing target comb using custom list.
+
+            Parameters:
+                com (str) : Drone for which custom comb should be written
+            Returns:
+                rtn : OCS reply object
+
+            '''
+            rtn = self.rfsoc.writeTargCombFromCustomList(com_to = com, silent=False)
+            rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
+            return rtn
+
+        # Parse key word arguments
+        # ------------------------
+        com_to, _ = autils.get_com_to(self, **kwargs)
+
+        tone_freqs    = autils.get_drone_args(self, com_to, ['tones', 'custom', 'tone_freqs'])
+        tone_powers   = autils.get_drone_args(self, com_to, ['tones', 'custom', 'tone_powers'])
+        tone_phis     = autils.get_drone_args(self, com_to, ['tones', 'custom', 'tone_phis'])
+        rescale_power = autils.get_drone_args(self, com_to, ['tones', 'custom', 'generation', 'rescale_power'])
+        gen_attempts  = autils.get_drone_args(self, com_to, ['tones', 'custom', 'generation', 'gen_attempts'])
+
+        # Evaluate kwargs
+        for key, value in kwargs.items():
+            if key == 'tone_freqs':
+                tone_freqs = autils.parse_args(self, com_to, value)
+            elif key == 'tone_powers':
+                tone_powers = autils.parse_args(self, com_to, value)
+            elif key == 'tone_phis':
+                tone_phis = autils.parse_args(self, com_to, value)
+            elif key == 'rescale_power':
+                rescale_power = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, ['tones', 'custom', 'generation', 'rescale_power'], rescale_power)
+            elif key == 'gen_attempts':
+                gen_attempts = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, ['tones', 'custom', 'generation', 'gen_attempts'], gen_attempts)
+
+        # Write custom comb for each drone
+        # --------------------------------
+        for com, rescale, attempts, freq, power, phi in zip(com_to, rescale_power, gen_attempts, tone_freqs, tone_powers, tone_phis):
+            self._write_custom_comb(com, rescale_power = rescale, gen_attempts = attempts, tone_freqs = freq, tone_powers = power, tone_phis = phi)
+
+        # Write sweep comb based on custom parameters
+        # -------------------------------------------
+        rtn = self._run_parallel(_write_targ_comb, **kwargs)
+        rfsoc_io.send_msg('INFO', f'Sucessfully wrote custom comb for drones {com_to}!', self.output)
+        return rtn
 
     @header
     @utils.method_timer
@@ -1232,8 +1197,8 @@ class R:
                 drone_cfg = self.drone_cfg[ind]
                 found_num = len(good_resonator)
                 found_nums[i] = found_num
-                self._edit_config(drone_cfg, 'found_num_detectors', found_num)
-                self._edit_config(drone_cfg, 'found_detector_freqs_filtered', str(save_path))
+                rfsoc_io.edit_config(drone_cfg, 'found_num_detectors', found_num)
+                rfsoc_io.edit_config(drone_cfg, 'found_detector_freqs_filtered', str(save_path))
                 rfsoc_io.send_msg('INFO', f'Kept {found_num} detectors after filtering for drone {com}!')
 
                 drone_cfg = rfsoc_io.save_config(save_file, drone_cfg, self.save_cfg)
@@ -1246,63 +1211,63 @@ class R:
 
         # Get com_to list
         # ---------------
-        com_to, boards = self._get_com_to(**kwargs)
+        com_to, boards = autils.get_com_to(self, **kwargs)
         write_targ_comb = True
 
         # Get parameters from drone config files
         # -------------------------------------
-        peak_prom_std = self._get_drone_args(com_to, ['det_find', 'peak_prom_std'])
-        peak_prom_db  = self._get_drone_args(com_to, ['det_find', 'peak_prom_db'])
-        peak_dis      = self._get_drone_args(com_to, ['det_find', 'peak_dis'])
-        width_min     = self._get_drone_args(com_to, ['det_find', 'width_min'])
-        width_max     = self._get_drone_args(com_to, ['det_find', 'width_max'])
-        stitch        = self._get_drone_args(com_to, ['det_find', 'stitch'])
-        stitch_bw     = self._get_drone_args(com_to, ['tones', 'sweep_steps'])
-        stitch_sw     = self._get_drone_args(com_to, ['det_find', 'stitch_sw'])
-        remove_cont   = self._get_drone_args(com_to, ['det_find', 'remove_cont'])
-        continuum_wn  = self._get_drone_args(com_to, ['det_find', 'continuum_wn'])
-        remove_noise  = self._get_drone_args(com_to, ['det_find', 'remove_noise'])
-        noise_wn      = self._get_drone_args(com_to, ['det_find', 'noise_wn'])
+        peak_prom_std = autils.get_drone_args(self, com_to, ['det_find', 'peak_prom_std'])
+        peak_prom_db  = autils.get_drone_args(self, com_to, ['det_find', 'peak_prom_db'])
+        peak_dis      = autils.get_drone_args(self, com_to, ['det_find', 'peak_dis'])
+        width_min     = autils.get_drone_args(self, com_to, ['det_find', 'width_min'])
+        width_max     = autils.get_drone_args(self, com_to, ['det_find', 'width_max'])
+        stitch        = autils.get_drone_args(self, com_to, ['det_find', 'stitch'])
+        stitch_bw     = autils.get_drone_args(self, com_to, ['tones', 'sweep_steps'])
+        stitch_sw     = autils.get_drone_args(self, com_to, ['det_find', 'stitch_sw'])
+        remove_cont   = autils.get_drone_args(self, com_to, ['det_find', 'remove_cont'])
+        continuum_wn  = autils.get_drone_args(self, com_to, ['det_find', 'continuum_wn'])
+        remove_noise  = autils.get_drone_args(self, com_to, ['det_find', 'remove_noise'])
+        noise_wn      = autils.get_drone_args(self, com_to, ['det_find', 'noise_wn'])
 
         # Parse key word arguments
         # ------------------------
         for key, value in kwargs.items():
             if key == 'peak_prom_std':
-                peak_prom_std = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "peak_prom_std", peak_prom_std)
+                peak_prom_std = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "peak_prom_std", peak_prom_std)
             elif key == 'peak_prom_db':
-                peak_prom_db = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "peak_prom_db", peak_prom_db)
+                peak_prom_db = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "peak_prom_db", peak_prom_db)
             elif key == 'peak_dis':
-                peak_dis = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "peak_dis", peak_dis)
+                peak_dis = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "peak_dis", peak_dis)
             elif key == 'width_min':
-                width_min = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "width_min", width_min)
+                width_min = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "width_min", width_min)
             elif key == 'width_max':
-                width_max = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "width_max", width_max)
+                width_max = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "width_max", width_max)
             elif key == 'stitch':
-                stitch = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "stitch", stitch)
+                stitch = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "stitch", stitch)
             elif key == 'sweep_steps':
-                stitch_bw = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "sweep_steps", stitch_bw)
+                stitch_bw = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "sweep_steps", stitch_bw)
             elif key == 'stitch_sw':
-                stitch_sw = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "stitch_sw", stitch_sw)
+                stitch_sw = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "stitch_sw", stitch_sw)
             elif key == 'continuum_wn':
-                continuum_wn = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "continuum_wn", continuum_wn)
+                continuum_wn = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "continuum_wn", continuum_wn)
             elif key == 'remove_cont':
-                remove_cont = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "remove_cont", remove_cont)
+                remove_cont = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "remove_cont", remove_cont)
             elif key == 'remove_noise':
-                remove_noise = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "remove_noise", remove_noise)
+                remove_noise = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "remove_noise", remove_noise)
             elif key == 'noise_wn':
-                noise_wn = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "noise_wn", noise_wn)
+                noise_wn = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "noise_wn", noise_wn)
             elif key == 'write_targ_comb':
                 write_targ_comb = value
 
@@ -1391,16 +1356,16 @@ class R:
 
             return rtn1
 
-        com_to, boards = self._get_com_to(**kwargs)
+        com_to, boards = autils.get_com_to(self, **kwargs)
 
         # Evaluate kwargs
-        stitch_bw = self._get_drone_args(com_to, ['tones', 'sweep_steps'])
+        stitch_bw = autils.get_drone_args(self, com_to, ['tones', 'sweep_steps'])
         write_targ_comb = True
         # Parse key word arguments
         for key, value in kwargs.items():
             if key == 'sweep_steps':
-                stitch_bw = self._parse_args(com_to, value)
-                self._set_drone_args(com_to, "sweep_steps", stitch_bw)
+                stitch_bw = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "sweep_steps", stitch_bw)
             elif key == 'write_targ_comb':
                 write_targ_comb = value
 
@@ -1572,8 +1537,8 @@ class R:
 
             rfsoc_io.send_msg('INFO', f"Found {found_num} detectors for drone {com}!", self.output)
 
-            self._edit_config(self.drone_cfg[ind], 'found_num_detectors', found_num)
-            self._edit_config(self.drone_cfg[ind], 'found_detector_freqs', res_path)
+            rfsoc_io.edit_config(self.drone_cfg[ind], 'found_num_detectors', found_num)
+            rfsoc_io.edit_config(self.drone_cfg[ind], 'found_detector_freqs', res_path)
 
             save_file = self.config_dirs[ind] / f"{self.io_cfg['save_file_names'][f'{sweep}_sweep']}_config_drone_{self.timestamp}{f'_{timestamp}' if not timestamp == self.timestamp else ''}.yaml" 
             save_files.append(save_file)
@@ -1581,166 +1546,7 @@ class R:
 
         self.ext_cfg = rfsoc_io.save_config(self.log_dir / f"{self.io_cfg['save_file_names'][f'{sweep}_sweep']}_config_ext_{self.timestamp}.yaml", self.ext_cfg, self.save_cfg)
         return found_nums, found_freqs, save_files
-
-    ########################
-    # Arg Handling Methods #
-    ########################
-
-    def _group_args(self, com_to, *args):
-        arg_list = []
-        for arg in zip(*args):
-            arg = ', '.join([str(a) for a in list(arg)])
-            arg_list.append(arg)
-
-        sweep_dict = {}
-        for com, arg in zip(com_to, arg_list):
-            com_list = sweep_dict.setdefault(arg, [])
-            com_list.append(com)
-
-        return sweep_dict
-
-    def _parse_args(self, com_to, arg):
-        '''
-        Parse key word drone arguments
-
-        Parameters:
-            com_to       (list of str) : List of drones
-            arg    (Any | list of Any) : Arugment to parse
-        Returns:
-            args         (list of Any) : List of parsed args
-        '''
-
-        args = None
-        try: # Check if argument is a list
-            if len(arg) == len(com_to): # Length of argument list should match number of drones
-                args = arg
-            else:
-                rfsoc_io.send_msg('WARNING', f'{arg} is not a valid argument. Must be a single value or match the length of {com_to}!', self.output)
-                return None # Return None if argument is invalid
-        except:
-            try: # Assume argument is a single value and create a list of arugments with length equal to the number of drones
-                args = [arg] * len(com_to)
-            except:
-                rfsoc_io.send_msg('WARNING', f'{arg} is not a valid argument. Must be a single value or match the length of {com_to}!', self.output)
-                return None # Return None if argument is invalid
-        return args # Return parsed argument
-
-    def _get_drone_args(self, com_to, key):
-        '''
-        Get drone arguments from drone config files
-
-        Parameters:
-            com_to (list of str) : List of drones
-            key    (list of str) : List of dictionary key(s) of argument to retrieve from drone config files
-        Returns:
-            args   (list of Any) : List of values from drone config files corresponding to dictionary key
-        '''
-
-        inds = [self.drone_list.index(com) for com in com_to] # Get list of indicies corresponding to drones in com_to
-        return [utils.dict_get(self.drone_cfg[ind], key) for ind in inds] # Get dictionary value corresponding to key for each drone config file
-
-    def _set_drone_args(self, com_to, key, args):
-        '''
-        Set drone arguments in drone config files
-
-        Parameters:
-            com_to (list of str) : List of drones
-            key            (str) : Dictionary key to set value of
-            args   (list of Any) : List of values to set in drone config files
-        Returns:
-            rtn_list (list of bool) : List of returns from edit_config for each drone
-        '''
-
-        # Iterate over drones and args
-        rtn_list = []
-        for com, arg in zip(com_to, args):
-            ind = self.drone_list.index(com) # Get index corresponding to drone in com_to
-            rtn = self._edit_config(self.drone_cfg[ind], key, arg) # Set config value of specified key
-            rtn_list.append(rtn)
-        return rtn_list
-
-    def _get_com_to(self, **kwargs):
-        '''
-        Parses a list of drone com_to and sets up these drones. The drone_list specified in the system config is used if no com_to is passed as a key word argument.
-        If a com_to is passed as a key word argument, makes sure that the com_to is a list and that all drones are included in the system config drone_list.
-
-        Parameters:
-            com_to (list of str): String or list of strings specifying drone com_to
-        Returns:
-            com_to (list of str): List of drone com_to
-            bids   (list of str): List of boards in com_to
-        '''
-
-        # Set com_to to drone list specified in system config (make a copy so that it does not point to the class drone_list attribute)
-        com_to = np.copy(self.drone_list).tolist()
-        bids = self.board_list
-        setup = True
-
-        # Override com_to with that passed as key word argument (if any)
-        for key, value in kwargs.items():
-            if key == 'com_to':
-                com_to = value
-
-                # If com_to is not a list, make it a list
-                if not isinstance(com_to, list): com_to = [com_to]
-
-                # Get list of boards used
-                bids = set()
-                for com in com_to[::-1]:
-                    split_str = com.split('.') # Split drone com_to into bid and drid
-                    bids.add(split_str[0]) # Add bid to set of board ids
-
-                    # Replace any board only com_to (e.g. '1') with bid.drid for all four drones
-                    if len(split_str) == 1:
-                        com_to.remove(com)
-                        for i in range(4):
-                            com_to.append(com + f'.{i + 1}')
-
-                # Remove any duplicate entries and sort list of drones
-                com_to = sorted(list(set(com_to)))
-
-                # Check that all drones are in initialized drone list
-                extra_drones = set(com_to) - set(self.drone_list) # Get drones in com_to that are not in drone_list
-                if len(extra_drones) > 0: raise ValueError(f'The drones {sorted(list(extra_drones))} are not in system config drone list!')
-            elif key == 'setup':
-                setup = value
-
-        # Set up drone with specified com_to list
-        kwargs['restart'] = False
-        if setup: self.setup_drones(**kwargs)
-
-        # Return list of drones and list of boards in use
-        return com_to, sorted(list(bids))
-
-    def _edit_config(self, cfg, key, value, append = False):
-        '''
-        Update key in specified configuration file with the specified value.
-
-        Parameters:
-            cfg    (dict) : Configuration file to update
-            key     (str) : Key that should be updated
-            value   (Any) : Value with which to update key
-            append (bool) : Whether to append a new key, value pair to config file if key is not found
-        Returns:
-            done   (bool) : True if key was successfully created or updated.
-        '''
-
-        # Edit config file dictionary
-        # ---------------------------
-        done = utils.dict_set(cfg, key, value)
-
-        # Check if key was successfully updated
-        # -------------------------------------
-        if done: # If matching key was updated
-            rfsoc_io.send_msg('DEBUG', f'Updated key "{key}" with value "{value}" in config file"!')
-        elif append: # If key was not found and append=True, add key value pair to dictionary
-            cfg[key] = value
-            done = True
-            rfsoc_io.send_msg('DEBUG', f'Added key "{key}" with value "{value}" to config file!')
-        else: # If key was not found and append=False
-            rfsoc_io.send_msg('DEBUG', f'Failed to update key "{key}" with value "{value}" in config file!')
-        return done
-
+    
     #########################
     # Internal Comb Methods #
     #########################
@@ -1960,16 +1766,16 @@ class R:
             # Edit comb saved in drone config files
             # -------------------------------------
             # Frequency comb
-            self._edit_config(self.drone_cfg[ind], ['tones', 'tone_freqs'], utils.arr_to_list(tone_freqs))
+            rfsoc_io.edit_config(self.drone_cfg[ind], ['tones', 'tone_freqs'], utils.arr_to_list(tone_freqs))
 
             # Amplitude comb
-            self._edit_config(self.drone_cfg[ind], ['tones', 'tone_powers'], utils.arr_to_list(tone_powers))
+            rfsoc_io.edit_config(self.drone_cfg[ind], ['tones', 'tone_powers'], utils.arr_to_list(tone_powers))
 
             # Phase comb
-            self._edit_config(self.drone_cfg[ind], ['tones', 'tone_phis'], utils.arr_to_list(tone_phis))
+            rfsoc_io.edit_config(self.drone_cfg[ind], ['tones', 'tone_phis'], utils.arr_to_list(tone_phis))
 
             # Number of tones
-            self._edit_config(self.drone_cfg[ind], ['tones', 'num_tones'], int(tone_num))
+            rfsoc_io.edit_config(self.drone_cfg[ind], ['tones', 'num_tones'], int(tone_num))
         return tone_freqs, tone_powers, tone_phis
 
     def _get_curr_comb(self, com, **kwargs):
@@ -2090,11 +1896,11 @@ class R:
             amp_path  = rfsoc_io.get_array(amp_file,  amp_name, action='cp', load = False, output = self.output, timestamp=timestamp)
             phi_path  = rfsoc_io.get_array(phi_file,  phi_name, action='cp', load = False, output = self.output, timestamp=timestamp)
 
-        self._edit_config(self.drone_cfg[ind], ['tones', 'tone_freqs'], freq_path)
-        self._edit_config(self.drone_cfg[ind], ['tones', 'tone_powers'], amp_path)
-        self._edit_config(self.drone_cfg[ind], ['tones', 'tone_phis'], phi_path)
+        rfsoc_io.edit_config(self.drone_cfg[ind], ['tones', 'tone_freqs'], freq_path)
+        rfsoc_io.edit_config(self.drone_cfg[ind], ['tones', 'tone_powers'], amp_path)
+        rfsoc_io.edit_config(self.drone_cfg[ind], ['tones', 'tone_phis'], phi_path)
 
-        if freq_path is not None: self._edit_config(self.drone_cfg[ind], ['tones', 'num_tones'], len(np.load(freq_path, mmap_mode='r')))
+        if freq_path is not None: rfsoc_io.edit_config(self.drone_cfg[ind], ['tones', 'num_tones'], len(np.load(freq_path, mmap_mode='r')))
 
         # Save drone config
         self.drone_cfg[ind] = rfsoc_io.save_config(self.config_dirs[ind] / f"{name}_config_drone_{self.timestamp}.yaml", self.drone_cfg[ind], self.save_cfg)
@@ -2115,7 +1921,7 @@ class R:
 
         # Parse key word arguments
         # ------------------------
-        com_to, boards = self._get_com_to(**kwargs)
+        com_to, boards = autils.get_com_to(self, **kwargs)
 
         parallel_boards = self.parallel_boards
         parallel_drones = self.parallel_drones
@@ -2185,11 +1991,3 @@ class R:
                 rtn_list.append(func(str(com_to), *args, **kwargs))
 
         return rtn_list
-
-    ############
-    # Shutdown #
-    ############
-
-    def close(self):
-        self.update_measurement(name = None, desc = '')
-        self.running = False

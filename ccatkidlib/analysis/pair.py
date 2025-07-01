@@ -80,7 +80,7 @@ def get_config(path, all_cfg = False) -> list:
                 parts[ind] = name # If not the first iteration through loop, part of path that needs to be replaced is already known
             else:
                 for i, part in enumerate(parts): # If first iteration through loop, find part in path that needs to be replaced
-                    if any(part in data_name for data_name in data_names): # Check if part name matches any of the data_names
+                    if any(part == data_name for data_name in data_names): # Check if part name matches any of the data_names
                         parts[i] = name
                         ind = i
                         break # Should only be one part that needs to be replaced so break out of loop

@@ -27,10 +27,11 @@ from jinja2 import Environment, FileSystemLoader
 # Local imports
 from .style import Style
 from .utils import function_timer
+import ccatkidlib.utils as utils
 
-##########################
+#========================#
 # Directory IO Functions #
-##########################
+#========================#
 
 def create_book(curr_date, sess_id, com_to, data_dir, output = False):
     '''
@@ -115,9 +116,9 @@ def create_dir(dir_path, output = False):
     except FileNotFoundError:
         send_msg('ERROR', f"The directory '{dir_path}' could not be created! Ensure that the file path is valid.", output = output)
 
-#####################
-# File IO Functions #
-#####################
+#=====================#
+# Config IO Functions #
+#=====================#
 
 def load_config(config):
     '''
@@ -170,6 +171,39 @@ def save_config(cfg_path, cfg_dic, save = True, output = False):
             return yaml.safe_load(config)
     else:
         return cfg_dic
+
+def edit_config(cfg, key, value, append = False):
+    '''
+    Update key in specified configuration file with the specified value.
+
+    Parameters:
+        cfg    (dict) : Configuration file to update
+        key     (str) : Key that should be updated
+        value   (Any) : Value with which to update key
+        append (bool) : Whether to append a new key, value pair to config file if key is not found
+    Returns:
+        done   (bool) : True if key was successfully created or updated.
+    '''
+
+    # Edit config file dictionary
+    # ---------------------------
+    done = utils.dict_set(cfg, key, value)
+
+    # Check if key was successfully updated
+    # -------------------------------------
+    if done: # If matching key was updated
+        send_msg('DEBUG', f'Updated key "{key}" with value "{value}" in config file"!')
+    elif append: # If key was not found and append=True, add key value pair to dictionary
+        cfg[key] = value
+        done = True
+        send_msg('DEBUG', f'Added key "{key}" with value "{value}" to config file!')
+    else: # If key was not found and append=False
+        send_msg('DEBUG', f'Failed to update key "{key}" with value "{value}" in config file!')
+    return done
+
+#===================#
+# File IO Functions #
+#===================#
 
 #@function_timer
 def get_most_recent_file(path, file_identifier, output = False, time_past = 60*60):
@@ -278,9 +312,9 @@ def combine_npy(files, num, com = None, fname_out = None):
     
     return fnames
 
-########################
+#======================#
 # Logging IO Functions #
-########################
+#======================#
 
 def setup_logging(log_path, level, name = __name__, output = False):
     '''
@@ -410,9 +444,9 @@ def header(func):
             sys.exit()
     return _wrapper
 
-#######################
+#=====================#
 # Remote IO Functions #
-#######################
+#=====================#
 
 def get_connection(ip, ssh_key, output = False):
     '''
