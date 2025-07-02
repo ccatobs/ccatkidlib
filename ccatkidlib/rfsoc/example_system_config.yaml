@@ -27,6 +27,7 @@ boards:
 {% set measurement_name="NAME_HERE" %}   # * Measurement Name
 {% set root_dir="ROOT_DIR_HERE" %}       # * Root data directory for storing ccatkidlib data files (the part of the path that would change when transferring data to different drive)
 {% set g3_root_dir="G3_ROOT_DIR_HERE" %} # * Root data directory for storing timestream G3 files (the part of the path that would change when transferring data to different drive)
+{% set drone_dir="DRONE_CONFIGS_DIR_HERE" %} # * Directory where drone config files are stored
 
 sess_id: null
 name: {{measurement_name}} # * Measurement Name
@@ -55,7 +56,7 @@ boards:
     board_ip: '192.168.2.99'   # ? Board IP address
     sampling_freq: 488.28      # - Timestream sampling frequency (in Hz) (Does not currently set the sampling frequency)
     max_power: 32767           # - Max power at the drone DACs
-    drone_cfg: "DRONE_CFG_DIR" # * Drone configuration file
+    drone_cfg: "{{drone_dir}}/DRONE_CFG_FILE" # * Drone configuration file
 
 # Timestream configuration
 timestream:
