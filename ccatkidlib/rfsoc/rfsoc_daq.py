@@ -38,14 +38,14 @@ class R:
     '''
 
     @utils.method_timer
-    def __init__(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml", initialize_boards = None, initialize_drones = None):
+    def __init__(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml", init_boards = None, init_drones = None, **kwargs):
         '''
         Constructor for R. Creates directories for data storage, configures logger, and starts RFSoC PCS agent.
 
         Parameters:
             cfg_path (str) : Path to system configuration file (default: system_config.yaml in ccatkidlib/rfsoc directory)
-            initialize_boards (bool) : Whether to initialize RFSoC boards (default: False)
-            initialize_drones (bool) : Whether to initialize RFSoC drones (default: False)
+            init_boards (bool) : Whether to initialize RFSoC boards (default: False)
+            init_drones (bool) : Whether to initialize RFSoC drones (default: False)
         '''
 
         # Load config files and setup logging
@@ -54,15 +54,47 @@ class R:
         # Current date in yyyy/mm/dd
         self.curr_date = time.strftime('%Y%m%d', time.gmtime())
 
-        # Create session id from first ten digits of current time
-        self.sess_id = str(time.time())[:10]
-
         # Create a global timestamp used for file naming and pairing
         self.timestamp = str(time.time()).split('.')[0]
 
         # Load config files
         self.output = True
         self.load_system_config(cfg_path)
+
+        # Mainly for use with the rfsoc-controller PCS agent
+        # Checks if measurement information (sess_id, name, desc) have changed between reinitializations
+        # ----------------------------------------------------------------------------------------------
+        sess_id = None
+        curr_date = None
+        self.measurement_name = self.io_cfg['name']
+        self.measurement_desc = self.io_cfg['desc']
+        for key, value in kwargs.items():
+            if key == 'sess_id':
+                sess_id = value
+            elif key == 'measurement_name':
+                self.measurement_name = value
+            elif key == 'measurement_desc':
+                self.measurement_desc = value
+            elif key == 'curr_date':
+                curr_date = value
+        
+        # Create session id from first ten digits of current time
+        new_measurement = sess_id is None or curr_date != self.curr_date or self.measurement_name != self.io_cfg['name'] or self.measurement_desc != self.io_cfg['desc']
+        self.sess_id = str(time.time())[:10] if new_measurement else sess_id
+
+        # Save session ID to config files
+        # -------------------------------
+        rfsoc_io.edit_config(self.ext_cfg, 'sess_id', self.sess_id)
+        rfsoc_io.edit_config(self.io_cfg, 'sess_id', self.sess_id)
+        for cfg in self.drone_cfg:
+            rfsoc_io.edit_config(cfg, 'sess_id', self.sess_id)
+
+        # Create file directory structure for saving data
+        # -----------------------------------------------
+        new_dir_paths = rfsoc_io.create_book(self.curr_date, self.sess_id, self.drone_list, self.data_dir, output = self.output)
+
+        # Assign data directories as class attributes
+        self.config_dirs, self.targ_dirs, self.timestream_dirs, self.vna_dirs = new_dir_paths
 
         # Setup logger
         self.log_dir = self.config_dirs[0].parent
@@ -89,18 +121,18 @@ class R:
 
         # Setup boards
         # ------------
-        initialize_boards = initialize_boards if initialize_boards is not None else self.io_cfg['init']['initialize_boards']
-        if initialize_boards: self.setup_boards()
+        init_boards = init_boards if init_boards is not None else self.io_cfg['init']['initialize_boards']
+        if init_boards: self.setup_boards()
 
         # Setup drones
         # ------------
-        initialize_drones = initialize_drones if initialize_drones is not None else self.io_cfg['init']['initialize_drones']
-        if initialize_drones: self.setup_drones()
+        init_drones = init_drones if init_drones is not None else self.io_cfg['init']['initialize_drones']
+        if init_drones: self.setup_drones()
         rfsoc_io.send_msg('INFO', f'Communicating with drones: {self.drone_list}!', self.output)
 
         # Update Measurment Information 
         # -----------------------------
-        self.update_measurement(name = self.io_cfg['name'], desc = self.io_cfg['desc'])
+        self._update_measurement(name = self.io_cfg['name'], desc = self.io_cfg['desc'])
 
         # Initialize streamer attribute (As None, since it is only used when g3=False)
         # ----------------------------------------------------------------------------
@@ -108,7 +140,10 @@ class R:
 
         # Set NCLO frequency RFSoC drones
         # -------------------------------------------------
-        if initialize_drones:
+        self.NCLOs        = dict(zip(self.drone_list, [None] * self.drone_num))
+        self.drive_attens = dict(zip(self.drone_list, [None] * self.drone_num))
+        self.sense_attens = dict(zip(self.drone_list, [None] * self.drone_num))
+        if init_drones:
             # Set NCLOs from drone config files
             self.set_NCLO(setup=False)
 
@@ -126,11 +161,11 @@ class R:
     # Setup Methods #
     #################
     @header
-    def update_measurement(self, name = None, desc = '', influx_output = None):
+    def _update_measurement(self, name = None, desc = '', influx_output = None):
         influx_output = influx_output if influx_output is not None else self.io_cfg['io']['influx_output']
 
         if influx_output: 
-            rtn = self.rfsoc.updateMeasurement(measurement_name = f"{name}, Date: {self.curr_date}, Session ID: {self.sess_id}" if name is not None else name, measurement_desc = desc)
+            rtn = self.rfsoc.updateMeasurement(measurement_name = f"{name}, Date: {self.curr_date}, Session ID: {self.sess_id}" if name else None, measurement_desc = desc)
             return rtn
         else:
             return None 
@@ -290,15 +325,12 @@ class R:
         self.drone_list = self.io_cfg['drone_list']
         self.board_list = None
 
-        # Get number of drones and convert to a list if only a single drone is passed
-        try:
-            self.drone_num = len(self.drone_list)
-        except:
-            self.drone_list = [self.drone_list]
-            self.drone_num = len(self.drone_list)
-
         self.drone_list, bids = autils.get_com_to(self, com_to = self.drone_list, setup = False)
         self.board_list = bids
+
+        self.drone_num = len(self.drone_list)
+        self.board_num = len(self.board_list)
+
 
         self.all_boards = [board[1:] for board in self.io_cfg['boards']]
 
@@ -343,21 +375,8 @@ class R:
         self.tmp_data_dir = Path(self.io_cfg['file_paths']['primecam_readout']) / 'tmp'
         self.tmp_dir = Path(__file__).parent / '..' / '..' / 'tmp'
         self.g3_dir = Path(self.io_cfg['file_paths']['g3_dir'])
-
-        # Save session ID to config files
-        # -------------------------------
-        rfsoc_io.edit_config(self.ext_cfg, 'sess_id', self.sess_id)
-        rfsoc_io.edit_config(self.io_cfg, 'sess_id', self.sess_id)
-        for cfg in self.drone_cfg:
-            rfsoc_io.edit_config(cfg, 'sess_id', self.sess_id)
-
-        # Create file directory structure for saving data
-        # -----------------------------------------------
-        new_dir_paths = rfsoc_io.create_book(self.curr_date, self.sess_id, self.drone_list, self.data_dir, output = self.output)
-
-        # Assign data directories as class attributes
-        self.config_dirs, self.targ_dirs, self.timestream_dirs, self.vna_dirs = new_dir_paths
-
+    
+    @utils.method_timer
     def set_NCLO(self, NCLO = None, **kwargs):
         def _set_NCLO(com, *args, **kwargs):
             NCLO = args[0]
@@ -376,12 +395,21 @@ class R:
             LOs = autils.parse_args(self, com_to, NCLO) # Parse NCLOs passed as argument
             if LOs is None: return None # Return None if invalid NCLOs were passed
 
-            NCLOs = [int(LO) for LO in LOs] # Parse NCLOs passed as argument and cast as int
+            NCLOs = list(map(int, LOs)) # Parse NCLOs passed as argument and cast as int
 
             autils.set_drone_args(self, com_to, NCLOs) # Update NCLOs in drone config files
         
+        # Only set NCLOs that are different from the current ones
+        new_NCLOs = []
+        new_com_to = []
+        for com, NCLO in zip(com_to, NCLOs):
+            if not self.NCLOs[com] == NCLO:
+                new_NCLOs.append(NCLO)
+                new_com_to.append(com)
+                self.NCLOs[com] = NCLO
+
         # Group drones with the same NCLO
-        NCLO_dict = autils.group_args(com_to, NCLOs)
+        NCLO_dict = autils.group_args(new_com_to, new_NCLOs)
         for NCLO, com in NCLO_dict.items():
             args = [NCLO]
             kwargs['com_to'] = com
@@ -428,7 +456,7 @@ class R:
 
             # Override config attenuations with those passed as method argument (if any)
             if atten is not None:
-                attens = [int(atten) for atten in autils.parse_args(self, com_to, atten)] # Parse attenuations passed as argument and cast to int
+                attens = list(map(int, autils.parse_args(self, com_to, atten))) # Parse attenuations passed as argument and cast to int
 
                 # Return None if invalid attenuations were passed
                 if attens is None: return None
@@ -439,12 +467,23 @@ class R:
             # ----------------
             # Set attenuation of drones (can do max of one drone per board at a time since attenuations are set through serial communication)
             
+            # Only set attenuations that are different from the current ones
+            new_attens = []
+            new_com_to = []
+            new_dict = getattr(self, f'{direction}_attens') # Get current attenuations for the specified direction
+            for com, atten in zip(com_to, attens):
+                if not new_dict[com] == atten:
+                    new_attens.append(atten)
+                    new_com_to.append(com)
+                    new_dict[com] = atten
+            setattr(self, f'{direction}_attens', new_dict) # Update current attenuations for the specified direction
+
             # Change number of drones in parallel to one
             parallel_drones = self.parallel_drones
             self.parallel_drones = 1
 
             # Group drones with the same attenuations
-            atten_dict = autils.group_args(com_to, attens)
+            atten_dict = autils.group_args(new_com_to, new_attens)
             for att, com in atten_dict.items():
                 args = [direction, float(att)]
                 kwargs['com_to'] = com
@@ -726,15 +765,7 @@ class R:
         write_comb = True
         sweep_steps = autils.get_drone_args(self, com_to, ['tones', 'sweep_steps'])
         for key, value in kwargs.items():
-            if key == 'NCLO':
-                NCLO = autils.parse_args(self, com_to, value)
-                for com, N in zip(com_to, NCLO):
-                    rtn = self.rfsoc.setNCLO(com_to = com, f_lo = N, silent=True)
-                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-
-                autils.set_drone_args(self, com_to, "NCLO", NCLO)
-                rfsoc_io.send_msg('INFO', f'Set NCLO to {NCLO} MHz for drones {com_to}!', self.output)
-            elif key == 'write_comb':
+            if key == 'write_comb':
                 write_comb = value
             elif key == 'sweep_steps':
                 sweep_steps = autils.parse_args(self, com_to, value)
@@ -805,14 +836,6 @@ class R:
         for key, value in kwargs.items():
             if key == 'write_comb':
                 write_comb = value
-            elif key == 'NCLO':
-                NCLO = autils.parse_args(self, com_to, value)
-                for com, N in zip(com_to, NCLO):
-                    rtn = self.rfsoc.setNCLO(com_to = com, f_lo = N, silent=True)
-                    rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-
-                autils.set_drone_args(self, com_to, "NCLO", NCLO)
-                rfsoc_io.send_msg('INFO', f'Set NCLO to {NCLO} MHz for drones {com_to}!', self.output)
             elif key == 'sweep_steps':
                 sweep_steps = autils.parse_args(self, com_to, value)
                 autils.set_drone_args(self, com_to, "sweep_steps", sweep_steps)

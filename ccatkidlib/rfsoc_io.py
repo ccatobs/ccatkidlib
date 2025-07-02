@@ -130,7 +130,7 @@ def load_config(config):
         cfg   (dict) : List of dictionaries loaded from config file
     '''
     cfg_path = Path(config)
-    assert cfg_path.exists(), "Could not find config file!" # Check that config file exists
+    assert cfg_path.exists(), f"Could not find config file: {config}!" # Check that config file exists
 
     env = Environment(loader = FileSystemLoader(f"{str(cfg_path.parent)}"))
     template = env.get_template(f"{cfg_path.name}")
@@ -399,7 +399,7 @@ def send_msg(level, msg, output = True, name = __name__):
         # Write error message to terminal
         if output: tqdm.write(f"{Style().log_begin('ERROR', Style.ERROR)} Error logging message. Ensure that the message is a string!")
 
-def wait(t_sec, output = True, desc = ""):
+def wait(t_sec, desc = ""):
     '''
     Wait for t_sec seconds with progress bar.
 
