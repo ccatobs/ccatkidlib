@@ -277,7 +277,7 @@ class R:
         # Wait if any of the drones were started/restarted and make sure they are running
         # -------------------------------------------------------------------------------
         if wait:
-            rfsoc_io.wait(25, output = self.output, desc = f"For drones to start")
+            rfsoc_io.wait(25, desc = f"For drones to start")
 
             # Check that drones were properly started/restarted
             # -------------------------------------------------
@@ -1026,7 +1026,7 @@ class R:
         def _take_timestream_g3(com, *args, **kwargs):
             t_sec = args[0]
             rtn = self.rfsoc.timestreamOn(com_to = com, on = True, silent=True)
-            rfsoc_io.wait(t_sec, output = self.output, desc = f'Taking {t_sec} second timestream for {com}')
+            rfsoc_io.wait(t_sec, desc = f'Taking {t_sec} second timestream for {com}')
             rtn = self.rfsoc.timestreamOn(com_to = com, on = False, silent=True)
             rfsoc_io.send_msg('INFO', f"Finished taking {t_sec} seconds of timestream data with timestamp {self.timestamp}!")
             return rtn
