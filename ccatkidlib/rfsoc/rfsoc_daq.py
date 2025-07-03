@@ -400,15 +400,18 @@ class R:
             autils.set_drone_args(self, com_to, NCLOs) # Update NCLOs in drone config files
         
         # Only set NCLOs that are different from the current ones
+        # -------------------------------------------------------
         new_NCLOs = []
         new_com_to = []
         for com, NCLO in zip(com_to, NCLOs):
-            if not self.NCLOs[com] == NCLO:
+            # Check if NCLO to set matches current NCLO 
+            if not self.NCLOs.get(com, None) == NCLO:
                 new_NCLOs.append(NCLO)
                 new_com_to.append(com)
                 self.NCLOs[com] = NCLO
 
         # Group drones with the same NCLO
+        # --------------------------------
         NCLO_dict = autils.group_args(new_com_to, new_NCLOs)
         for NCLO, com in NCLO_dict.items():
             args = [NCLO]
@@ -450,8 +453,9 @@ class R:
                 rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
                 return rtn
 
-            # Get attenuations
-            # ----------------
+            # -----------------------
+            # Get attenuations to set
+            # -----------------------
             attens = autils.get_drone_args(self, com_to, ['atten', f'{direction}']) # Get attenuations from drone config files
 
             # Override config attenuations with those passed as method argument (if any)
@@ -463,16 +467,18 @@ class R:
 
                 autils.set_drone_args(self, com_to, direction, attens) # Update attenuations in drone config files
 
+            # ----------------
             # Set attenuations
             # ----------------
             # Set attenuation of drones (can do max of one drone per board at a time since attenuations are set through serial communication)
             
             # Only set attenuations that are different from the current ones
+            # --------------------------------------------------------------
             new_attens = []
             new_com_to = []
             new_dict = getattr(self, f'{direction}_attens') # Get current attenuations for the specified direction
             for com, atten in zip(com_to, attens):
-                if not new_dict[com] == atten:
+                if not new_dict.get(com, None) == atten:
                     new_attens.append(atten)
                     new_com_to.append(com)
                     new_dict[com] = atten
