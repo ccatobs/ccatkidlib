@@ -385,6 +385,7 @@ class R:
             return rtn
 
         com_to, _ = autils.get_com_to(self, **kwargs) # Get com_to
+        kwargs['setup'] = False
 
         # Get NCLO from drone config files
         # --------------------------------
@@ -414,7 +415,7 @@ class R:
         # --------------------------------
         NCLO_dict = autils.group_args(new_com_to, new_NCLOs)
         for NCLO, com in NCLO_dict.items():
-            args = [NCLO]
+            args = [int(NCLO)]
             kwargs['com_to'] = com
             self._run_parallel(_set_NCLO, *args, **kwargs)
         
@@ -436,7 +437,7 @@ class R:
             sense  (float | List[float]) : Values of sense (ADC) attenuations in dB (must be between 0 and 31.75)
         '''
 
-        def _set_direction(com_to = None, direction = None, atten = None):
+        def _set_direction(com_to, direction, atten = None):
             '''
             Internal function for setting drone attenuations.
 
@@ -498,20 +499,40 @@ class R:
             # Reset com_to and parallel_drones to what they were before
             kwargs['com_to'] = com_to
             self.parallel_drones = parallel_drones
-            rfsoc_io.send_msg('INFO', f'Successfully set {direction} attenuation to {list(attens)} for drones {list(com_to)}!', self.output)
+            #rfsoc_io.send_msg('INFO', f'Successfully set {direction} attenuation to {list(attens)} for drones {list(com_to)}!', self.output)
 
             return attens
 
+        def _check_direction(com_to, direction, set_attens, new_attens):
+            new_dict = getattr(self, f'{direction}_attens')
+            for com, set_atten, new_atten in zip(com_to, set_attens, new_attens):
+                if new_atten != set_atten:
+                    rfsoc_io.send_msg('ERROR', f"Failed to set {direction} attenuation for drone {com} to {set_atten} dB. \
+                                      Current attenuation is {new_atten if new_atten is not None else 'unknown'} dB.", self.output)
+                    new_dict[com] = new_atten
+            setattr(self, f'{direction}_attens', new_dict)
+
         # Specify which attenuators to change
         com_to, _ = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False
 
-        # Set drive attenuation
-        _set_direction(com_to = com_to, direction = 'drive', atten = drive)
+        # Set drive and sense attenuations
+        set_drives, set_senses = _set_direction(com_to = com_to, direction = 'drive', atten = drive), \
+                                 _set_direction(com_to = com_to, direction = 'sense', atten = sense)
 
-        # Set sense attenuation
-        _set_direction(com_to = com_to, direction = 'sense', atten = sense)
+        # Check that attenuations were set correctly
+        output = self.output
+        self.output = False
+        new_drives, new_senses = self.get_atten(**kwargs)
+        self.output = output
 
-        return drive, sense
+        _check_direction(com_to, direction = 'drive', set_attens = set_drives, new_attens = new_drives)
+        rfsoc_io.send_msg('INFO', f'Successfully set drive attenuations to {new_drives} for drones {com_to}.')
+
+        _check_direction(com_to, direction = 'sense', set_attens = set_senses, new_attens = new_senses)
+        rfsoc_io.send_msg('INFO', f'Successfully set sense attenuations to {new_senses} for drones {com_to}.')
+
+        return new_drives, new_senses
 
     #===========================#
     # Monitoring Getter Methods #
@@ -567,6 +588,7 @@ class R:
             return ast.literal_eval(' '.join(rtn.session['messages'][1][1].split(' ')[1:]))[1:][0] # Parse OCS message to get returned data
 
         com_to, _ = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False
 
         # Take data one board at a time (all drones transfers too much data through OCS)
         kwargs['parallel_boards'] = 1
@@ -621,6 +643,7 @@ class R:
             return avail_spaces
 
         com_to, bids = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False
 
         threshold = self.io_cfg['clean']['threshold']  # [GB] Threshold after which clean board drone directories
         olderThanDaysAgo = self.io_cfg['clean']['olderThanDaysAgo'] # [Days] 
@@ -668,6 +691,7 @@ class R:
             rfsoc_io.send_msg('INFO', f'{loc} temperatures are {temps} \xb0C for boards {bids}!', self.output)
 
         com_to, bids = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False
         session_data = self.rfsoc.feedMonitor.status().session['data']
         ps_temps = _get_temps(bids, 'ps')
         pl_temps = _get_temps(bids, 'pl')
@@ -682,7 +706,7 @@ class R:
             com_to     (str | List[str]) : List of drones for which to get attenuation
         '''
 
-        def _get_direction(com_to = None, direction = None):
+        def _get_direction(com_to, direction):
             '''
             Internal function for getting drone attenuations.
 
@@ -712,11 +736,17 @@ class R:
 
             attens, inds = [], []
             for rtn in rtns:
-                attens.append(pickle.loads(rtn['data'])) # Load pickled data dictionary
-                ind = self.drone_list.index(str(rtn['pattern']).split('_')[-2]) # Determine which drone the Snap data corresponds to
+                atten = pickle.loads(rtn['data'])
+                com = str(rtn['pattern']).split('_')[-2]
+                ind = self.drone_list.index(com)
+                if not isinstance(atten, float):
+                    atten = None
+                    rfsoc_io.send_msg('ERROR', f'Failed to get {direction} attenuation for drone {com}.')
                 inds.append(ind)
+                attens.append(atten) 
 
-            # Create list of ADC rms values for all drones, sort by drone bid.drid
+
+            # Create list of attenuations for all drones, sort by drone bid.drid
             attens = [atten for _, atten in sorted(zip(inds, attens))]
             
             # Reset parallel_drones to what it was before
@@ -727,6 +757,7 @@ class R:
 
         # Specify which attenuators to change
         com_to, _ = autils.get_com_to(self, **kwargs)
+        kwargs['setup'] = False
 
         # Set drive attenuation
         drive_attens = _get_direction(com_to = com_to, direction = 'drive')
