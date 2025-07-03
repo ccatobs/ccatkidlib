@@ -460,7 +460,7 @@ class R:
 
             # Override config attenuations with those passed as method argument (if any)
             if atten is not None:
-                attens = list(map(int, autils.parse_args(self, com_to, atten))) # Parse attenuations passed as argument and cast to int
+                attens = list(map(float, autils.parse_args(self, com_to, atten))) # Parse attenuations passed as argument and cast to int
 
                 # Return None if invalid attenuations were passed
                 if attens is None: return None
