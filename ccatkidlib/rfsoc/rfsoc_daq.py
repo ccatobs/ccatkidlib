@@ -7,6 +7,7 @@
 import os
 import sys
 import ast
+import json
 import time
 import pickle
 import numpy as np
@@ -258,7 +259,7 @@ class R:
 
                 # Parse OCS reply to get whether drone is currently running and if it supposed to be running
                 # ------------------------------------------------------------------------------------------
-                ip, to_run, running = ast.literal_eval(rtn.session['messages'][1][1].split(': ')[1])
+                ip, to_run, running = json.loads(rtn.session['data']['data'])
                 rfsoc_io.send_msg('PCS', f"{rtn.session}", self.output)
 
                 # Start or Restart drones as appropriate
@@ -290,7 +291,7 @@ class R:
 
                     # Parse OCS reply to get whether drone is currently running and if it supposed to be running
                     # ------------------------------------------------------------------------------------------
-                    ip, to_run, running = ast.literal_eval(rtn.session['messages'][1][1].split(': ')[1])
+                    ip, to_run, running = json.loads(rtn.session['data']['data'])
                     rfsoc_io.send_msg('PCS', f"{rtn.session}", self.output)
 
                     if to_run:
@@ -583,9 +584,9 @@ class R:
             Returns:
                 data (dict) : Data dictionary returned by getSnapData primecam_readout function (pickled)
             '''
-            rtn = self.rfsoc.getSnapData(com_to = com, mux_sel = 0, silent = False)
-            rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-            return ast.literal_eval(' '.join(rtn.session['messages'][1][1].split(' ')[1:]))[1:][0] # Parse OCS message to get returned data
+            rtn = self.rfsoc.getSnapData(com_to = com, mux_sel = 0, silent = False).session
+            rfsoc_io.send_msg('PCS', f'{rtn}', self.output)
+            return json.loads(rtn['data']['data'])[1:][0]
 
         com_to, _ = autils.get_com_to(self, **kwargs)
         kwargs['setup'] = False
@@ -596,21 +597,20 @@ class R:
 
         # Get snap data of drones
         rtns = self._run_parallel(_getSnapData, **kwargs)
-        rtns = np.array([drone for drones in rtns for drone in drones])
-        #rtns = np.array(self._run_parallel(_getSnapData, **kwargs).flatten()
+        rtns = [drone for drones in rtns for drone in drones] # Flatten list of returns
 
         # Convert I, Q Snap data into ADC rms
         # -----------------------------------
         rms_list, inds = [], []
         for rtn in rtns:
-            data_dic = pickle.loads(rtn['data']) # Load pickled data dictionary
+            data_dic = rtn['data'] # Load pickled data dictionary
             ind = self.drone_list.index(f"{data_dic['bid']}.{data_dic['drid']}") # Determine which drone the Snap data corresponds to
             inds.append(ind)
 
             # From primecam_readout alcove_base getADCrms function
             # ----------------------------------------------------
             I, Q = data_dic['data'] # Get I, Q Snap data
-            z = I + 1j * Q # Convert to complex number
+            z = np.array(I) + 1j * np.array(Q) # Convert to complex number
             rms = float(np.real(np.sqrt(np.mean(z * np.conj(z))))) # Calculate RMS value at the ADC
             rms_list.append(rms)
 
@@ -718,9 +718,9 @@ class R:
             '''
             def _get_atten(com, *args, **kwargs):
                 direction = args[0]
-                rtn = self.rfsoc.getAtten(com_to = com, direction = direction, silent=False)
-                rfsoc_io.send_msg('PCS', f'{rtn.session}', self.output)
-                return ast.literal_eval(' '.join(rtn.session['messages'][1][1].split(' ')[1:]))[1:][0]
+                rtn = self.rfsoc.getAtten(com_to = com, direction = direction, silent=False).session
+                rfsoc_io.send_msg('PCS', f'{rtn}', self.output)
+                return json.loads(rtn['data']['data'])[1:][0]
 
             # Get attenuations
             # ----------------
@@ -732,12 +732,12 @@ class R:
 
             args = [direction]
             rtns = self._run_parallel(_get_atten, *args, **kwargs)
-            rtns = np.array([drone for drones in rtns for drone in drones])
+            rtns = [drone for drones in rtns for drone in drones]
 
             attens, inds = [], []
             for rtn in rtns:
-                atten = pickle.loads(rtn['data'])
-                com = str(rtn['pattern']).split('_')[-2]
+                atten = rtn['data']
+                com = rtn['channel'].split('_')[-2]
                 ind = self.drone_list.index(com)
                 if not isinstance(atten, float):
                     atten = None
