@@ -28,8 +28,8 @@ class Style:
     # Style Properties
     LONGEST_DESC: int = 8
     
-    def log_begin(self, desc, style):
-        return f'{style}{desc:>{self.LONGEST_DESC}} {self.DEFAULT}|'
+    def log_begin(self, level, style):
+        return f'{style}{level:>{self.LONGEST_DESC}} {self.DEFAULT}|'
 
     def func_name(self, name):
         return f'{self.ITALICS}{name}{self.DEFAULT}'
