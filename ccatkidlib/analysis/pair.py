@@ -1,27 +1,28 @@
 #=================================#
-# rfsoc_io.py               2025 #
+# pair.py                    2025 #
 # Darshan Patel dp649@cornell.edu #
 #=================================#
 
 '''
-Library of helper functions for getting output data files of rfsoc_daq.py and pairing with corresponding configuration files.
+Library of helper functions for getting ccatkidlib data files and pairing with corresponding configuration files.
 '''
 
-from pathlib import Path
 import numpy as np
 import sys
+import pathlib
+
+from pathlib import Path
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 
-def get_timestamp(path) -> int:
-    '''
-    Extract the timestamp from a file name.
+def get_timestamp(path: str | pathlib.PosixPath) -> int:
+    '''Extract the timestamp from a ccatkidlib file name.
 
-    Parameters:
-        path (str | Path): Path of the file
+    Args:
+        path (str | pathlib.PosixPath): Path of the file
     Returns:
-        timestamp (int): Timestamp of file. -1 if no valid timestamp is found
+        int: Timestamp of the file. -1 if no valid timestamp is found
     '''
 
     try: # Check that the passed path is a string or Path object
@@ -35,11 +36,26 @@ def get_timestamp(path) -> int:
                 if tstamp > 1.7e9: return tstamp # Check that integer is a valid timestamp
             except:
                 pass
-        return -1 # Return -1 if no valid timestamp was found
+        raise ValueError(f'The file {file} has no valid timestamp.') # Raise ValueError if timestamp could not be determined
     except Exception as e: # If exception is thrown, return -1 to represent invalid path
+        rfsoc_io.send_msg('ERROR', 'Failed to determine timestamp of file %s with Exception %s', path, e)
         return -1
 
-def get_data_file(com_to, timestamp, data_dir = '**', date = '**', sess_id = '**', data_type = '**', root_data_dir = '/'):
+def get_data_file(com_to: str, timestamp: str | int, data_type: str, data_dir: str = '**', date: str = '**', sess_id: str = '**', root_data_dir: str = '/') -> str:
+    '''Get a ccatkidlib data file based on provided path information.
+
+    Args:
+        com_to (str): Drone that took the data. In form 'Board.Drone'
+        timestamp (str | int): Timestamp of data file
+        data_type (str): Type of data file. Should be one of 'vna', 'targ', 'timestream'. 
+        data_dir (str, optional): Directory where data is stored. Defaults to wildcard '**'
+        date (str, optional): Date data was taken. Defaults to wildcard '**'
+        sess_id (str, optional): ccatkidlib session ID of data. Defaults to wildcard '**'
+        root_data_dir (str, optional): Root directory where data is stored. Defaults to '/'
+    Returns:
+        str: Path of found data file. Returns 'invalid/path' if data file not found.
+    '''
+    
     root_data_dir = Path(root_data_dir)
 
     bid, drid = com_to.split('.')
@@ -50,16 +66,17 @@ def get_data_file(com_to, timestamp, data_dir = '**', date = '**', sess_id = '**
     for tree in file_trees:
         tree = str(tree / f'*{timestamp}*')
         data_files = sorted(root_data_dir.glob(tree))
-        if len(data_files) > 0: return data_files
-    return []
+        if len(data_files) > 0: return str(data_files[0])
+    return "invalid/path"
 
-def get_config(path, all_cfg = False) -> list:
-    '''
-    Get the config file associated with the specified VNA sweep, target sweep, or timestream data file.
-    Parameters:
-        path (str | Path): Path of a VNA sweep, target sweep, or timestream data file
+def get_config(path: str | pathlib.PosixPath, all_cfg: bool = False) -> list[str]:
+    ''' Get the config files associated with the specified data file.
+    
+    Args:
+        path (str | pathlib.PosixPath): Path of data file
+        all_cfg (bool, optional): Whether to return config files for all drones. Defaults to False. 
     Returns:
-        cfg_path (list): List of config file paths (io_cfg, drone_cfg(s), and ext_cfg) associated with the specified data file
+        list[str]: List of config file paths (io_cfg, drone_cfg(s), and ext_cfg) associated with the specified data file
     '''
 
     timestamp = get_timestamp(path) # Get timestamp of data file
@@ -96,7 +113,7 @@ def get_config(path, all_cfg = False) -> list:
                 if not all_cfg: # Find ext config if all_cfg is False (since it is not in the drone config directory)
                     ext_cfg = rfsoc_io.get_most_recent_file(cfg_path.parent, f'*{timestamp}*.yaml', time_past = np.inf) 
                     cfgs += [ext_cfg]
-                return cfgs # Return found config files
+                return list(map(str, cfgs)) # Return found config files
         return [] # Return an empty list if none of the searched config directories contain config files matching data file
     else: # Return an empty list if invalid data file is passed
         return []

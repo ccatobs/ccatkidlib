@@ -1,43 +1,40 @@
-from .sweep import Sweep
-from pathlib import Path
-from scipy.stats import linregress
-from numba import njit
-import numpy as np
-import pandas as pd
 import sys
 import gc
+import numpy as np
+
+from typing import override
+from pathlib import Path
+from scipy.stats import linregress
+from scipy.signal import medfilt
+from numba import njit
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.analysis.pair as pair
+
 from ccatkidlib.utils import method_timer
+from ccatkidlib.analysis.sweep import Sweep
 
 class VNA(Sweep):
-    '''
-    Class representing a vector network analyzer (VNA) esque sweep taken with a Radio Frequency System on a Chip (RFSoC). 
-    Subclass of the Sweep class.
+    '''Class representing a vector network analyzer (VNA) esque sweep taken with a Radio Frequency System on a Chip (RFSoC). 
+    
+    Subclasses the Sweep class.         
     '''
 
-    def __init__(self, com_to, analysis_cfg=str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    @override
+    def __init__(self, com_to: str, analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
         kwargs['data_type'] = 'vna'
         super().__init__(com_to, analysis_cfg, **kwargs)
 
-    ##############################
-    # Data Getter/Setter Methods #
-    ##############################
-
-    def transform(self, name, func, res_num=None):
-        return super().transform_sweep(name, func, res_num)
-
-    ####################
+    #==================#
     # Analysis Methods #    
-    ####################
+    #==================#
 
     def filter_freqs(self, fs = None, phase = None, res_freqs = None, w = 1, stitch = True):
         """
         classifies the peaks found by found_resonators into ones that are likely good resonators based on the slope of the complex phase at identified minima. 
 
-        Parameters:
+        Args:
             res_freqs (list): The output list of resonators found using analysis._findResonators_alt in primecam_readout.
             fs (list): the list of frequencies swept over in the VNA sweep
             phase (list): the list of complex phase values returned by the VNA sweep. the function is structured this way in case you want to play
@@ -57,7 +54,7 @@ class VNA(Sweep):
         if res_freqs is None: res_freqs = self.res_freqs
         if phase is None: self.phase().to_numpy()
         
-        if stitch: phase = self.stitch_phase(fs = fs, phase=phase)
+        if stitch: fs, phase = self.stitch_phase(fs = fs, phase=phase)
 
         slopes = []
         #variances = []
@@ -94,14 +91,55 @@ class VNA(Sweep):
 
         if phase is None:
             phase = self.phase() 
-            if stitch_phase: phase = self.stitch_phase(fs, phase)
+            if stitch_phase: fs, phase = self.stitch_phase(fs, phase)
 
         cable_delay, intercept, r, p, se = linregress(fs, phase)
 
         return cable_delay*1e9/(2*np.pi), se*1e9/(2*np.pi)
     
-    def stitch_mag():
-        pass
+    def stitch_mag(self, fs=None, mag=None, stitch_ends_factor=10, med_win=3):
+        # Get frequency and phase data
+        # ----------------------------
+        if fs is None: fs = self.fs().to_numpy()
+        if mag is None: mag = self.mag().to_numpy()
+
+        # Reshape data into bins of size N_step
+        # -------------------------------------
+        try:
+            sweep_steps = self.drone_cfg['tones']['sweep_steps']
+        except KeyError:
+            sweep_steps = self.drone_cfg['tones']['N_step']
+
+        mag_bins = np.array(medfilt(mag, med_win)).reshape(-1, sweep_steps)
+        freq_bins = np.array(fs).reshape(-1, sweep_steps)
+
+        # Stitch phase discontiuities at bin edges
+        # ----------------------------------------
+        curr_shift = 0
+        stitch_ends = int(sweep_steps / stitch_ends_factor)
+
+        slope, intercept, _, _, _ = linregress(freq_bins[0, -1*stitch_ends:], mag_bins[0, -1*stitch_ends:])
+
+        prev = 0
+        next = intercept + slope*freq_bins[0, -1]
+        for i in range(len(mag_bins) - 1):
+            slope_prev, intercept_prev, _, _ , _ = linregress(freq_bins[i + 1, :stitch_ends], mag_bins[i + 1, :stitch_ends])
+            prev = intercept_prev + slope_prev*freq_bins[i+1, 0]
+            diff = prev - next
+            slope_next, intercept_next, _, _, _ = linregress(freq_bins[i + 1, -1*stitch_ends:], mag_bins[i + 1, -1*stitch_ends:])
+            next = intercept_next + slope_next*freq_bins[i + 1, -1]
+            
+            #diff = phase_bins[i+1][0] - phase_bins[i][-1] # Calculate simple difference between points at bin edges instead of performing linear fits on edges of bins
+            mag_bins[i] -= curr_shift
+            curr_shift += diff
+        mag_bins[-1] -= curr_shift
+
+        # Remove overlapping frequencies in tones
+        # ---------------------------------------
+        mag_bins = np.array([mag_bin[0:sweep_steps-1] for mag_bin in mag_bins])
+        freq_bins = np.array([freq_bins[0:sweep_steps-1] for freq_bins in freq_bins])
+
+        return freq_bins.flatten(), mag_bins.flatten()
 
     def stitch_phase(self, fs = None, phase = None, threshold = 1.9*np.pi, stitch_ends_factor = 10):
         # Get frequency and phase data
@@ -151,11 +189,16 @@ class VNA(Sweep):
             curr_shift += diff
         phase_bins[-1] -= curr_shift
 
-        return phase_bins.flatten()
+        # Remove overlapping frequencies in tones
+        # ---------------------------------------
+        phase_bins = np.array([phase_bin[0:sweep_steps-1] for phase_bin in phase_bins])
+        freq_bins = np.array([freq_bins[0:sweep_steps-1] for freq_bins in freq_bins])
 
-    ############################
+        return freq_bins.flatten(), phase_bins.flatten()
+
+    #==========================#
     # Internal Loading Methods #
-    ############################
+    #==========================#
 
     def _get_res_s21z(self):
         res_s21z = None
@@ -168,10 +211,6 @@ class VNA(Sweep):
             except ValueError:
                 res_s21z = super()._get_res_s21z()
         return res_s21z
-
-    #################
-    # Magic Methods #
-    #################
 
 
                 
