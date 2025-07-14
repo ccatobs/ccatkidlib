@@ -41,7 +41,7 @@ def get_timestamp(path: str | pathlib.PosixPath) -> int:
         rfsoc_io.send_msg('ERROR', 'Failed to determine timestamp of file %s with Exception %s', path, e)
         return -1
 
-def get_data_file(com_to: str, timestamp: str | int, data_type: str, data_dir: str = '**', date: str = '**', sess_id: str = '**', root_data_dir: str = '/') -> str:
+def get_data_file(com_to: str, timestamp: str | int, data_type: str, data_dir: str = '**', date: str = '**', sess_id: str = '**', root_data_dir: str = '/') -> list[str]:
     '''Get a ccatkidlib data file based on provided path information.
 
     Args:
@@ -66,8 +66,8 @@ def get_data_file(com_to: str, timestamp: str | int, data_type: str, data_dir: s
     for tree in file_trees:
         tree = str(tree / f'*{timestamp}*')
         data_files = sorted(root_data_dir.glob(tree))
-        if len(data_files) > 0: return str(data_files[0])
-    return "invalid/path"
+        if len(data_files) > 0: return data_files # Return data files, return as list because multiple timestream files could be found
+    return ["invalid/path"]
 
 def get_config(path: str | pathlib.PosixPath, all_cfg: bool = False) -> list[str]:
     ''' Get the config files associated with the specified data file.
@@ -117,3 +117,56 @@ def get_config(path: str | pathlib.PosixPath, all_cfg: bool = False) -> list[str
         return [] # Return an empty list if none of the searched config directories contain config files matching data file
     else: # Return an empty list if invalid data file is passed
         return []
+
+def get_sweep(path: str | pathlib.PosixPath, **kwargs):
+    timestamp = get_timestamp(path) # Get timestamp of data file
+
+    if not timestamp == -1: # Make sure a valid data file is passed
+        timestamp = Path(path).stat().st_ctime
+        # Get parent directory and split path into parts. Path casting is safe since already validated in get_timestamp function
+        parts = list(Path(path).parts)[:-1] 
+        
+        # Replace instance of 'vna', 'targ', or 'timestream' in data file path with 'config' or 'rfsoc' to get file path of config files
+        # ------------------------------------------------------------------------------------------------------------------------------
+        for i, part in enumerate(parts): # If first iteration through loop, find part in path that needs to be replaced
+            if part == 'timestream':
+                targ_parts = parts.copy()
+                vna_parts = parts.copy()
+
+                targ_parts[i] = 'targ'
+                vna_parts[i] = 'vna'
+
+                parts_list = [targ_parts, vna_parts]
+                break
+            elif part == 'targ':
+                parts[i] = 'vna'
+                parts_list = [parts]
+                break
+        
+        # Check config directory for matching config files
+        # ------------------------------------------------
+        sweeps = [None]*len(parts_list)
+        for i, parts in enumerate(parts_list):
+            sweep_path = Path(*parts)
+            sweeps[i] = rfsoc_io.get_most_recent_file(sweep_path, '*.npy', time_past = np.inf, time_ref = timestamp) # Get io config file
+
+        recent_sweeps = sorted(sweeps, key = rfsoc_io.get_creation_time, reverse = True)
+        if 'targ' in recent_sweeps[0].parts:
+            for sweep in recent_sweeps:
+                if 'vna' in sweep.parts:
+                    return str(sweep), str(recent_sweeps[0])
+            else:
+                return 'invalid/path', recent_sweeps[0]
+        elif 'vna' in recent_sweeps[0].parts:
+            return  str(recent_sweeps[0]), 'invalid/path'
+
+def replace_root(path: str | pathlib.PosixPath, old_root: str, new_root: str):
+    '''Replace the root directory of a file path with a new root
+    '''
+    path = str(path).strip()
+    new_path = path.replace(old_root, new_root)
+    if Path(new_path).exists(): 
+        return new_path
+    else:
+        rfsoc_io.send_msg('ERROR', 'Could not find file %s with original root directory %s replaced with %s', new_path, old_root, new_root)
+        return path

@@ -3,8 +3,8 @@ import numpy as np
 import gc
 import polars as pl
 
-from typing import override
 from pathlib import Path
+from functools import cached_property
 
 # Bokeh Imports
 from bokeh.models import CheckboxButtonGroup, CustomJS, ColumnDataSource
@@ -28,12 +28,8 @@ class Sweep(Data):
     Subclasses the general ccatkidlib Data class.
     '''
 
-    @override
     def __init__(self, com_to: str, analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
         super().__init__(com_to, analysis_cfg, **kwargs)
-
-        self.res_freqs = None
-        self.res_s21z  = None
         
     #==================#
     # Plotting Methods #
@@ -47,35 +43,50 @@ class Sweep(Data):
     def data(self) -> pl.lazyframe.frame.LazyFrame:
         if self._data is None:
             data = {'sample': [], 'f': [], 'I': [], 'Q': []}
-            fs, s21z = np.load(self.data_path, mmap_mode='r')
+            fs, s21z = np.load(self.data_path[0], mmap_mode='r')
             I, Q = s21z.real, s21z.imag
 
             data['sample'], data['f'], data['I'], data['Q'] = range(len(fs)), fs.real, I, Q
-            self._data = pl.DataFrame(data).lazy()
+            self._data = pl.DataFrame(data)
         return self._data
 
     @data.setter
     def data(self, value: pl.lazyframe.frame.LazyFrame | None): 
-        if value is None or isinstance(value, pl.lazyframe.frame.LazyFrame): 
+        if value is None or isinstance(value, pl.dataframe.frame.DataFrame): 
             self._data = value
         else:
             rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
 
+    @cached_property
+    def det_f(self) -> np.ndarray:
+        '''Found detector frequencies by find_resonators or find_resonators_fine
+
+        Note:
+            The found detector frequencies are ``NOT`` necessarily the same as the tone frequencies of the sweep!
+        
+        Returns:
+            np.ndarray: Array of found detector frequencies
+
+        Raises:
+            FileNotFoundError: Unable to load file with found detector frequencies
+        '''
+
+        det_f = self.drone_cfg['det_config']['found_detector_freqs']
+        if isinstance(det_f, list):
+            det_f = np.real(det_f)
+        else:
+            try:
+                f_path = pair.replace_root(det_f, self.original_root, self.root_dir)
+                det_f = np.real(np.load(det_f))
+            except:
+                error = f'Failed to load detector frequencies file {det_f}.'
+                rfsoc_io.send_msg('ERROR', error)
+                raise FileNotFoundError(error)
+        return det_f
+
     #===============================#
     # Internal Data Loading Methods #
     #===============================#
-    def _load_res_freqs(self):
-        '''
-        '''
-        res_freqs = self.drone_cfg['det_config']['found_detector_freqs']
-        if isinstance(res_freqs, list):
-            res_freqs = np.real(res_freqs)
-        else:
-            try:
-                res_freqs = np.real(np.load(res_freqs))
-            except:
-                res_freqs = None
-        return res_freqs
     
     def _get_res_s21z(self):
         res_s21z = None
@@ -83,6 +94,7 @@ class Sweep(Data):
         if res_freqs is not None and len(res_freqs) > 0:
             res_s21z = [self.s21z[np.argmin(np.abs(self.freqs - freq))] for freq in res_freqs]
         return res_s21z
+    
     #=====================#
     # Data Getter Methods #
     #=====================#

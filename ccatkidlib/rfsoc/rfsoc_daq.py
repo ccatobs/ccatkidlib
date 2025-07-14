@@ -1281,7 +1281,7 @@ class R:
                 # -----------------------------------------------
                 ind = self.drone_list.index(com)
                 vna = VNA(com_to = com, data_path = vna_file) # Create VNA object
-                good_resonator, _, _, _ = vna.filter_freqs(res_freqs = found_freq) # Filter out fake resonators
+                good_resonator, _ = vna.filter_det_f() # Filter out fake resonators
                 good_resonator = good_resonator.real
                 good_resonators[i] = good_resonator
 

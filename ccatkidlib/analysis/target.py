@@ -3,7 +3,6 @@ import sys
 import numpy as np
 import polars as pl
 
-from typing import override
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -26,28 +25,27 @@ class Target(Sweep):
     Subclasses Sweep.
     '''
 
-    @override
-    def __init__(self, com_to: str, tone: int | list[int] | None = None, analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, tones: int | list[int] | None = None, analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
         '''Subclass of Sweep with additional arguments
 
         Args:
-            tone (int | list[int] | None, optional): Which tones to load. None for loading all data without splitting into individual tones. -1 for all data split into individual tones. Defaults to None
+            tones (int | list[int] | None, optional): Which tones to load. None for loading all data without splitting into individual tones. -1 for all data split into individual tones. Defaults to None
         '''
         kwargs['data_type'] = 'targ'
         super().__init__(com_to, analysis_cfg, **kwargs)
         
         # Parse 'tone' argument specifying which tones should be loaded
         # -------------------------------------------------------------
-        if isinstance(tone, int): 
-            if tone >= 0: 
-                tone = [tone]
+        if isinstance(tones, int): 
+            if tones >= 0: 
+                tones = [tones]
             else:
-                tone = list(range(self.num_tones))
+                tones = list(range(self.num_tones))
 
-        if tone is None or isinstance(tone, Iterable):
-            self.tone = tone
+        if tones is None or isinstance(tones, Iterable):
+            self.tones = tones
         else:
-            error = f"Invalid type {type(tone)} for argument 'tone'. Should be int, list[int], or None."
+            error = f"Invalid type {type(tones)} for argument 'tones'. Should be int, list[int], or None."
             rfsoc_io.send_msg('CRITICAL', error)
             raise ValueError(error)
 
@@ -58,48 +56,46 @@ class Target(Sweep):
     @property
     def data(self):
         if self._data is None:
-            df = super().data # Get DataFrame of sweep data 
-            tone = self.tone # Define local variable since it will be used often
+            data = super().data # Get DataFrame of sweep data 
+            tones = self.tones # Define local variable since it will be used often
 
-            if tone is not None: # Run if a specific tone(s) is specified
-                data = df.collect().to_numpy().T
-
+            if tones is not None: # Run if a specific tone(s) is specified
+                data = data.to_numpy().T
                 try:
                     sweep_steps = self.drone_cfg['tones']['sweep_steps']
                 except KeyError:
                     sweep_steps = self.drone_cfg['tones']['N_step']    
 
                 data = data[1:].reshape((3, -1, sweep_steps))
-                num_tone = len(tone)
+                num_tones = len(tones)
 
                 try:
-                    fs, Is, Qs = [None]*num_tone, [None]*num_tone, [None]*num_tone
-                    for i, t in enumerate(tone):
+                    fs, Is, Qs = [None]*num_tones, [None]*num_tones, [None]*num_tones
+                    for i, t in enumerate(tones):
                         f, I, Q = data[:, t, :]
                         fs[i] = f
                         Is[i] = I
                         Qs[i] = Q
                     fs, Is, Qs = np.array(fs), np.array(Is), np.array(Qs)
                 except Exception as e:
-                    fs, Is, Qs = [None]*num_tone, [None]*num_tone, [None]*num_tone
-                    print(e)
+                    fs, Is, Qs = [None]*num_tones, [None]*num_tones, [None]*num_tones
                     rfsoc_io.send_msg('ERROR', 'Failed to reshape data array with error %s.', e)
 
                 data_dict = {'sample': range(sweep_steps)}
-                for t, f, I, Q in zip(tone, fs, Is, Qs):
+                for t, f, I, Q in zip(tones, fs, Is, Qs):
                     data_dict[(f'f_{t:04d}')] = f
                     data_dict[(f'I_{t:04d}')] = I
                     data_dict[(f'Q_{t:04d}')] = Q
-                df = pl.DataFrame(data_dict).lazy()
+                df = pl.DataFrame(data_dict)
             self._data = df 
         return self._data
 
     @data.setter
     def data(self, value: pl.lazyframe.frame.LazyFrame | None): 
-        if value is None or isinstance(value, pl.lazyframe.frame.LazyFrame): 
+        if value is None or isinstance(value, pl.dataframe.frame.DataFrame): 
             self._data = value
         else:
-            rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
+            rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars DataFrame!')
     
     #==================#
     # Plotting Methods #
