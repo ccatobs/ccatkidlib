@@ -191,14 +191,7 @@ class Timestream(Data):
 
         args = [[sampling_freq, height, window, nperseg, detrend, average]]*num_prefix # Allow different psd args to be passed for each prefix?
         self.transform([Timestream.calc_psd]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
-        struct_cols = []
-        schema = self.data.schema
-        for name, data in schema.items():
-            if isinstance(data, pl.Struct) and col_name[-1] in name:
-                self.data = self.data.drop([col for col in dict(data).keys() if col in schema])
-                struct_cols.append(name)
-        self.data = self.data.unnest(struct_cols)
-
+        self.data = self._unnest(col_name[-1])
         return self.get_data(col_name=f_cols + [col_name[-1] for col_name in col_names], include=include, exclude=exclude)
    
     #==================#

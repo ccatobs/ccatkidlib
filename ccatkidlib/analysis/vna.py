@@ -136,6 +136,7 @@ class VNA(Sweep):
     def filter_det_f(self, win: int = 3, stitch_phase: bool = True) -> tuple[np.ndarray, np.ndarray]:
         """ Filters out detectors found by find_resonators that are likely fake (noise or otherwise) based on the slope of the phase around the found frequency
 
+        Original implementation by Ben Keller, modified to work with Numba.
         Args:
             win (int): The window size with which to fit the phase around the found frequency. 
             stitch_phase (bool): Whether to use stitched phase data
@@ -261,8 +262,8 @@ def stitch_mag(f, mag, sweep_steps, stitch_percent, med_win, result):
     mag_bins  = np.ascontiguousarray(mag_filt).reshape(-1, sweep_steps)
     freq_bins = np.ascontiguousarray(f).reshape(-1, sweep_steps)
 
-    # Stitch phase discontiuities at bin edges
-    # ----------------------------------------
+    # Stitch mag discontiuities at bin edges
+    # --------------------------------------
     curr_shift = 0
     stitch_ends = int(sweep_steps / stitch_percent)
 
@@ -277,7 +278,6 @@ def stitch_mag(f, mag, sweep_steps, stitch_percent, med_win, result):
         slope_next, intercept_next = linear_fit(freq_bins[i + 1, -1*stitch_ends:], mag_bins[i + 1, -1*stitch_ends:])
         next = intercept_next + slope_next*freq_bins[i + 1, -1]
         
-        #diff = phase_bins[i+1][0] - phase_bins[i][-1] # Calculate simple difference between points at bin edges instead of performing linear fits on edges of bins
         mag_bins[i] -= curr_shift
         curr_shift += diff
     mag_bins[-1] -= curr_shift

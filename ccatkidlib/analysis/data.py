@@ -5,6 +5,7 @@ import numpy as np
 import polars as pl
 import time
 import pathlib
+import re
 
 from pathlib import Path
 from numba import njit
@@ -169,7 +170,7 @@ class Data:
             expr = []
 
             for tones in include:
-                expr.append(pl.col([f'^{name}_{tones:04d}$' for name in col_name]))
+                expr.append(pl.col([f'^.*{name}_.*{tones:04d}$' for name in col_name]))
             return expr
 
         def _exclude(exclude, *args):
@@ -177,23 +178,28 @@ class Data:
             expr = []
             for tones in exclude:
                 expr += [f'^{name}_{tones:04d}$' for name in col_name]
-            return [pl.col([f'^{name}_.*$' for name in col_name]).exclude(expr)]
+            return [pl.col([f'^.*{name}_.*$' for name in col_name]).exclude(expr)]
 
         def _all(*args):
             col_name = args[0]
-            return [pl.col([f'^{name}_.*$' for name in col_name])]
+            return [pl.col([f'^.*{name}_.*$' for name in col_name])]
 
         data = self.data
 
         if self.tones is not None:
             if isinstance(col_name, str): col_name = [col_name]
-            args = [col_name]
-            exprs = self._parse_tones(_include, _exclude, _all, include, exclude, *args)
 
-            # Timestreams never have self.tones = None but do have columns (the time columns in particular) without tones so need to handle those seperately (may be a way to add to pattern matching instead)
-            for no_tone_name in ['t', 'dt', 'fft_f']:
-                if no_tone_name in col_name:
-                    exprs.append(pl.col(no_tone_name))
+            exprs=[]
+            # Timestreams never have self.tones = None but do have columns (the time columns in particular) without tones so need to handle those seperately (may be a way to add to expr pattern matching instead)
+            for no_tone_name in ['t', 'dt', '^fft.*_f$', '^psd.*_f$']:
+                pattern = re.compile(no_tone_name)
+                for name in col_name[::-1]:
+                    if pattern.match(name):
+                        exprs.append(pl.col(no_tone_name))
+                        col_name.remove(name)
+                        break
+            args = [col_name]
+            exprs += self._parse_tones(_include, _exclude, _all, include, exclude, *args)
 
             return self.data.select(*exprs)
         else:
@@ -297,6 +303,66 @@ class Data:
         self.transform([Data.calc_mag]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
+    #============================#
+    # General IQ Transformations #
+    #============================#
+
+    def IQ_rotate(self, prefix: str | list[str] = '', angle: float = 0, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        col_name = ['I', 'Q', f'{name}{'_' if name else ''}rotate']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        if not isinstance(angle, Iterable) or not len(angle) == num_prefix: angle = [angle]
+
+        col_names_I = [[]]*num_prefix
+        col_names_Q = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            data_name_I = f"{pre}{'_' if pre else ''}{col_name[0]}"
+            data_name_Q = f"{pre}{'_' if pre else ''}{col_name[1]}"
+
+            col_names_I[i] = [data_name_I, data_name_Q, f'{col_name[-1]}_{data_name_I}']
+            col_names_Q[i] = [data_name_I, data_name_Q, f'{col_name[-1]}_{data_name_Q}']
+
+        args = [[a, self.tones] for a in angle]
+        self.transform([Data.calc_I_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names_I)
+        self.transform([Data.calc_Q_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names_Q)
+
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names_I] + [col_name[-1] for col_name in col_names_Q], include=include, exclude=exclude)
+    
+    def IQ_scale(self, prefix: str | list[str] = '', scale: float = 1, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        col_name = ['I', 'Q', f'{name}{'_' if name else ''}scale']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        if not isinstance(scale, Iterable) or not len(scale) == num_prefix: scale = [scale]
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
+
+        args = [[s, self.tones] for s in scale]
+        self.transform([Data.calc_IQ_scale]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+
+    def IQ_shift(self, prefix: str | list[str] = '', shift_I: float = 0, shift_Q: float = 0, name = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        col_name = ['I', 'Q', f"{name}{'_' if name else ''}shift"]
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        if not isinstance(shift_I, Iterable) or not len(shift_I) == num_prefix: shift_I = [shift_I]
+        if not isinstance(shift_Q, Iterable) or not len(shift_Q) == num_prefix: shift_Q = [shift_Q]
+
+        col_names_I = [[]]*num_prefix
+        col_names_Q = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names_I[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
+            col_names_Q[i] = [f"{pre}{'_' if pre else ''}{col_name[1]}", col_name[-1]]
+
+        args_I, args_Q = [[s, self.tones] for s in shift_I], [[s, self.tones] for s in shift_Q]
+        self.transform([Data.calc_I_shift]*num_prefix, *args_I, include=include, exclude=exclude, recalc=recalc, col_name = col_names_I)
+        self.transform([Data.calc_Q_shift]*num_prefix, *args_Q, include=include, exclude=exclude, recalc=recalc, col_name = col_names_Q)
+
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names_I], include=include, exclude=exclude)
+    
     #==================#
     # Analysis Methods #
     #==================#
@@ -405,11 +471,12 @@ class Data:
             batch_size = _check_len(batch_size, num_funcs, error =  ('When using multiple transformation functions with at least unique batch size,'
                                                                      'batch_size must be provided for all functions.'))
         
+        data = self.data.lazy()
         if self.tones is not None:
-            args = [self.data.schema]
-            self.data = self.data.with_columns(*self._parse_tones(_include, _exclude, _all, include, exclude, *args))
+            args = [data.collect_schema()]
+            self.data = data.with_columns(*self._parse_tones(_include, _exclude, _all, include, exclude, *args)).collect()
         else:
-            self.data = self.data.with_columns(*[func(self.data.schema, *f_arg, tones = None, recalc = recalc, col_name = name) for func, f_arg, name in zip(funcs, funcs_args, col_name)])
+            self.data = data.with_columns(*[func(data.collect_schema(), *f_arg, tones = None, recalc = recalc, col_name = name) for func, f_arg, name in zip(funcs, funcs_args, col_name)]).collect()
         return self.data
 
     @staticmethod
@@ -438,6 +505,131 @@ class Data:
         else:
             return pl.col(mag_col)
 
+    @staticmethod
+    def calc_I_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate_I']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name]
+
+        I_col, Q_col, rotate_col = col_name
+
+        if len(args) == 2:
+            angle, tone_list = args
+            if isinstance(angle, Iterable):
+                if tones is not None: 
+                    angle = angle[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of angles when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
+
+        if recalc or not (rotate_col in schema):
+            return (pl.col(I_col)*np.cos(angle) - pl.col(Q_col)*np.sin(angle)).alias(rotate_col)
+        else:
+            return pl.col(rotate_col)
+
+    @staticmethod
+    def calc_Q_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate_Q']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name]
+
+        I_col, Q_col, rotate_col = col_name
+
+        if len(args) == 2:
+            angle, tone_list = args
+            if isinstance(angle, Iterable):
+                if tones is not None: 
+                    angle = angle[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of angles when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
+
+        if recalc or not (rotate_col in schema):
+            return (pl.col(I_col)*np.sin(angle) + pl.col(Q_col)*np.cos(angle)).alias(rotate_col)
+        else:
+            return pl.col(rotate_col)
+    
+    @staticmethod
+    def calc_I_shift(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'shift_I']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        I_col, shift_col = col_name
+
+        if len(args) == 2:
+            shift, tone_list = args
+            if isinstance(shift, Iterable):
+                if tones is not None: 
+                    shift = shift[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of shifts when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'shift is a required argument.')
+
+        if recalc or not (f'{shift_col}_{I_col}' in schema):
+            return (pl.col(I_col) + shift).name.prefix(shift_col + '_')
+        else:
+            return pl.col(f'{shift_col}_{I_col}')
+
+    @staticmethod
+    def calc_Q_shift(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['Q', 'shift_Q']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        Q_col, shift_col = col_name
+
+        if len(args) == 2:
+            shift, tone_list = args
+            if isinstance(shift, Iterable):
+                if tones is not None: 
+                    shift = shift[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of shifts when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'shift is a required argument.')
+
+        if recalc or not (f'{shift_col}_{Q_col}' in schema):
+            return (pl.col(Q_col) + shift).name.prefix(shift_col + '_')
+        else:
+            return pl.col(f'{shift_col}_{Q_col}')
+    
+    @staticmethod
+    def calc_IQ_scale(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'scale']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        I_col, Q_col, scale_col = col_name
+
+        if len(args) == 2:
+            scale, tone_list = args
+            if isinstance(scale, Iterable):
+                if tones is not None: 
+                    scale = scale[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of scales when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'scale is a required argument.')
+
+        if recalc or not (f'{scale_col}_{I_col}' in schema):
+            return (pl.col([I_col, Q_col]) * scale).name.prefix(scale_col + '_')
+        else:
+            return pl.col(f'{scale_col}_{I_col}')
+
     #==========================#
     # Lazily Loaded Attributes #
     #==========================#
@@ -464,7 +656,6 @@ class Data:
         if not original_root[-1] == '/': original_root += '/'
         return original_root
 
-
     @cached_property
     def comb(self) -> pl.dataframe.frame.DataFrame:
         '''
@@ -481,13 +672,24 @@ class Data:
                     value = np.load(value).real
                 except:
                     value = None
-            comb[key] = value
+            comb[key] = value if self.tones is None else value[self.tones]
+        comb['dets'] = range(len(comb['tone_freqs'])) if self.tones is None else self.tones
         comb = pl.DataFrame(comb)
         return comb
 
     #================#
     # Helper Methods #
     #================#
+    def _unnest(self, col_names):
+        struct_cols = []
+        if isinstance(col_names, str): col_names = [col_names]
+        for col_name in col_names:
+            schema = self.data.schema
+            for name, data in schema.items():
+                if isinstance(data, pl.Struct) and col_name in name:
+                    self.data = self.data.drop([col for col in dict(data).keys() if col in schema])
+                    struct_cols.append(name)
+        return self.data.unnest(struct_cols)
 
     def _parse_tones(self, func_include, func_exclude, func_all, include: int | list[int] | None = None, exclude: int | list[int] | None = None, *args):
         if include is not None and exclude is not None:
