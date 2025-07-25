@@ -4,7 +4,7 @@
 #=================================#
 
 '''
-Library of helper functions for file and directory read/write operations as well as logging.
+Library of helper functions for general file and directory read/write operations as well as logging.
 '''
 
 # Import Python modules
@@ -34,20 +34,17 @@ import ccatkidlib.utils as utils
 # Directory IO Functions #
 #========================#
 
-def create_book(curr_date, sess_id, com_to, data_dir):
+def create_tree(com_to: list[str], curr_date: str, sess_id: int, data_dir: str) -> tuple[list[str], list[str], list[str], list[str]]:
     '''
-    Create book for storage of timestream, sweep, and other (e.g., config) data.
+    Create file tree for storage of timestream, sweep, and other (e.g., config) data.
 
-    Parameters:
-        curr_date      (str) : Current date
-        sess_id        (int) : ID of current observing session
-        com_to (list of str) : List of board and drone IDs of RFSoC in form board.drone
-        data_dir       (str) : Path of directory in which to store data
+    Args:
+        com_to (list[str]) : List of drones to create directories for
+        curr_date    (str) : Current date
+        sess_id      (int) : ID of observing session
+        data_dir     (str) : Where to create directory tree
     Returns:
-        config_dirs     (list of str) : Directories where log and config files are saved
-        targ_dirs      (list of str) : Directories where target sweeps are saved
-        timestream_dirs (list of str): Directories where timestreams are saved
-        vna_dirs       (list of str) : Directories where VNA sweeps are saved
+        tuple[list[str], list[str], list[str], list[str]]: Config directories, target directories, timestream directories, and VNA sweep directories in that order.
     '''
 
     # Create tmp directory
@@ -109,14 +106,14 @@ def create_dir(dir_path):
         # Check if directory already exists, if not make directory
         if not dir_path.exists():
             dir_path.mkdir(parents = True, exist_ok = False)
-            send_msg('DEBUG', f"The directory '{dir_path}' was successfully created!")
+            send_msg('DEBUG', "The directory '%s' was successfully created!", dir_path)
         else:
-            send_msg('DEBUG', f"The directory '{dir_path}' already exists! Directory was not overwritten.")
+            send_msg('DEBUG', "The directory '%s' already exists! Directory was not overwritten.", dir_path)
     except FileNotFoundError:
-        send_msg('ERROR', f"The directory '{dir_path}' could not be created! Ensure that the file path is valid!")
+        send_msg('ERROR', "The directory '%s' could not be created! Ensure that the file path is valid!", dir_path)
         raise FileNotFoundError(f"The directory '{dir_path}' could not be created! Ensure that the file path is valid!")
     except PermissionError:
-        send_msg('ERROR', f"The directory '{dir_path}' could not be created! Ensure that the parent directory has suitable write permissions!")
+        send_msg('ERROR', f"The directory '%s' could not be created! Ensure that the parent directory has suitable write permissions!", dir_path)
         raise PermissionError(f"The directory '{dir_path}' could not be created! Ensure that the parent directory has suitable write permissions!")
 
 #=====================#
@@ -394,8 +391,6 @@ def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
         level   (str) : Level of message at which to log (One of: 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
         msg     (str) : Message to log
         name    (str) : Name of logger 
-
-
     '''
     # Get logger
     logger = logging.getLogger(name)
@@ -415,12 +410,12 @@ def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
 
         # Log message with given level. Redirect stdout logs to tqdm
         with tqdm_logging.logging_redirect_tqdm(loggers=[logger]):
-            # TQDM log handler does not respect original streamHandler level (see https://github.com/tqdm/tqdm/issues/1272) so we need to override it
+            # TQDM log handler does not respect original StreamHandler level (see https://github.com/tqdm/tqdm/issues/1272) so we need to override it
             for handler in logger.handlers:
                 if isinstance(handler, tqdm_logging._TqdmLoggingHandler):
                     handler.setLevel(terminal_level)
             msg = f'{style.log_begin(level, getattr(style, level))} {msg}'
-            logger.log(log_level, msg, *args)
+            logger.log(log_level, msg, *args) if not len(args) == 0 else logger.log(log_level, msg)
     except Exception as e:
         # Log error message
         with tqdm_logging.logging_redirect_tqdm(loggers=[logger]):
