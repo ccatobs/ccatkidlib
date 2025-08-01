@@ -40,6 +40,7 @@ def dict_get(dic, keys):
         '''
 
         done = False
+        value = None
         for k, v in dic.items():
             if isinstance(v, dict):
                 done, value = _dict_get_r(v, key)

@@ -1,59 +1,111 @@
 import gc
+import sys
+import pathlib
+import numpy as np
+import polars as pl
+import time
+import pathlib
+import re
+
 from pathlib import Path
 from numba import njit
-import sys
-import numpy as np
-import pandas as pd
+from functools import cached_property
+from collections.abc import Iterable
+from math import ceil
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
 import ccatkidlib.analysis.plot_utils as putils
+
 from ccatkidlib.utils import method_timer
 
 
+
 class Data:
+    '''Class representing a raw RFSoC output data product (VNA sweep, target sweep, or timestream)
+
+    Attributes:
+        bid  (str): RFSoC board that took the data
+        drid (str): RFSoC drone that took the data
+
+        tones (int | list[int], optional): Which tones are loaded for target sweep and timestream data. Defaults to None
+        data_path (pathlib.PosixPath): Path to data file
+        data (polars.dataframe.frame.DataFrame): Polars DataFrame with loaded data
+        timestamp (int): Timestamp of data file
+
+        io_cfg    (dict): Loaded IO config
+        ext_cfg   (dict): Loaded external config
+        drone_cfg (dict): Loaded drone config
+
+        comb (polars.dataframe.frame.DataFrame): Polars DataFrame with tone frequencies, powers, and phis used to take data
+        num_tones (int): Number of tones used to take data
     '''
-    Class representing a RFSoC output data file (VNA sweep, target sweep, or timestream)
-    '''
-    def __init__(self, com_to, analysis_cfg = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+
+    def __init__(self, com_to: str,
+                 analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'),
+                 data_type: str | None = None,
+                 timestamp: int | str | None = None,
+                 data_path: str | pathlib.PosixPath | list[str] | list[pathlib.PosixPath] | None = None,
+                 **kwargs):
+        ''' Initialize Data object by finding data file and associated config files
+
+        Note:
+            Either the full data path must be provided via the ``data_path`` key word argument or
+            both the timestamp and data type must be provided via the ``data_type`` and ``timestamp`` key word arguments respectively
+
+        Args:
+            com_to (str): Drone that took the data. In form 'Board.Drone'
+            analysis_cfg (str, optional): Path to analysis config. Defaults to analysis config in ccatkidlib/ccatkidlib/analysis directory.
+
+            data_type (str, optional): Type of data file. Should be one of 'vna', 'targ', 'timestream'.
+            timestamp (int | str, optional): Timestamp of data file
+            data_path (str | pathlib.PosixPath, optional): Full path to data file
+
+            **kwargs: Key word arguments for finding data file. See below:
+            root_data_dir (str, optional): Root directory where data is stored. Defaults to that specified in analysis config
+            data_dir (str, optional): Directory where data is stored
+            date (str, optional): Date data was taken
+            sess_id (str, optional): ccatkidlib session ID of data
+        
+        Raises:
+            ValueError: If multiple data files are specified with differing file types or timestamps
+            FileNotFoundError: If any data files cannot be found 
+        '''
         # Define data attributes
         # -----------------------
         self.bid, self.drid = com_to.split('.') # Baard and drone data was taken with
 
-        self.data = None
-        self.num_tones = None
+        self.tones = None
+        self._data = None
 
-        self.data_path = None # Path of data file
-        self.analysis_cfg, self.plot_cfg = rfsoc_io.load_config(analysis_cfg) # File path of analysis config
+        # Load configs and initialize logger
+        # ----------------------------------
+        self.analysis_cfg, self.viz_cfg = rfsoc_io.load_config(analysis_cfg)
+        self.root_dir = self.analysis_cfg['file_paths']['root_data_dir']
+        if not self.root_dir[-1] == '/': self.root_dir += '/'
 
-        # Parse key word arguments
-        for key, value in kwargs.items():
-            if key == 'data_path':
-                self.data_path = Path(value)
+        log_dir = Path(__file__).parent / '..' / '..' / 'log'
+        rfsoc_io.create_dir(log_dir) # Create log directory if it does not exist
+        rfsoc_io.setup_logging(log_dir / 'analysis.log', self.analysis_cfg['io']['file_level'], self.analysis_cfg['io']['terminal_level'])
 
-        # If full data path is not provided, find data file based on timestamp and (optional) file path parts
-        # ----------------------------------------------------------------------------------------------------------
-        if self.data_path is None:
-            # Find sweep data file using 
-            data_type  = None
-            timestamp  = None
+        # If full data path is None, [], or "", find data file based on timestamp and (optional) file path parts
+        # ------------------------------------------------------------------------------------------------------
+        if not data_path:
+            if data_type is None or timestamp is None:
+                error = ("Both the data type ('vna', 'targ', or 'timestream') and the timestamp must be provided "
+                         "or the full data path needs to be specified.")
+                rfsoc_io.send_msg('CRITICAL', error)
+                raise ValueError(error)
 
-            # Parse data file part key word arguments
-            # ---------------------------------------------
-            root_data_dir = self.analysis_cfg['data_load']['root_data_dir']
             data_dir = '**'
             date = '**'
             sess_id = '**'
 
             for key, value in kwargs.items():
-                if key == 'data_type':
-                    data_type = value
-                elif key == 'timestamp':
-                    timestamp = value
-                elif key == 'root_data_dir':
-                    root_data_dir = value
+                if key == 'root_data_dir':
+                    self.root_dir = value
                 elif key == 'data_dir':
                     data_dir = value
                 elif key == 'date':
@@ -61,141 +113,608 @@ class Data:
                 elif key == 'sess_id':
                     sess_id = value
 
-            # Ensure that timestamp and type of data are provided to uniquely find data file
-            assert (timestamp is not None and data_type is not None), "Need to provide either the full path to the data file or the data file timestamp (and the data file data type ('targ', 'vna', or 'timestream')!"
-            
             # Try to find data file using given information
-            try:
-                self.data_path = pair.get_data_file(com_to, timestamp, data_dir = data_dir, date = date, sess_id = sess_id, data_type = data_type, root_data_dir=root_data_dir)
-                self.timestamp = timestamp
-            except:
-                raise FileNotFoundError(f'Could not find {data_type} file for board {self.bid}, drone {self.drid} with timestamp {timestamp}! Check that all optional file path segments are correct!')
+            self.data_path = pair.get_data_file(com_to, timestamp, data_type, data_dir = data_dir, date = date, sess_id = sess_id, root_data_dir=self.root_dir)
+            self.timestamp = timestamp
         else:
-            self.timestamp = pair.get_timestamp(self.data_path)
-        
-        if not isinstance(self.data_path, list): self.data_path=[self.data_path]
-        
+            self.data_path = data_path if isinstance(data_path, Iterable) and not isinstance(data_path, str) else [data_path]
+            if not all((isinstance(path, str) or isinstance(path, pathlib.PosixPath)) for path in self.data_path):
+                error = 'All data paths must be of type str or pathlib.PosixPath!'
+                rfsoc_io.send_msg('CRITICAL', error)
+                raise ValueError(error)
+
+            self.timestamp = pair.get_timestamp(self.data_path[0])
+            if not all(pair.get_timestamp(path) == self.timestamp for path in self.data_path):
+                error = 'All data paths must have the same timestamp!'
+                rfsoc_io.send_msg('CRITICAL', error)
+                raise ValueError(error)              
+
+        # Check that data path(s) exist
+        # -----------------------------
+        ftype = Path(self.data_path[0]).suffix
+        for path in self.data_path:
+            path = Path(path)
+            if not path.exists():
+                error = f'Could not find {data_type} file for board {self.bid}, drone {self.drid} with timestamp {timestamp}! Check that all optional file path segments are correct!'
+                rfsoc_io.send_msg('CRITICAL', error)
+                raise FileNotFoundError(error)
+            elif not path.suffix == ftype:
+                error = f'All data files must have the same file type!'
+                rfsoc_io.send_msg('CRITICAL', error)
+                raise ValueError(error)
+
         # Get io, ext, and drone configs associated with the sweep data file
         # ------------------------------------------------------------------
-        self.configs = pair.get_config(self.data_path[0], all_cfg=False)
-        self.io_cfg = None
-        self.ext_cfg = None
-        self.drone_cfg = None
+        self._configs = pair.get_config(self.data_path[0], all_cfg=False)
 
-        # Initialize comb attribute
-        # --------------------------
-        self.comb = None
+    #=====================#
+    # Data Getter Methods #
+    #=====================#
 
-    ##############################
-    # Data Getter/Setter Methods # 
-    ##############################
+    def get_data(self, col_name: str | list[str] = '.*', include: int | list[int] | None = None, exclude: int | list[int] | None = None) -> pl.dataframe.frame.DataFrame:
+        '''Get the specified data columns from the self.data Polars DataFrame for the specified tones
 
-    #@method_timer
-    def transform(self, name, func, res_num = None):
-        res_slice = self._res_slice(res_num)
-        res_slice_idx = pd.Index(res_slice)
-        sort_levels = []
-        if name in self.data.columns.levels[0]:
-            res_slice_idx = res_slice_idx.difference(self.data[name].columns)
+        Note:
+            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+
+        Args:
+            col_name (str | list[str]): List of data column names without tone number suffix (e.g., 'I', 'mag', 'phase'). Defaults to all columns
+            include  (int | list[int], optional): List of tones to include. Defaults to None
+            exclude  (int | list[int], optional): List of tones to exclude. Defaults to None
+        Returns:
+            polars.dataframe.frame.DataFrame: Polars DataFrame with specified data columns
+
+        '''
+        def _include(include, *args):
+            col_name = args[0]
+            expr = []
+
+            for tones in include:
+                expr.append(pl.col([f'^.*{name}_{tones:04d}$' for name in col_name]))
+            return expr
+
+        def _exclude(exclude, *args):
+            col_name = args[0]
+            expr = []
+            for tones in exclude:
+                expr += [f'^{name}_{tones:04d}$' for name in col_name]
+            return [pl.col([f'^.*{name}_.*$' for name in col_name]).exclude(expr)]
+
+        def _all(*args):
+            col_name = args[0]
+            return [pl.col([f'^.*{name}_.*$' for name in col_name])]
+
+        data = self.data
+
+        if self.tones is not None:
+            if isinstance(col_name, str): col_name = [col_name]
+
+            exprs=[]
+            # Timestreams never have self.tones = None but do have columns (the time columns in particular) without tones so need to handle those seperately (may be a way to add to expr pattern matching instead)
+            for no_tone_name in ['^t$', '^dt$', '^fft.*_f$', '^psd.*_f$']:
+                pattern = re.compile(no_tone_name)
+                for name in col_name[::-1]:
+                    if pattern.match(name):
+                        exprs.append(pl.col(no_tone_name))
+                        col_name.remove(name)
+                        break
+            args = [col_name]
+            exprs += self._parse_tones(_include, _exclude, _all, include, exclude, *args)
+
+            return self.data.select(*exprs)
         else:
-            sort_levels.append(0)
-        sort_levels.append(1)
-        res_slice_idx = list(res_slice_idx)
-        if not len(res_slice_idx) == 0:
-            transformed_data = func(res_num, res_slice_idx)
-            transformed_data.columns = pd.MultiIndex.from_product([[name], res_slice_idx]) 
-            self.data = pd.concat([self.data, transformed_data], axis=1).sort_index(axis=1, level=sort_levels)
+            return self.data.select(pl.col(col_name))
 
-        return self.data.loc[:, (name, res_slice)][name]
+    def tone(self, include: int | list[int] | None = None, exclude: int | list[int] | None = None) -> pl.dataframe.frame.DataFrame:
+        '''Get all of the data columns in the self.data Polars DataFrame for the specified tones
 
-    def I(self, res_num = None, res_slice = None):
-        if res_slice is None and not res_num is None: res_slice = self._res_slice(res_num)
-        return self.data.loc[:, ('I', res_slice)]['I'] if res_slice is not None else self.data['I']
-    
-    def Q(self, res_num = None, res_slice = None):
-        if res_slice is None and not res_num is None: res_slice = self._res_slice(res_num)
-        return self.data.loc[:, ('Q', res_slice)]['Q'] if res_slice is not None else self.data['Q']
+        Note:
+            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
 
-    def phase(self, res_num = None):
-        @njit
-        def _calc_phase(I, Q):
-            return np.arctan2(Q, I)
-
-        def _phase(res_num, res_slice):
-            I = self.I(res_num, res_slice).to_numpy()
-            Q = self.Q(res_num, res_slice).to_numpy()
-            #return pd.DataFrame(_calc_phase(I, Q))
-            return np.arctan2(self.Q(res_num, res_slice), self.I(res_num, res_slice))
-        
-        return self.transform('Phase', _phase, res_num = res_num)
-
-    def mag(self, res_num = None):
-        def _mag(res_num, res_slice):
-            return np.sqrt(self.I(res_num, res_slice)**2 + self.Q(res_num, res_slice)**2)
-        
-        return self.transform('Magnitude', _mag, res_num = res_num)
- 
-    def resonator(self, res_num = None):
-        return self.data.loc[:, (slice(None), self._res_slice(res_num))]
-    
-    #############################
-    # Auxiliary Loading Methods #
-    #############################
-    
-    def _load_cfg(self, id):
+        Args:
+            include (int | list[int], optional): List of tones to include. Defaults to None
+            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+        Returns:
+            polars.dataframe.frame.DataFrame: Polars DataFrame with specified data columns
         '''
-        Load io, ext, or drone cfg file corresponding to data file. 
-        '''
-        cfg = None
-        for i, config_path in enumerate(self.configs):
-            if id in str(config_path): 
-                cfg = rfsoc_io.load_config(config_path)
-                self.configs.pop(i)
-                break
-        return cfg
+        if self.tones is not None:
+            return self.get_data(col_name = '.*', include=include, exclude=exclude)
+        else:
+            rfsoc_io.send_msg('ERROR', "Cannot load individual tone data when self.tones is None.")
 
-    def _load_comb(self):
+    def I(self, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None) -> pl.dataframe.frame.DataFrame:
+        '''Get the in-phase ``I`` data for the specified tones
+
+        Note:
+            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+
+        Args:
+            include (int | list[int], optional): List of tones to include. Defaults to None
+            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+        Returns:
+            polars.dataframe.frame.DataFrame: Polars DataFrame with specified data columns
+
+        '''
+
+        if isinstance(prefix, str): prefix = [prefix]
+        col_names = [f"{pre}{'_' if pre else ''}I" for pre in prefix]
+        return self.get_data(col_name=col_names, include=include, exclude=exclude)
+
+    def Q(self, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None) -> pl.dataframe.frame.DataFrame:
+        '''Get the quadrature ``Q`` data for the specifed tones
+
+        Note:
+            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+
+        Args:
+            include (int | list[int], optional): List of tones to include. Defaults to None
+            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+        Returns:
+            polars.dataframe.frame.DataFrame: Polars DataFrame with specified data columns
+        '''
+
+        if isinstance(prefix, str): prefix = [prefix]
+        col_names = [f"{pre}{'_' if pre else ''}I" for pre in prefix]
+        return self.get_data(col_name='Q', include=include, exclude=exclude)
+
+    def phase(self, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:
+        '''Calculate and get the phase ``arctan(Q/I)`` data for the specified tones.
+
+        Note:
+            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+
+        Args:
+            include (int | list[int], optional): List of tones to include. Defaults to None
+            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+        Returns:
+            polars.dataframe.frame.DataFrame: Polars DataFrame with specified data columns
+
+        '''
+
+        col_name = ['I', 'Q', 'phase']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
+        self.transform([Data.calc_phase]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+
+    def mag(self, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:
+        '''Calculate and get the magnitude ``sqrt(I^2 + Q^2)`` data of the specified tones
+
+        Note:
+            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+
+        Args:
+            include (int | list[int], optional): List of tones to include. Defaults to None
+            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+        Returns:
+            polars.dataframe.frame.DataFrame: Polars DataFrame with specified data columns
+        '''
+        col_name = ['I', 'Q', 'mag']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
+        self.transform([Data.calc_mag]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+
+    #============================#
+    # General IQ Transformations #
+    #============================#
+
+    def IQ_rotate(self, prefix: str | list[str] = '', angle: float = 0, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        col_name = ['I', 'Q', f'{name}{'_' if name else ''}rotate']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        if not isinstance(angle, Iterable) or not len(angle) == num_prefix: angle = [angle]
+
+        col_names_I = [[]]*num_prefix
+        col_names_Q = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            data_name_I = f"{pre}{'_' if pre else ''}{col_name[0]}"
+            data_name_Q = f"{pre}{'_' if pre else ''}{col_name[1]}"
+
+            col_names_I[i] = [data_name_I, data_name_Q, f'{col_name[-1]}_{data_name_I}']
+            col_names_Q[i] = [data_name_I, data_name_Q, f'{col_name[-1]}_{data_name_Q}']
+
+        args = [[a, self.tones] for a in angle]
+        self.transform([Data.calc_I_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names_I)
+        self.transform([Data.calc_Q_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names_Q)
+
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names_I] + [col_name[-1] for col_name in col_names_Q], include=include, exclude=exclude)
+    
+    def IQ_scale(self, prefix: str | list[str] = '', scale: float = 1, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        col_name = ['I', 'Q', f'{name}{'_' if name else ''}scale']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        if not isinstance(scale, Iterable) or not len(scale) == num_prefix: scale = [scale]
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
+
+        args = [[s, self.tones] for s in scale]
+        self.transform([Data.calc_IQ_scale]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+
+    def IQ_shift(self, prefix: str | list[str] = '', shift_I: float = 0, shift_Q: float = 0, name = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        col_name = ['I', 'Q', f"{name}{'_' if name else ''}shift"]
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        if not isinstance(shift_I, Iterable) or not len(shift_I) == num_prefix: shift_I = [shift_I]
+        if not isinstance(shift_Q, Iterable) or not len(shift_Q) == num_prefix: shift_Q = [shift_Q]
+
+        col_names_I = [[]]*num_prefix
+        col_names_Q = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names_I[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
+            col_names_Q[i] = [f"{pre}{'_' if pre else ''}{col_name[1]}", col_name[-1]]
+
+        args_I, args_Q = [[s, self.tones] for s in shift_I], [[s, self.tones] for s in shift_Q]
+        self.transform([Data.calc_I_shift]*num_prefix, *args_I, include=include, exclude=exclude, recalc=recalc, col_name = col_names_I)
+        self.transform([Data.calc_Q_shift]*num_prefix, *args_Q, include=include, exclude=exclude, recalc=recalc, col_name = col_names_Q)
+
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names_I], include=include, exclude=exclude)
+    
+    #==================#
+    # Analysis Methods #
+    #==================#
+
+    def transform(self, funcs, *funcs_args, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc = False, col_name: str | list[str] = [], batch_size: int | list[int] = []) -> pl.dataframe.frame.DataFrame:
+        '''Apply transformations specified by ``funcs`` argument to the specified tones
+
+        Mostly for internal use, but can be used externally if wanting to perform multiple transformations in parallel to increase efficiency.
+
+        Note:
+            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, transforms data for all tones.
+
+        Examples:
+            To calculate the phase and magnitude of tones 1,5, and 7, one would run::
+
+            >>> data.transform(['calc_phase', 'calc_mag'], include=[1,5,7], col_name=[['I', 'Q'], ['I', 'Q']])
+
+        Args:
+            funcs (list): List of functions to apply to data. Functions should take tone number and DataFrame schema as arguments and should return a polars.expr.expr.Expr object.
+            *func_args (list[list], optional): Additional arguments to pass to funcs as a nested list. For funcs that don't take additional arguments, can specify [None].
+            include (int | list[int], optional): List of tones to include. Defaults to None
+            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+        Returns:
+            polars.dataframe.frame.DataFrame: Full self.data Polars DataFrame including columns with the transformed data
+
+        '''
+        
+        def _get_expr(schema, tones):
+            expr = []
+
+            for func, f_arg, name, size in zip(funcs, funcs_args, col_name, batch_size):
+                batches = [tones[i*size:(i+1)*size] for i in range(ceil(len(tones) / size))]
+                for batch in batches:
+                    expr.append(func(schema, *f_arg, tones=batch, recalc=recalc, col_name = name))
+            return expr
+
+        def _include(include: list[int], *args) -> list[pl.expr.expr.Expr]:
+            '''Internal method for generating polars query expressions for the tones to include
+
+            Args:
+                include (list[int]): List of tones to include
+                *args: Additional args to pass to query generating function
+            Returns:
+                list[pl.expr.expr.Expr]: List of query expressions
+            '''
+
+            schema = args[0]
+            return _get_expr(schema, include)
+
+        def _exclude(exclude, *args) -> list[pl.expr.expr.Expr]:
+            '''Internal method for generating polars query expressions for the tones to exclude
+
+            Args:
+                exclude (list[int]): List of tones to exclude
+                *args: Additional args to pass to query generating function
+            Returns:
+                list[pl.expr.expr.Expr]: List of query expressions
+            '''
+
+            schema = args[0]
+            tones = []
+            for tone in self.tones:
+                if not tone in exclude:
+                    tones.append(tone)
+            return _get_expr(schema, tones)
+
+        def _all(*args) -> list[pl.expr.expr.Expr]:
+            '''Internal method for generating polars query expressions for all tones
+            Args:
+                *args: Additional args to pass to query generating function
+            Returns:
+                list[pl.expr.expr.Expr]: List of query expressions
+            '''
+            schema = args[0]
+            return _get_expr(schema, self.tones)
+
+        def _check_len(arg_list, num_funcs, error = ''):
+            if not len(arg_list) == num_funcs:
+                if num_funcs == 1:
+                    arg_list = [arg_list]
+                else:
+                    rfsoc_io.send_msg('ERROR', error)
+            return arg_list
+
+        if callable(funcs): funcs = [funcs]
+
+        # Parse funcs_args arg
+        # --------------------        
+        num_funcs = len(funcs)
+        if len(funcs_args) == 0:
+            funcs_args = num_funcs*[[None]]
+        else:
+            funcs_args = _check_len(funcs_args, num_funcs, error = ('When using multiple transformation functions with at least one requiring additional args,'
+                                                                    'args must be provided for all functions. Use ``[None]`` for functions that do not take args.'))
+        # Parse col_name arg
+        # ------------------
+        if isinstance(col_name, str): col_name = [col_name]
+        col_name = _check_len(col_name, num_funcs, error = 'All column names used must be specified for each transformation.')
+
+        # Parse batch_size arg
+        # --------------------
+        if isinstance(batch_size, int): batch_size = [batch_size]
+        if len(batch_size) == 0:
+            batch_size = num_funcs*[1]
+        else:
+            batch_size = _check_len(batch_size, num_funcs, error =  ('When using multiple transformation functions with at least unique batch size,'
+                                                                     'batch_size must be provided for all functions.'))
+        
+        data = self.data.lazy()
+        if self.tones is not None:
+            args = [data.collect_schema()]
+            self.data = data.with_columns(*self._parse_tones(_include, _exclude, _all, include, exclude, *args)).collect()
+        else:
+            self.data = data.with_columns(*[func(data.collect_schema(), *f_arg, tones = None, recalc = recalc, col_name = name) for func, f_arg, name in zip(funcs, funcs_args, col_name)]).collect()
+        return self.data
+
+    @staticmethod
+    def calc_phase(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'phase']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name]
+
+        I_col, Q_col, phase_col = col_name
+
+        if recalc or not (phase_col in schema):
+            return np.arctan2(pl.col(Q_col), pl.col(I_col)).alias(phase_col)
+        else:
+            return pl.col(phase_col)
+
+    @staticmethod
+    def calc_mag(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'mag']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name]
+        
+        I_col, Q_col, mag_col = col_name
+
+        if recalc or not (mag_col in schema):
+            return (pl.col(I_col)**2 + pl.col(Q_col)**2).sqrt().alias(mag_col)
+        else:
+            return pl.col(mag_col)
+
+    @staticmethod
+    def calc_I_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate_I']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name]
+
+        I_col, Q_col, rotate_col = col_name
+
+        if len(args) == 2:
+            angle, tone_list = args
+            if isinstance(angle, Iterable):
+                if tones is not None: 
+                    angle = angle[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of angles when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
+
+        if recalc or not (rotate_col in schema):
+            return (pl.col(I_col)*np.cos(angle) - pl.col(Q_col)*np.sin(angle)).alias(rotate_col)
+        else:
+            return pl.col(rotate_col)
+
+    @staticmethod
+    def calc_Q_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate_Q']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name]
+
+        I_col, Q_col, rotate_col = col_name
+
+        if len(args) == 2:
+            angle, tone_list = args
+            if isinstance(angle, Iterable):
+                if tones is not None: 
+                    angle = angle[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of angles when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
+
+        if recalc or not (rotate_col in schema):
+            return (pl.col(I_col)*np.sin(angle) + pl.col(Q_col)*np.cos(angle)).alias(rotate_col)
+        else:
+            return pl.col(rotate_col)
+    
+    @staticmethod
+    def calc_I_shift(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'shift_I']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        I_col, shift_col = col_name
+
+        if len(args) == 2:
+            shift, tone_list = args
+            if isinstance(shift, Iterable):
+                if tones is not None: 
+                    shift = shift[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of shifts when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'shift is a required argument.')
+
+        if recalc or not (f'{shift_col}_{I_col}' in schema):
+            return (pl.col(I_col) + shift).name.prefix(shift_col + '_')
+        else:
+            return pl.col(f'{shift_col}_{I_col}')
+
+    @staticmethod
+    def calc_Q_shift(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['Q', 'shift_Q']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        Q_col, shift_col = col_name
+
+        if len(args) == 2:
+            shift, tone_list = args
+            if isinstance(shift, Iterable):
+                if tones is not None: 
+                    shift = shift[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of shifts when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'shift is a required argument.')
+
+        if recalc or not (f'{shift_col}_{Q_col}' in schema):
+            return (pl.col(Q_col) + shift).name.prefix(shift_col + '_')
+        else:
+            return pl.col(f'{shift_col}_{Q_col}')
+    
+    @staticmethod
+    def calc_IQ_scale(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'scale']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        I_col, Q_col, scale_col = col_name
+
+        if len(args) == 2:
+            scale, tone_list = args
+            if isinstance(scale, Iterable):
+                if tones is not None: 
+                    scale = scale[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of scales when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'scale is a required argument.')
+
+        if recalc or not (f'{scale_col}_{I_col}' in schema):
+            return (pl.col([I_col, Q_col]) * scale).name.prefix(scale_col + '_')
+        else:
+            return pl.col(f'{scale_col}_{I_col}')
+
+    #==========================#
+    # Lazily Loaded Attributes #
+    #==========================#
+
+    @cached_property
+    def io_cfg(self) -> dict:
+        return self._load_cfg('_io_')
+
+    @cached_property
+    def ext_cfg(self) -> dict:
+        return self._load_cfg('_ext_')
+
+    @cached_property
+    def drone_cfg(self) -> dict:
+        return self._load_cfg('_drone_')
+
+    @cached_property
+    def num_tones(self) -> int:
+        return self.drone_cfg['tones']['num_tones']
+    
+    @cached_property
+    def original_root(self) -> str:
+        original_root = self.io_cfg['file_paths']['root_dir']
+        if not original_root[-1] == '/': original_root += '/'
+        return original_root
+
+    @cached_property
+    def comb(self) -> pl.dataframe.frame.DataFrame:
         '''
         Load comb frequencies, powers, and phases
         '''
-        comb = {'tone_freqs': None, 'tone_powers': None, 'tone_phis': None}
+        comb = {'tone_freqs': [], 'tone_powers': [], 'tone_phis': []}
         for key in comb.keys():
             value = self.drone_cfg['tones'][key]
             if isinstance(value, list):
                 value = value.real
             else:
                 try:
+                    comb_path = pair.replace_root(value, self.original_root, self.root_dir)
                     value = np.load(value).real
                 except:
                     value = None
-            comb[key] = value
+            comb[key] = value if self.tones is None else value[self.tones]
+        comb['dets'] = range(len(comb['tone_freqs'])) if self.tones is None else self.tones
+        comb = pl.DataFrame(comb)
         return comb
-    
-    def _res_slice(self, res_num):
-        if res_num is not None:
-            if isinstance(res_num, int): res_num = [res_num]
+
+    #================#
+    # Helper Methods #
+    #================#
+    def _unnest(self, col_names):
+        struct_cols = []
+        if isinstance(col_names, str): col_names = [col_names]
+        for col_name in col_names:
+            schema = self.data.schema
+            for name, data in schema.items():
+                if isinstance(data, pl.Struct) and col_name in name:
+                    self.data = self.data.drop([col for col in dict(data).keys() if col in schema])
+                    struct_cols.append(name)
+        return self.data.unnest(struct_cols)
+
+    def _parse_tones(self, func_include, func_exclude, func_all, include: int | list[int] | None = None, exclude: int | list[int] | None = None, *args):
+        if include is not None and exclude is not None:
+            rfsoc_io.send_msg('ERROR', "Can't include and exclude tones. Must specify one or the other.")
+        elif include is not None:
+            if isinstance(include, int): include = [include]
+            return func_include(include, *args)
+        elif exclude is not None:
+            if isinstance(exclude, int): exclude = [exclude]
+            return func_exclude(exclude, *args)
         else:
-            res_num = self.res_num if self.res_num is not None else range(self.num_tones)
-        return [f'R_{res:04d}' for res in res_num]
+            return func_all(*args)
 
+    def _load_cfg(self, id: str) -> dict:
+        '''Internal method for loading io, ext, or drone cfg file corresponding to data file.
 
-    #################
-    # Magic Methods #
-    #################
-    def __getattribute__(self, name):
-        if name == 'io_cfg':
-            if super().__getattribute__("io_cfg") is None: self.io_cfg = self._load_cfg('_io_')
-            gc.collect()
-        elif name == 'ext_cfg':
-            if super().__getattribute__("ext_cfg") is None: self.ext_cfg = self._load_cfg('_ext_')
-            gc.collect()
-        elif name == 'drone_cfg':
-            if super().__getattribute__("drone_cfg") is None: self.drone_cfg = self._load_cfg('_drone_')
-            gc.collect()
-        elif name == 'comb':
-            if super().__getattribute__("comb") is None: self.comb = self._load_comb()
-            gc.collect()
-        elif name == 'num_tones':
-            if super().__getattribute__("num_tones") is None: self.num_tones = self.drone_cfg['tones']['num_tones']
-
-        return super().__getattribute__(name)
+        Args:
+            id (str): Which config to load. Should be one of '_io_', '_ext_', '_drone_'.
+        Returns:
+            dict: Loaded config file. Returns empty dictionary if loading fails.
+        '''
+        cfg = {}
+        for i, config_path in enumerate(self._configs):
+            if id in str(config_path):
+                cfg = rfsoc_io.load_config(config_path)
+                self._configs.pop(i)
+                break
+        return cfg

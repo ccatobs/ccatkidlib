@@ -1281,7 +1281,8 @@ class R:
                 # -----------------------------------------------
                 ind = self.drone_list.index(com)
                 vna = VNA(com_to = com, data_path = vna_file) # Create VNA object
-                good_resonator, _, _, _ = vna.filter_freqs(res_freqs = found_freq, w = 1) # Filter out fake resonators
+
+                good_resonator, _ = vna.filter_det_f() # Filter out fake resonators
                 good_resonator = good_resonator.real
                 good_resonators[i] = good_resonator
 
@@ -1384,7 +1385,7 @@ class R:
             if not vna_file.exists() or new_sweep:
                 to_sweep.append(str(com))
             else:
-                vna = VNA(com_to=com, sweep_path=vna_file)
+                vna = VNA(com_to=com, data_path=vna_file)
                 stitch_bw[ind] = utils.dict_get(vna.drone_cfg, 'sweep_steps')
                 vna_files[ind] = vna_file
                 timestamps[ind] = pair.get_timestamp(vna_file)
@@ -1393,11 +1394,13 @@ class R:
             # Take VNA sweep(s) without saving configs (saved later)
             self.save_cfg = False
             kwargs['com_to'] = to_sweep
+            kwargs['sweep_steps'] = stitch_bw
             new_files = self.take_vna_sweep(**kwargs)
             for i in range(len(com_to)): 
                 if vna_files[i] is None: vna_files[i] = new_files.pop(0) # Add old vna files into list of new vna files sorted by drone com_to
                 if timestamps[i] == -1: timestamps[i] = self.timestamp
             self.save_cfg = True
+            kwargs['com_to'] = com_to
 
         # Find resonators using VNA sweep(s)
         # ----------------------------------
@@ -1482,7 +1485,7 @@ class R:
             if not targ_file.exists() or new_sweep:
                 to_sweep.append(com)
             else:
-                target = Target(com_to=com, sweep_path=targ_file)
+                target = Target(com_to=com, data_path=targ_file)
                 stitch_bw[ind] = utils.dict_get(target.drone_cfg, 'sweep_steps')
                 targ_files[ind] = targ_file
                 timestamps[ind] = pair.get_timestamp(targ_file)
@@ -1490,12 +1493,15 @@ class R:
             # Take target sweep(s) without saving config (saved later)
             self.save_cfg = False
             kwargs['com_to'] = to_sweep
+            kwargs['sweep_steps'] = stitch_bw
             new_files = self.take_target_sweep(**kwargs)
             for i in range(len(com_to)): 
                 if targ_files[i] is None: targ_files[i] = new_files.pop(0) # Add old vna files into list of new vna files sorted by drone com_to
                 if timestamps[i] == -1: timestamps[i] = self.timestamp
             self.save_cfg = True
+            kwargs['com_to'] = com_to
 
+        # TODO: Group stitch_bw args and run in parallel
         rfsoc_io.send_msg('INFO', f"Finding resonators from target sweep for drones {com_to}!")
         for i, com in enumerate(com_to):
             # Find resonators from target sweep

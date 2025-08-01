@@ -1,116 +1,111 @@
-from .sweep import Sweep
-from pathlib import Path
 import gc
 import sys
 import numpy as np
-import pandas as pd
+import polars as pl
+
+from collections.abc import Iterable
+from pathlib import Path
 
 from bokeh.layouts import layout
 from bokeh.io import show
 from bokeh.plotting import curdoc
+
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
 
+from ccatkidlib.analysis.sweep import Sweep
+
+
 class Target(Sweep):
-    '''
-    Class representing a target sweep 
-    Subclass of Sweep class.  
+    '''Class representing a target sweep taken with a Radio Frequency System on a Chip (RFSoC)
+    
+    Subclasses Sweep.
     '''
 
-    def __init__(self, com_to, res_num = -1, analysis_cfg=str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, tones: int | list[int] | None = None, analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+        '''Subclass of Sweep with additional arguments
+
+        Args:
+            tones (int | list[int] | None, optional): Which tones to load. None for loading all data without splitting into individual tones. -1 for all data split into individual tones. Defaults to None
+        '''
         kwargs['data_type'] = 'targ'
         super().__init__(com_to, analysis_cfg, **kwargs)
-        if isinstance(res_num, int) and res_num > 0: res_num = [res_num]
-        self.res_num = res_num
-    
-    #@method_timer
-    def transform(self, name, func, res_num = None):
-        '''
-        Method for adding data transformed by func to self.data pandas DataFrame.
-        '''
-
-        if res_num is None and self.res_num == -1:
-            data = super().transform_sweep(name, func, res_num)
-        else:
-            data = super().transform(name, func, res_num)
-        return data
-
-    def resonator(self, res_num = None):
-        if not self.res_num == -1:
-            return super().resonator(res_num = res_num)
-        else:
-            return None
-    ####################
-    # Analysis Methods #
-    ####################
-
-    ####################
-    # Plotting Methods #
-    ####################
-
-    def dashboard(self, dB = False, show_plot = True, **kwargs):
-        plot_dash = show_plot if self.res_num is None else False
-        lyot = super().dashboard(dB = dB, show_plot = plot_dash, **kwargs)
         
-        if self.res_num is not None:
-            # Get all column objects from current layout
-            children = lyot.children
-            columns = []
-            for child in children:
-                columns += child.children
-            
-            print(columns)
-            # Restructure layout to have only one row
-            lyot = layout(columns, sizing_mode='scale_width')
-            if show_plot: 
-                curdoc().add_root(lyot)
-                show(lyot)
-        return lyot
+        # Parse 'tone' argument specifying which tones should be loaded
+        # -------------------------------------------------------------
+        if isinstance(tones, int): 
+            if tones >= 0: 
+                tones = [tones]
+            else:
+                tones = list(range(self.num_tones))
 
-    def plot_mag(self, fig = None, freqs = None, s21m = None, source = None, dB = False, show_plot = True, **kwargs):
-        res_num = self.res_num
-        kwargs.setdefault('title', f"Target Sweep of {f'Resonator {res_num} in ' if res_num is not None else ''}{self.drone_cfg['det_config']['detector_type']} Network {self.drone_cfg['det_config']['network']} Taken on {utils.convert_timestamp(self.timestamp)} EST")
-        if res_num is None: 
-            kwargs['plot_scatter'] = False
+        if tones is None or isinstance(tones, Iterable):
+            self.tones = tones
         else:
-            tools = self.plot_cfg['plot_defaults']['figure']['tools']
-            if not 'pan' in tools: 
-                tools += ',pan'
-                kwargs['tools'] = tools
-            show_bins = False 
-        return super().plot_mag(fig = fig, freqs = freqs, s21m = s21m, dB = dB, source = source, show_plot = show_plot, **kwargs)
+            error = f"Invalid type {type(tones)} for argument 'tones'. Should be int, list[int], or None."
+            rfsoc_io.send_msg('CRITICAL', error)
+            raise ValueError(error)
+
+    #==========================#
+    # Lazily Loaded Attributes #
+    #==========================#
     
-    def plot_phase(self, fig = None, freqs = None, phase = None, source = None, show_plot = True, **kwargs):
-        res_num = self.res_num
-        kwargs.setdefault('title', f"Target Sweep of {f'Resonator {res_num} in ' if res_num is not None else ''}{self.drone_cfg['det_config']['detector_type']} Network {self.drone_cfg['det_config']['network']} Taken on {utils.convert_timestamp(self.timestamp)} EST")
-        if res_num is None: 
-            kwargs['plot_scatter'] = False
-        else:
-            tools = self.plot_cfg['plot_defaults']['figure']['tools']
-            if not 'pan' in tools: 
-                tools += ',pan'
-                kwargs['tools'] = tools
-            show_bins = False 
-        return super().plot_phase(fig = fig, freqs = freqs, phase = phase, source = source, show_plot = show_plot, **kwargs)
+    @property
+    def data(self):
+        if self._data is None:
+            data = super().data # Get DataFrame of sweep data 
+            tones = self.tones # Define local variable since it will be used often
 
-    def plot_IQ(self, fig = None, I = None, Q = None, source = None, show_plot = True, **kwargs):
-        res_num = self.res_num
-        kwargs.setdefault('title', f"Target Sweep of {f'Resonator {res_num} in ' if res_num is not None else ''}{self.drone_cfg['det_config']['detector_type']} Network {self.drone_cfg['det_config']['network']} Taken on {utils.convert_timestamp(self.timestamp)} EST")
-        if res_num is None: 
-            kwargs['plot_line'] = False
-        else:
-            tools = self.plot_cfg['plot_defaults']['figure']['tools']
-            if not 'pan' in tools: 
-                tools += ',pan'
-                kwargs['tools'] = tools
-        return super().plot_IQ(fig = fig, I = I, Q = Q, source = source, show_plot = show_plot, **kwargs)
+            if tones is not None: # Run if a specific tone(s) is specified
+                data = data.to_numpy().T
+                try:
+                    sweep_steps = self.drone_cfg['tones']['sweep_steps']
+                except KeyError:
+                    sweep_steps = self.drone_cfg['tones']['N_step']    
 
-    ############################
+                data = data[1:].reshape((3, -1, sweep_steps))
+                num_tones = len(tones)
+
+                try:
+                    fs, Is, Qs = [None]*num_tones, [None]*num_tones, [None]*num_tones
+                    for i, t in enumerate(tones):
+                        f, I, Q = data[:, t, :]
+                        fs[i] = f
+                        Is[i] = I
+                        Qs[i] = Q
+                    fs, Is, Qs = np.array(fs), np.array(Is), np.array(Qs)
+                except Exception as e:
+                    fs, Is, Qs = [None]*num_tones, [None]*num_tones, [None]*num_tones
+                    rfsoc_io.send_msg('ERROR', 'Failed to reshape data array with error %s.', e)
+
+                data_dict = {'sample': range(sweep_steps)}
+                for t, f, I, Q in zip(tones, fs, Is, Qs):
+                    data_dict[(f'f_{t:04d}')] = f
+                    data_dict[(f'I_{t:04d}')] = I
+                    data_dict[(f'Q_{t:04d}')] = Q
+                df = pl.DataFrame(data_dict)
+            else:
+                df = data
+            self._data = df 
+        return self._data
+
+    @data.setter
+    def data(self, value: pl.lazyframe.frame.LazyFrame | None): 
+        if value is None or isinstance(value, pl.dataframe.frame.DataFrame): 
+            self._data = value
+        else:
+            rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars DataFrame!')
+    
+    #==================#
+    # Plotting Methods #
+    #==================#
+
+    #==========================#
     # Internal Loading Methods #
-    ############################
+    #==========================#
 
     def _load_res_freqs(self):
         res_freqs = super()._load_res_freqs()
@@ -130,38 +125,3 @@ class Target(Sweep):
             res_s21z = [data[np.argmin(np.abs(freqs - res))] for res, freqs, data in zip(self.res_freqs, freq_bins, data_bins)]
         return res_s21z
 
-    def _load_sweep(self):
-        data_dict = super()._load_sweep() # Call the Sweep _load_sweep method
-
-        if self.res_num is None: self.res_num = range(self.drone_cfg['tones']['num_tones'])
-        res_num = self.res_num
-
-        if not res_num == -1: # Run if a specific resonator(s) is specified
-            num_res = len(res_num)
-            data = [data_dict['fs']] + [data_dict['I']] + [data_dict['Q']]
-            try:
-                sweep_steps = self.drone_cfg['tones']['sweep_steps']
-            except KeyError:
-                sweep_steps = self.drone_cfg['tones']['N_step']
-            data = np.array(data).reshape((3, -1, sweep_steps))
-            try:
-                fs, Is, Qs = [], [], []
-                for res in res_num:
-                    f, I, Q = data[:, res, :]
-                    fs += [f]
-                    Is += [I]
-                    Qs += [Q]
-                fs, Is, Qs = np.array(fs), np.array(Is), np.array(Qs)
-            except Exception as e:
-                fs, Is, Qs = num_res*[None], num_res*[None], num_res*[None]
-
-            data_dict = {}
-            for res, f, I, Q in zip(res_num, fs, Is, Qs):
-                data_dict[('fs', f'R_{res:04d}')] = f
-                data_dict[('I',  f'R_{res:04d}')]  = I
-                data_dict[('Q',  f'R_{res:04d}')]  = Q
-        return data_dict
-
-    #################
-    # Magic Methods #
-    #################

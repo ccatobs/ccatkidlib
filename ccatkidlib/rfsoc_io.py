@@ -205,7 +205,7 @@ def edit_config(cfg, key, value, append = False):
 #===================#
 
 #@function_timer
-def get_most_recent_file(path, file_identifier, time_past = 60*60):
+def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = None):
     '''
     Fetch the most recent file in a directory with the desired file identifier.
 
@@ -216,6 +216,7 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60):
     Returns:
         file            (str) : File path of most recent file (returns "invalid/path" if no valid files found)
     '''
+    if time_ref is None: time_ref = time.time()
 
     try:
         path = Path(path)
@@ -225,11 +226,13 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60):
         files = []
         for file_id in file_identifier:
             files.extend(path.glob(file_id))
-        file = Path(sorted(files, key = get_creation_time, reverse = True)[0])
+        files = sorted(files, key = get_creation_time, reverse = True)
+
         # Check if creation time is within the specified time_past 
-        if abs(get_creation_time(file) - time.time()) < time_past:
-            send_msg('DEBUG', f"Found most recent file '{file}' in {path}.")
-            return file
+        for file in files:
+            if 0 <= time_ref - get_creation_time(file) < time_past:
+                send_msg('DEBUG', f"Found most recent file '{file}' in {path}.")
+                return file
         else:
             raise Exception("No files found within specified time range!")
     except Exception as e:
@@ -252,7 +255,7 @@ def get_creation_time(file_path):
         send_msg('DEBUG', f"Creation time of file '{file_path}' is {creation_time}.")
         return creation_time
     except:
-        send_msg('WARNING', f"Error getting creation time of file: '{file_path}'")
+        send_msg('DEBUG', f"Error getting creation time of file: '{file_path}'")
         return -1
 
 def get_array(src_path, dest_path, action = 'cp', load = True, timestamp = False):
@@ -381,7 +384,7 @@ def setup_logging(log_path, file_level, terminal_level, name = __name__):
     logger.addHandler(terminal_log)
 
     # Test logging/confirm successful logger setup
-    send_msg('INFO', "Successfully initialized logger: %s", name, name = name)
+    send_msg('DEBUG', "Successfully initialized logger: %s", name, name = name)
 
 def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
     '''
