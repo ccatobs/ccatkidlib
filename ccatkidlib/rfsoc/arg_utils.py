@@ -31,6 +31,7 @@ def parse_args(R, com_to, arg):
 
     args = None
     try: # Check if argument is a list
+        if isinstance(arg, str): raise ValueError
         if len(arg) == len(com_to): # Length of argument list should match number of drones
             args = arg
         else:

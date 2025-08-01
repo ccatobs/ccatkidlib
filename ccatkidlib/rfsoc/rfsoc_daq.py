@@ -55,8 +55,8 @@ class R:
         self.load_system_config(cfg_path)
 
         # Mainly for use with the rfsoc-controller PCS agent
-        # Checks if measurement information (sess_id, name, desc) have changed between reinitializations
-        # ----------------------------------------------------------------------------------------------
+        # Can use measurement information (sess_id, name, desc) from previous control object
+        # ----------------------------------------------------------------------------------
         sess_id = None
         curr_date = None
         self.measurement_name = self.io_cfg['name']
@@ -84,7 +84,7 @@ class R:
 
         # Create file directory structure for saving data
         # -----------------------------------------------
-        new_dir_paths = rfsoc_io.create_book(self.curr_date, self.sess_id, self.drone_list, self.data_dir)
+        new_dir_paths = rfsoc_io.create_tree(self.drone_list, self.curr_date, self.sess_id, self.data_dir)
 
         # Assign data directories as class attributes
         self.config_dirs, self.targ_dirs, self.timestream_dirs, self.vna_dirs = new_dir_paths
@@ -1281,6 +1281,7 @@ class R:
                 # -----------------------------------------------
                 ind = self.drone_list.index(com)
                 vna = VNA(com_to = com, data_path = vna_file) # Create VNA object
+
                 good_resonator, _ = vna.filter_det_f() # Filter out fake resonators
                 good_resonator = good_resonator.real
                 good_resonators[i] = good_resonator
@@ -2012,9 +2013,9 @@ class R:
         # Save drone config
         self.drone_cfg[ind] = rfsoc_io.save_config(self.config_dirs[ind] / f"{name}_config_drone_{self.timestamp}.yaml", self.drone_cfg[ind], self.save_cfg)
 
-    ########################
-    # Other Helper Methods #
-    ########################
+    #================#
+    # Helper Methods #
+    #================#
 
     def _parse_ocs_session(self, sess: dict) -> tuple[bool, dict]:
         '''
