@@ -87,6 +87,8 @@ class Target(Sweep):
                     data_dict[(f'I_{t:04d}')] = I
                     data_dict[(f'Q_{t:04d}')] = Q
                 df = pl.DataFrame(data_dict)
+            else:
+                df = data
             self._data = df 
         return self._data
 

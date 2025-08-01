@@ -41,6 +41,18 @@ def get_timestamp(path: str | pathlib.PosixPath) -> int:
         rfsoc_io.send_msg('ERROR', 'Failed to determine timestamp of file %s with Exception %s', path, e)
         return -1
 
+def get_sess_dir(sess_id, data_dir: str = '**', date: str = '**', root_data_dir: str = '/') -> str:
+    root_data_dir = Path(root_data_dir)
+    
+    file_tree = Path(data_dir) / date / sess_id
+    try:
+        # The session ID directory is unique so we can stop searching after it is found
+        # Will raise a StopIteration Error if directory is not found
+        sess_dir = str(next(root_data_dir.glob(str(file_tree))))
+    except StopIteration:
+        sess_dir = "invalid/path" 
+    return sess_dir
+
 def get_data_file(com_to: str, timestamp: str | int, data_type: str, data_dir: str = '**', date: str = '**', sess_id: str = '**', root_data_dir: str = '/') -> list[str]:
     '''Get a ccatkidlib data file based on provided path information.
 

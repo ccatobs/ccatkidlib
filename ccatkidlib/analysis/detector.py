@@ -6,6 +6,7 @@ import concurrent.futures
 
 from collections.abc import Iterable
 from pathlib import Path
+from functools import cached_property
 
 # local imports
 import ccatkidlib
@@ -74,8 +75,9 @@ class Detector:
                 raise RuntimeError(error)
         else:
             self.dets = targ.tones
-            if vna is None: vna_path, _ = pair.get_sweep(targ.data_path[0], **kwargs)
-            if Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, analysis_cfg, None, vna_timestamp, vna_path, **kwargs)
+            if vna is None: 
+                vna_path, _ = pair.get_sweep(targ.data_path[0], **kwargs)
+                if Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, analysis_cfg, None, vna_timestamp, vna_path, **kwargs)
 
         self.bid, self.drid = com_to.split('.')
         self.analysis_cfg, self.viz_cfg = rfsoc_io.load_config(analysis_cfg)
@@ -84,16 +86,11 @@ class Detector:
         self.targ = targ
         self.vna = vna
 
-        self.cable_delay = self.vna.cable_delay if cable_delay is None and isinstance(self.vna, ccatkidlib.analysis.vna.VNA) else cable_delay
+        self._cable_delay = cable_delay
 
         # Fitting 
         self._properties = {f'det_{det:04d}': {} for det in self.dets}
         self._properties_df = pl.DataFrame({'det': self.dets})
-        
-        fit_dir = self.analysis_cfg['file_paths']['fit_dir']
-        if not fit_dir in sys.path: sys.path.append(fit_dir)
-        import resonator_model_v3
-        globals()['resonator_model_v3'] = resonator_model_v3
 
     #==========================#
     # Lazily Loaded Attributes #
@@ -123,11 +120,24 @@ class Detector:
         self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
         return self._properties_df
 
+    @cached_property
+    def cable_delay(self):
+        self._cable_delay = self.vna.cable_delay if self._cable_delay is None and isinstance(self.vna, ccatkidlib.analysis.vna.VNA) else self._cable_delay
+        return self._cable_delay
+
+    @cached_property
+    def fit_dir(self):
+        return self.analysis_cfg['file_paths']['fit_dir']
+
     #=====================#
     # Data Getter Methods #
     #=====================#
 
     def nonlinear_fit(self, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, nonlinear=False, asymm = False, fix_cable = False, fix_thetaQ = False, max_workers=1):
+        if not self.fit_dir in sys.path: sys.path.append(self.fit_dir)
+        import resonator_model_v3
+        globals()['resonator_model_v3'] = resonator_model_v3
+        
         col_name = ['f', 'I', 'Q', 'nonlinear_fit']
         
         args = [[self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers]]
@@ -225,23 +235,26 @@ class Detector:
         if loc == 'origin':
             dest_I = 0
 
+        col_names = ['I', 'Q']
         fit_names = ['circle_fit_center_I', 'circle_fit_center_Q', 'circle_fit_center_angle', 'circle_fit_center_mag']
 
         center_angle = []
         center_mag = []
-        if dest_I is None:
-            shift = np.ones(len(self.dets))
-            center_angle = np.ones(len(self.dets))
+        if dest_I is None: # Do not transform the circle if no destination provided
+            shift = np.zeros(len(self.dets))
+            center_angle = np.zeros(len(self.dets))
         else:
+            use_mean = True
             if fit_names[0] in self.properties.schema and use_fit:
-                if not fit_names[2] in self._properties_df.schema or not fit_names[3] in self._properties_df.schema:
-                    self._properties_df = self._properties_df.with_columns((np.arctan2(pl.col(fit_names[1]), pl.col(fit_names[0]))).alias(fit_names[2]),
-                                                                           (np.sqrt(pl.col(fit_names[0])**2 + pl.col(fit_names[1])**2)).alias(fit_names[3]))
+                #TODO: Use pl.when to avoid recalculating every time
+                self._properties_df = self._properties_df.with_columns((np.arctan2(pl.col(fit_names[1]), pl.col(fit_names[0]))).alias(fit_names[2]),
+                                                                        (np.sqrt(pl.col(fit_names[0])**2 + pl.col(fit_names[1])**2)).alias(fit_names[3]))
                 center_angle, center_mag = self._properties_df.select(pl.col(fit_names[2:])).to_numpy().T
+                if not center_angle is None and not center_mag is None: use_mean = False
 
-            else:
-                center_I = np.array([self.targ.data.select(pl.col(f"{prefix}{'_' if prefix else ''}I_{tone:04d}").mean()).item() for tone in self.dets]) 
-                center_Q = np.array([self.targ.data.select(pl.col(f"{prefix}{'_' if prefix else ''}Q_{tone:04d}").mean()).item() for tone in self.dets])
+            if use_mean:
+                center_I = np.array([self.targ.data.select(pl.col(f"{prefix}{'_' if prefix else ''}{col_names[0]}_{tone:04d}").mean()).item() for tone in self.targ.tones]) 
+                center_Q = np.array([self.targ.data.select(pl.col(f"{prefix}{'_' if prefix else ''}{col_names[1]}_{tone:04d}").mean()).item() for tone in self.targ.tones])
                 center_angle = np.arctan2(center_Q, center_I)
                 center_mag = np.sqrt(center_I**2 + center_Q**2)
 
@@ -261,7 +274,43 @@ class Detector:
             shift_dfs.append(data_obj.get_data(col_name=f"{loc}{'_' if loc else ''}shift{'_' if loc else ''}{loc}_rotate", include=include, exclude=exclude))
         return shift_dfs
 
-    def phase_spline(self, prefix: str | list[str] = 'unwind_rotate', phase_low: float = -3.14, phase_up: float = 3.14, k: int = 3, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1, **kwargs):
+    def IQ_circle_mismatch(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', data: str = 'both', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, **kwargs):
+        col_name = ['I', 'Q', 'mismatch']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        mismatch_angles = []
+        for pre in prefix:
+            # Convert from wide to long
+            mismatch_col_name = f'{pre}_{col_name[-1]}_angle'
+            if recalc or not mismatch_col_name in self.properties.schema:
+                mismatch_df = self.targ.data.select([((np.mod(np.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").first(), pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").first()), 2*np.pi) +
+                                                        np.mod(np.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").last(), pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").last()), 2*np.pi))/2).alias(f'{tone:04d}') for tone in self.targ.tones])
+                
+
+                unpivot_cols = mismatch_df.select(pl.all()).columns
+                mismatch_df = mismatch_df.unpivot(on=unpivot_cols,
+                                                variable_name='det',
+                                                value_name=mismatch_col_name).with_columns(pl.col('det').cast(int))
+                mismatch_df = mismatch_df.with_columns((np.pi - pl.col(mismatch_col_name)).alias(mismatch_col_name))
+                if mismatch_col_name in self.properties.schema: self._properties_df = self._properties_df.drop(mismatch_col_name)
+                self._properties_df = self._properties_df.join(mismatch_df, on='det', how='full', coalesce=True)
+            
+            mismatch_angle = self._properties_df.select(mismatch_col_name).to_numpy().T[0]
+            mismatch_angles.append(mismatch_angle)
+        data_objs, _ = self._get_data_obj(data)
+        if not data_objs:
+            error = f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
+            rfsoc_io.send_msg('ERROR', error)
+            raise ValueError(error)
+
+        mismatch_dfs = []
+        for data_obj in data_objs:
+            data_obj.IQ_rotate(prefix=prefix, angle=mismatch_angles, name=f'{col_name[-1]}', include = include, exclude=exclude, recalc=recalc)
+            mismatch_dfs.append(data_obj.get_data(col_name=f"{col_name[-1]}_rotate_", include=include, exclude=exclude))
+        return mismatch_dfs
+
+    def phase_spline(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', phase_low: float = -3.14, phase_up: float = 3.14, k: int = 3, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1, **kwargs):
         '''Interpolate target sweep phase data and add interpolating splines to propreties attribute
 
         Args:
@@ -284,11 +333,11 @@ class Detector:
 
         args = [[self, low, up, k, max_workers] for low, up in zip(phase_low, phase_up)]
         self.targ.transform([Detector.calc_phase_spline]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.targ.tones))   
-        self.targ.data = self.targ.data.drop(pl.col('^temporary.*$'))  
-        
-        return self.properties.select(pl.col([f'{col_name[0]}_{col_name[-1]}' for col_name in col_names] + [f'{col_name[1]}_{col_name[-2]}' for col_name in col_names]))
+        self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
+        return self.targ.get_data(col_name=([col_name[-1] for col_name in col_names] + [col_name[-2] for col_name in col_names]), include=include, exclude=exclude)
 
     def phase_to_f(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', phase_bounds: float = 0.2, k: int = 3, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1, **kwargs):
+        #TODO: Does not work when include is specified
         col_name = ['phase', 'f']
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -306,8 +355,8 @@ class Detector:
         self.stream.data = self.stream._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.stream.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
     
-    def frac_f(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', f_0 = None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, **kwargs):        
-        col_name = ['f', 'frac']
+    def frac_f(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', f_0 = None, name='', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, **kwargs):        
+        col_name = ['f', f'{name}{'_' if name else ''}frac']
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
@@ -444,6 +493,7 @@ class Detector:
         def _phase_spline(df):
             struct = df.struct
 
+            results_dict = {}
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 future_to_batch = {executor.submit(y_to_x_spline,
                                                    struct.field(f_col).to_numpy(),
@@ -453,15 +503,33 @@ class Detector:
                                                    y_up = phase_up[tones.index(tone)]):  (tone, f_col, phase_col) for tone, (f_col, phase_col) in zip(to_calc, batches)}
                 
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tone, phase_col, f_col = future_to_batch[future]
+                    tone, f_col, phase_col = future_to_batch[future]
                     try:
                         y_to_x, x_to_y = future.result()
+                    
+                        if y_to_x is not None:
+                            y_to_x.extrapolate=False
+                            to_phase = np.zeros(df.len())
+                            to_f = y_to_x(struct.field(phase_col).to_numpy())
+                        elif x_to_y is not None:
+                            x_to_y.extrapolate=False
+                            to_phase = x_to_y(struct.field(f_col).to_numpy())
+                            to_f = np.zeros(df.len())
+                        else:
+                            raise RuntimeError('No spline was calculated.')
+                        
                         property_vals = [y_to_x, x_to_y]
-                        self._properties[f'det_{tone:04d}'] = {k: v for k, v in zip(interp_names, property_vals)}
+                        property_dict = {k: v for k, v in zip(interp_names, property_vals)}
                     except Exception as e:
                         rfsoc_io.send_msg('WARNING', 'Spline calculation for tone %s failed with exception: %s', tone, e)
-                        self._properties[f'det_{tone:04d}'] = {}
-            return pl.Series([None]*df.len())
+                        property_dict = {}
+                        to_phase, to_f = np.zeros(df.len()), np.zeros(df.len())
+                    self._properties[f'det_{tone:04d}'] = property_dict
+                    results_dict[f'{interp_names[0]}_{tone:04d}'] = to_f
+                    results_dict[f'{interp_names[1]}_{tone:04d}'] = to_phase
+            
+            df = pl.DataFrame(results_dict)
+            return pl.Series(df.select(pl.struct(df.columns)))
 
         if len(args) == 5:
             self, phase_low, phase_up, k, max_workers = args
@@ -473,22 +541,10 @@ class Detector:
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)      
 
-        to_calc = []
+        data_col_name = [col_name[0], col_name[1], col_name[-1]]
         interp_names = [f'{col_name[1]}_{col_name[-2]}', f'{col_name[0]}_{col_name[-1]}']
-        if recalc or not interp_names[0] in self._properties_df.schema:
-            to_calc = tones
-        else:
-            interp_cols = self._properties_df.select(['det'] + interp_names)
-            for tone in tones:
-                det, phase_to_f, f_to_phase = interp_cols.filter(pl.col('det') == tone)
-                if phase_to_f.item() is None and f_to_phase.item() is None: to_calc.append(tone)
-
-        if not len(to_calc) == 0:
-            batches = [[f'{name}_{tone:04d}' for name in col_name[:-2]] for tone in to_calc]
-            batches_flat = [col for batch in batches for col in batch]
-            expr = pl.struct(batches_flat).map_batches(_phase_spline).alias(f'temporary_{to_calc[0]:04d}')
-        else:
-            expr = pl.col(f'{col_name[1]}_{to_calc[0]:04d}')
+        calc_col = [f'{interp_names[0]}_{tone:04d}' for tone in tones]
+        expr, to_calc, calc_col, batches = Detector._batch_calc(_phase_spline, tones, data_col_name, schema, recalc=recalc, calc_col = calc_col)
         return expr
 
     @staticmethod
@@ -522,7 +578,8 @@ class Detector:
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error) 
 
-        expr, to_calc, calc_col, batches = Detector._batch_calc(_phase_to_f, tones, col_name, schema, recalc=recalc)
+        calc_col = [f'{col_name[-1]}_{tone:04d}' for tone in tones]
+        expr, to_calc, calc_col, batches = Detector._batch_calc(_phase_to_f, tones, col_name, schema, recalc=recalc, calc_col = calc_col)
         return expr
     
     @staticmethod
@@ -567,10 +624,9 @@ class Detector:
         return data_objs, f
 
     @staticmethod
-    def _batch_calc(func, tones, col_name, schema, recalc=False):
-        calc_col = [f'{col_name[-1]}_{col_name[-2]}_{tone:04d}' for tone in tones]
+    def _batch_calc(func, tones, col_name, schema, recalc=False, calc_col = None):
+        if calc_col is None: calc_col = [f'{col_name[-1]}_{col_name[-2]}_{tone:04d}' for tone in tones]
         to_calc = tones if recalc else [tone for tone, col in zip(tones, calc_col) if col not in schema]
-
         if not len(to_calc) == 0:
             batches = [[f'{name}_{tone:04d}' for name in col_name[:-1]] for tone in to_calc]
             calc_col = f'struct_{col_name[-1]}_{to_calc[0]:04d}'

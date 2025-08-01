@@ -105,7 +105,7 @@ class Data:
 
             for key, value in kwargs.items():
                 if key == 'root_data_dir':
-                    self.root_dir
+                    self.root_dir = value
                 elif key == 'data_dir':
                     data_dir = value
                 elif key == 'date':
@@ -170,7 +170,7 @@ class Data:
             expr = []
 
             for tones in include:
-                expr.append(pl.col([f'^.*{name}_.*{tones:04d}$' for name in col_name]))
+                expr.append(pl.col([f'^.*{name}_{tones:04d}$' for name in col_name]))
             return expr
 
         def _exclude(exclude, *args):
@@ -191,7 +191,7 @@ class Data:
 
             exprs=[]
             # Timestreams never have self.tones = None but do have columns (the time columns in particular) without tones so need to handle those seperately (may be a way to add to expr pattern matching instead)
-            for no_tone_name in ['t', 'dt', '^fft.*_f$', '^psd.*_f$']:
+            for no_tone_name in ['^t$', '^dt$', '^fft.*_f$', '^psd.*_f$']:
                 pattern = re.compile(no_tone_name)
                 for name in col_name[::-1]:
                     if pattern.match(name):

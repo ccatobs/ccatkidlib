@@ -387,7 +387,7 @@ def setup_logging(log_path, file_level, terminal_level, name = __name__):
     logger.addHandler(terminal_log)
 
     # Test logging/confirm successful logger setup
-    send_msg('INFO', "Successfully initialized logger: %s", name, name = name)
+    send_msg('DEBUG', "Successfully initialized logger: %s", name, name = name)
 
 def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
     '''
