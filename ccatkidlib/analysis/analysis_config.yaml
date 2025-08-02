@@ -1,6 +1,6 @@
 ---
 file_paths:
-  root_data_dir: '/mnt/md0/cooldown_june/'
+  root_data_dir: '/mnt/md0/'
   g3_root_dir: '/mnt/md0/'
   fit_dir: '/home/jovyan/fitting'
 

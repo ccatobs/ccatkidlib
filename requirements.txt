@@ -3,7 +3,9 @@ Jinja2==3.1.4
 numpy
 scipy==1.14.1
 numba==0.60.0
-pandas==2.2.3
+polars
+hvplot
+holoviews
 tqdm==4.67.1
 fabric==3.2.2
 paramiko==3.5.0

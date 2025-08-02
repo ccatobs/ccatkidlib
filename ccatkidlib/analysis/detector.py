@@ -270,7 +270,7 @@ class Detector:
         shift_dfs = []
         for data_obj in data_objs:
             data_obj.IQ_rotate(prefix=prefix, angle=center_angle, name=loc, include = include, exclude=exclude, recalc=recalc)
-            data_obj.IQ_shift(prefix=f'{loc}{'_' if loc else ''}rotate_' + prefix, shift_I = shift, name=loc, include=include, exclude=exclude, recalc=recalc)
+            data_obj.IQ_shift(prefix=f"{loc}{'_' if loc else ''}rotate_" + prefix, shift_I = shift, name=loc, include=include, exclude=exclude, recalc=recalc)
             shift_dfs.append(data_obj.get_data(col_name=f"{loc}{'_' if loc else ''}shift{'_' if loc else ''}{loc}_rotate", include=include, exclude=exclude))
         return shift_dfs
 
@@ -356,7 +356,7 @@ class Detector:
         return self.stream.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
     
     def frac_f(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', f_0 = None, name='', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, **kwargs):        
-        col_name = ['f', f'{name}{'_' if name else ''}frac']
+        col_name = ['f', f"{name}{'_' if name else ''}frac"]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
@@ -422,7 +422,9 @@ class Detector:
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)
         
-        expr, to_calc, calc_col, batches = Detector._batch_calc(_nonlinear_fit, tones, col_name, schema, recalc=recalc)
+        return_col = [f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}', f'cable_{col_name[-1]}_{col_name[1]}', f'cable_{col_name[-1]}_{col_name[2]}']
+        return_type = [pl.Float64, pl.Float64, pl.Float64, pl.Float64]
+        expr, to_calc, calc_col, batches = Detector._batch_calc(_nonlinear_fit, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc)
         return expr
 
     @staticmethod
@@ -484,8 +486,10 @@ class Detector:
             error = 'self, bounds, loss, f_scale, method, and max_workers are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)
-
-        expr, to_calc, calc_col, batches = Detector._batch_calc(_circle_fit, tones, col_name, schema, recalc=recalc)
+        
+        return_col = [f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}']
+        return_type = [pl.Float64, pl.Float64]
+        expr, to_calc, calc_col, batches = Detector._batch_calc(_circle_fit, tones, col_name, schema, return_col = return_col, return_type=return_type, recalc=recalc)
         return expr
 
     @staticmethod
@@ -544,7 +548,10 @@ class Detector:
         data_col_name = [col_name[0], col_name[1], col_name[-1]]
         interp_names = [f'{col_name[1]}_{col_name[-2]}', f'{col_name[0]}_{col_name[-1]}']
         calc_col = [f'{interp_names[0]}_{tone:04d}' for tone in tones]
-        expr, to_calc, calc_col, batches = Detector._batch_calc(_phase_spline, tones, data_col_name, schema, recalc=recalc, calc_col = calc_col)
+
+        return_col = [f'{interp_names[0]}', f'{interp_names[1]}']
+        return_type = [pl.Float64, pl.Float64]
+        expr, to_calc, calc_col, batches = Detector._batch_calc(_phase_spline, tones, data_col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc, calc_col = calc_col)
         return expr
 
     @staticmethod
@@ -579,7 +586,9 @@ class Detector:
             raise ValueError(error) 
 
         calc_col = [f'{col_name[-1]}_{tone:04d}' for tone in tones]
-        expr, to_calc, calc_col, batches = Detector._batch_calc(_phase_to_f, tones, col_name, schema, recalc=recalc, calc_col = calc_col)
+        return_col = [f'{col_name[-1]}']
+        return_type = [pl.Float64]
+        expr, to_calc, calc_col, batches = Detector._batch_calc(_phase_to_f, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc, calc_col = calc_col)
         return expr
     
     @staticmethod
@@ -624,15 +633,17 @@ class Detector:
         return data_objs, f
 
     @staticmethod
-    def _batch_calc(func, tones, col_name, schema, recalc=False, calc_col = None):
+    def _batch_calc(func, tones, col_name, schema, return_col, return_type, recalc=False, calc_col = None):
         if calc_col is None: calc_col = [f'{col_name[-1]}_{col_name[-2]}_{tone:04d}' for tone in tones]
         to_calc = tones if recalc else [tone for tone, col in zip(tones, calc_col) if col not in schema]
         if not len(to_calc) == 0:
             batches = [[f'{name}_{tone:04d}' for name in col_name[:-1]] for tone in to_calc]
+            returns = [[pl.Field(f'{name}_{tone:04d}', dtype) for name, dtype in zip(return_col, return_type)] for tone in to_calc]
             calc_col = f'struct_{col_name[-1]}_{to_calc[0]:04d}'
             
             batches_flat = [col for batch in batches for col in batch]
-            expr = pl.struct(batches_flat).map_batches(func).alias(calc_col)
+            returns_flat = [col for ret_col in returns for col in ret_col]
+            expr = pl.struct(batches_flat).map_batches(func, return_dtype=pl.Struct(returns_flat)).alias(calc_col)
         else:
             batches = []
             expr = pl.col(calc_col)

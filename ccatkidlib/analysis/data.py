@@ -308,7 +308,7 @@ class Data:
     #============================#
 
     def IQ_rotate(self, prefix: str | list[str] = '', angle: float = 0, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
-        col_name = ['I', 'Q', f'{name}{'_' if name else ''}rotate']
+        col_name = ['I', 'Q', f"{name}{'_' if name else ''}rotate"]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
@@ -330,7 +330,7 @@ class Data:
         return self.get_data(col_name=[col_name[-1] for col_name in col_names_I] + [col_name[-1] for col_name in col_names_Q], include=include, exclude=exclude)
     
     def IQ_scale(self, prefix: str | list[str] = '', scale: float = 1, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
-        col_name = ['I', 'Q', f'{name}{'_' if name else ''}scale']
+        col_name = ['I', 'Q', f"{name}{'_' if name else ''}scale"]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 

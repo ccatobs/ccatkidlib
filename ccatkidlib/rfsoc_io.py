@@ -457,14 +457,14 @@ def header(func):
         # Try to execute func
         # -------------------
         try:
-            send_msg('HEADER', f"Executing {fmt}...")
+            send_msg('HEADER', "Executing %s...", fmt)
             rtn = func(self, *args, **kwargs)
-            send_msg('FOOTER', f"{fmt} executed successfully!")
+            send_msg('FOOTER', "%s executed successfully!", fmt)
             return rtn
         except Exception as e:
             import traceback 
             # Print error traceback if func failed to execute and exit out of program
-            send_msg('CRITICAL', f"TERMINATING PROGRAM -- {fmt} failed to execute with error:\n{traceback.format_exc()}", True)
+            send_msg('CRITICAL', "TERMINATING PROGRAM -- %s failed to execute with error:\n%s", fmt, traceback.format_exc())
             sys.exit()
     return _wrapper
 

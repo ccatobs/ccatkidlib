@@ -1276,13 +1276,13 @@ class R:
 
             found_nums = num_drones*[None]
             good_resonators = num_drones*[None]
-            for i, (com, vna_file, save_file, found_freq) in enumerate(zip(com_to, vna_files, save_files, found_freqs)):
+            for i, (com, vna_file, save_file, win) in enumerate(zip(com_to, vna_files, save_files, filter_wn)):
                 # Filter out fake resonators from found detectors
                 # -----------------------------------------------
                 ind = self.drone_list.index(com)
                 vna = VNA(com_to = com, data_path = vna_file) # Create VNA object
 
-                good_resonator, _ = vna.filter_det_f() # Filter out fake resonators
+                good_resonator, _ = vna.filter_det_f(win = win) # Filter out fake resonators
                 good_resonator = good_resonator.real
                 good_resonators[i] = good_resonator
 
@@ -1330,6 +1330,7 @@ class R:
         continuum_wn  = autils.get_drone_args(self, com_to, ['det_find', 'continuum_wn'])
         remove_noise  = autils.get_drone_args(self, com_to, ['det_find', 'remove_noise'])
         noise_wn      = autils.get_drone_args(self, com_to, ['det_find', 'noise_wn'])
+        filter_wn     = autils.get_drone_args(self, com_to, ['det_find', 'filter_wn'])
 
         # Parse key word arguments
         # ------------------------
@@ -1370,6 +1371,9 @@ class R:
             elif key == 'noise_wn':
                 noise_wn = autils.parse_args(self, com_to, value)
                 autils.set_drone_args(self, com_to, "noise_wn", noise_wn)
+            elif key == 'filter_wn':
+                filter_wn = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "filter_wn", filter_wn)
             elif key == 'write_targ_comb':
                 write_targ_comb = value
 

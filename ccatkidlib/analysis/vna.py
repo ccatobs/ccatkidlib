@@ -107,7 +107,7 @@ class VNA(Sweep):
                         int(sweep_steps),
                         float(threshold),
                         float(stitch_percent)
-                        )).alias(stitch_col))
+                        ), return_dtype=pl.Float64).alias(stitch_col))
         else:
             return pl.col(stitch_col)
 
@@ -129,7 +129,7 @@ class VNA(Sweep):
                         int(sweep_steps),
                         float(stitch_percent),
                         int(med_win)
-                        )).alias(stitch_col))
+                        ), return_dtype=pl.Float64).alias(stitch_col))
         else:
             return pl.col(stitch_col)
 
