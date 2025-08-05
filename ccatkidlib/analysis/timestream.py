@@ -210,7 +210,7 @@ class Timestream(Data):
         t_col, data_col, fft_col = col_name
 
         if recalc or not (fft_col in schema):
-            return pl.col(data_col).map_batches(_fft).alias(fft_col)
+            return pl.col(data_col).map_batches(_fft, return_dtype=pl.Float64).alias(fft_col)
         else:
             return pl.col(fft_col)
 
@@ -233,7 +233,7 @@ class Timestream(Data):
         t_col, data_col, psd_col = col_name
 
         if recalc or not (psd_col in schema):
-            return pl.col(data_col).map_batches(_psd).alias(psd_col)
+            return pl.col(data_col).map_batches(_psd, return_dtype=pl.Float64).alias(psd_col)
         else:
             return pl.col(psd_col)
 

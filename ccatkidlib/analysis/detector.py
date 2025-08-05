@@ -3,6 +3,7 @@ import polars as pl
 import pathlib
 import sys
 import concurrent.futures
+import lmfit
 
 from collections.abc import Iterable
 from pathlib import Path
@@ -12,11 +13,11 @@ from functools import cached_property
 import ccatkidlib
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.analysis.pair as pair
+import ccatkidlib.analysis.fit as ccat_fit
 
 from ccatkidlib.analysis.timestream import Timestream
 from ccatkidlib.analysis.vna import VNA
 from ccatkidlib.analysis.target import Target
-from ccatkidlib.analysis.fit import circle_fit, y_to_x_spline, y_to_x_interp
 
 
 class Detector:
@@ -133,17 +134,36 @@ class Detector:
     # Data Getter Methods #
     #=====================#
 
-    def nonlinear_fit(self, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, nonlinear=False, asymm = False, fix_cable = False, fix_thetaQ = False, max_workers=1):
+    def nonlinear_fit(self, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, nonlinear=False, asymm = False, fix_cable = False, fix_thetaQ = False, max_workers=1, save_model_result = False):
         if not self.fit_dir in sys.path: sys.path.append(self.fit_dir)
         import resonator_model_v3
         globals()['resonator_model_v3'] = resonator_model_v3
         
         col_name = ['f', 'I', 'Q', 'nonlinear_fit']
         
-        args = [[self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers]]
+        args = [[self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, save_model_result]]
         self.targ.transform(Detector.calc_nonlinear_fit, *args, include=include, exclude=exclude, recalc = recalc, col_name = col_name, batch_size=len(self.targ.tones))
         self.targ.data = self.targ._unnest('struct_' + col_name[-1])
         return self.targ.get_data(col_name=col_name[-1], include=include, exclude=exclude)
+
+    def phase_fit(self, prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, nonlinear=False, params = None, window=1, max_workers=1, save_model_result = True):
+        col_name = ['f', 'I', 'Q', 'phase', 'phase_fit']
+
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        if isinstance(params, lmfit.parameter.Parameters) or not isinstance(params, Iterable) or not len(params) == num_prefix: params = [params]
+        if not isinstance(nonlinear, Iterable) or not len(nonlinear) == num_prefix: nonlinear = [nonlinear]
+        if not isinstance(window, Iterable) or not len(window) == num_prefix: window = [window]
+
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [col_name[0]] + [f"{pre}{'_' if pre else ''}{name}" for name in col_name[1:-1]] + [col_name[-1]]
+        
+        args = [[self, nonlin, param, win, max_workers, save_model_result] for nonlin, param, win in zip(nonlinear, params, window)]
+        self.targ.transform([Detector.calc_phase_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.targ.tones))        
+        self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
+        return self.targ.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
     def IQ_unwind(self, prefix = '', data: str = 'both', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, **kwargs):
         '''Unwind (remove cable delay from) target sweep or timestream IQ data
@@ -310,7 +330,7 @@ class Detector:
             mismatch_dfs.append(data_obj.get_data(col_name=f"{col_name[-1]}_rotate_", include=include, exclude=exclude))
         return mismatch_dfs
 
-    def phase_spline(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', phase_low: float = -3.14, phase_up: float = 3.14, k: int = 3, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1, **kwargs):
+    def phase_spline(self, prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', phase_low: float = -3.14, phase_up: float = 3.14, k: int = 3, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1, **kwargs):
         '''Interpolate target sweep phase data and add interpolating splines to propreties attribute
 
         Args:
@@ -336,7 +356,7 @@ class Detector:
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.targ.get_data(col_name=([col_name[-1] for col_name in col_names] + [col_name[-2] for col_name in col_names]), include=include, exclude=exclude)
 
-    def phase_to_f(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', phase_bounds: float = 0.2, k: int = 3, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1, **kwargs):
+    def phase_to_f(self, prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', phase_bounds: float = 0.2, k: int = 3, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1, **kwargs):
         #TODO: Does not work when include is specified
         col_name = ['phase', 'f']
         if isinstance(prefix, str): prefix = [prefix]
@@ -355,7 +375,7 @@ class Detector:
         self.stream.data = self.stream._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.stream.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
     
-    def frac_f(self, prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', f_0 = None, name='', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, **kwargs):        
+    def frac_f(self, prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', f_0 = None, name='', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, **kwargs):        
         col_name = ['f', f"{name}{'_' if name else ''}frac"]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -376,7 +396,7 @@ class Detector:
     #==================#
 
     @staticmethod
-    def calc_nonlinear_fit(schema, *args, tones: list[int] = 0, recalc: bool = False, col_name = ['f', 'I', 'Q', 'nonlinear_fit']):
+    def calc_nonlinear_fit(schema, *args, tones: list[int], recalc: bool = False, col_name = ['f', 'I', 'Q', 'nonlinear_fit']):
         ''' Fit using resonator_model_v3
         '''
 
@@ -400,7 +420,9 @@ class Detector:
                         result = future.result()
                         best_fit = result.best_fit
                         cable_fit = resonator_model_v3.fine_s21_model(struct.field(f_col).to_numpy(), result.params, cable=True)
-                        self._properties[f'det_{tone:04d}'] = {f'{col_name[-1]}_{k}': v for k, v in result.best_values.items()}
+                        best_vals_dict = {f'{col_name[-1]}_{k}': v for k, v in result.best_values.items()}
+                        if save_model_result: best_vals_dict[f'{col_name[-1]}_model_result'] = result
+                        self._properties[f'det_{tone:04d}'] = best_vals_dict
                     except Exception as e:
                         rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, e)
                         best_fit = np.zeros(df.len())
@@ -414,9 +436,8 @@ class Detector:
             df = pl.DataFrame(results_dict)
             return pl.Series(df.select(pl.struct(df.columns)))
             
-
-        if len(args) == 6:
-            self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers = args
+        if len(args) == 7:
+            self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, save_model_result = args
         else:
             error = 'nonlinear, asymm, fix_cable, and fix_thetaQ are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
@@ -428,15 +449,63 @@ class Detector:
         return expr
 
     @staticmethod
-    def calc_phase_fit(schema, *args, tones: int | None = None, recalc: bool = False):
-        return 
+    def calc_phase_fit(schema, *args, tones: list[int], recalc: bool = False, col_name = ['f', 'I', 'Q', 'phase', 'phase_fit']):
+        def _phase_fit(df):
+            struct = df.struct
+
+            R, = self.properties.select(pl.col('circle_fit_R'))       
+
+            results_dict = {}
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                future_to_batch = {executor.submit(ccat_fit.phase_fit,
+                                                   struct.field(f_col).to_numpy(),
+                                                   struct.field(phase_col).to_numpy(),
+                                                   I = struct.field(I_col).to_numpy(),
+                                                   Q = struct.field(Q_col).to_numpy(),
+                                                   nonlinear = nonlinear[tones.index(tone)],
+                                                   params = params[tones.index(tone)],
+                                                   R = R.item(tones.index(tone)),
+                                                   window=window[tones.index(tone)]):  (tone, f_col, phase_col) for tone, (f_col, I_col, Q_col, phase_col) in zip(to_calc, batches)}
+                
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tone, f_col, phase_col = future_to_batch[future]
+                    try:
+                        result = future.result()
+                        best_fit = result.best_fit
+                        best_vals_dict = {f'{col_name[-1]}_{k}': v for k, v in result.best_values.items()}
+                        init_vals_dict = {f'{col_name[-1]}_init_{k}': v for k, v in result.init_values.items()}
+                        if save_model_result: best_vals_dict[f'{col_name[-1]}_model_result'] = result
+                        self._properties[f'det_{tone:04d}'] = best_vals_dict | init_vals_dict
+                    except Exception as e:
+                        rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, e)
+                        best_fit = np.zeros(df.len())
+                        self._properties[f'det_{tone:04d}'] = {}
+                    results_dict[f'{col_name[-1]}_{phase_col}']   = best_fit
+
+            df = pl.DataFrame(results_dict)
+            return pl.Series(df.select(pl.struct(df.columns)))
+            
+        if len(args) == 6:
+            self, nonlinear, params, window, max_workers, save_model_result = args
+            if isinstance(params, lmfit.parameter.Parameters): params = len(tones)*[params]
+            if isinstance(nonlinear, bool): nonlinear = len(tones)*[nonlinear]
+            if isinstance(window, (float, int)): window = len(tones)*[window]
+        else:
+            error = 'nonlinear, params, window, max_workers, and save_model_result are required arguments.'
+            rfsoc_io.send_msg('ERROR', error)
+            raise ValueError(error)
+        
+        return_col = [f'{col_name[-1]}_{col_name[-2]}']
+        return_type = [pl.Float64]
+        expr, to_calc, calc_col, batches = Detector._batch_calc(_phase_fit, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc)
+        return expr 
 
     @staticmethod
     def calc_submm_fit(schema, *args, tones: int | None = None, recalc: bool = False):
         return
 
     @staticmethod
-    def calc_IQ_circle_fit(schema, *args, tones: list[int] = 0, recalc: bool = False, col_name = ['I', 'Q', 'IQ_circle_fit']):
+    def calc_IQ_circle_fit(schema, *args, tones: list[int], recalc: bool = False, col_name = ['I', 'Q', 'IQ_circle_fit']):
         def _circle_fit(df):
             struct = df.struct
             
@@ -447,7 +516,7 @@ class Detector:
             property_keys = ['center_I', 'center_Q', 'R', 'A', 'D', 'theta', 'optimality', 'nfev', 'njev']
             results_dict = {}
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(circle_fit,
+                future_to_batch = {executor.submit(ccat_fit.circle_fit,
                                                    struct.field(I_col).to_numpy(),
                                                    struct.field(Q_col).to_numpy(),
                                                    full_output=True,
@@ -499,7 +568,7 @@ class Detector:
 
             results_dict = {}
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(y_to_x_spline,
+                future_to_batch = {executor.submit(ccat_fit.y_to_x_spline,
                                                    struct.field(f_col).to_numpy(),
                                                    struct.field(phase_col).to_numpy(),
                                                    k=k,
@@ -561,7 +630,7 @@ class Detector:
             y_to_x, x_to_y = self.properties.select(pl.col([f'{col_name[0]}_to_f_spline', f'f_to_{col_name[0]}_spline']))            
             results_dict = {}
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(y_to_x_interp,
+                future_to_batch = {executor.submit(ccat_fit.y_to_x_interp,
                                                    struct.field(phase_col).to_numpy(),
                                                    y_to_x_spline = y_to_x.item(tones.index(tone)),
                                                    x_to_y_spline = x_to_y.item(tones.index(tone))):  (tone, phase_col) for tone, phase_col in zip(to_calc, batches)}

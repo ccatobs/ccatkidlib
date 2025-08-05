@@ -1,9 +1,14 @@
 import numpy as np
 import scipy 
 
+from lmfit import Model, Parameters
 from scipy.optimize import least_squares, root_scalar
 from scipy.interpolate import make_interp_spline, PchipInterpolator
 from numba import njit, guvectorize, float64, prange
+
+#=================#
+# General Fitting #
+#=================#
 
 @njit(parallel=True, cache=True)
 def linear_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
@@ -24,7 +29,10 @@ def linear_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
 def circle_fit(x: np.ndarray, y: np.ndarray, bounds: tuple[list[float], list[float]] = None, full_output: bool = False, loss: str = 'soft_l1', f_scale: float = 1, method: str = 'trf'):
     @njit(cache=True)
     def _res_jac(A: float, D: float, theta: float, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        '''Calculates residuals and Jacobian for fitting circles. Objective function from Section 3.2 of https://doi.org/10.48550/arXiv.cs/0301001
+        '''Calculates residuals and Jacobian for fitting circles. 
+
+        Notes:
+            Objective function from Section 3.2 of https://doi.org/10.48550/arXiv.cs/0301001 
 
         Args:
             A      (float): Fitting parameter
@@ -87,7 +95,8 @@ def circle_fit(x: np.ndarray, y: np.ndarray, bounds: tuple[list[float], list[flo
     x += shift_x
     y += shift_y
 
-    init_A, init_B, init_C, init_D = init_circle_fit(x, y)
+    init_x, init_y, init_R = init_circle_fit(x, y)
+    init_A, init_B, init_C, init_D = _circ_to_cline(init_x, init_y, init_R)
 
     if bounds is None:
         bounds = ([-np.inf, -np.inf, -np.inf], [np.inf, np.inf, np.inf])
@@ -157,7 +166,14 @@ def init_circle_fit(x, y):
     norm = 1/np.sqrt(B**2 + C**2 - 4*A*D)
     A, B, C, D = A*norm, B*norm, C*norm, D*norm
 
-    return A, B, C, D
+    x = -B/(2*A)
+    y = -C/(2*A)
+    R = 1/(2*np.abs(A))
+    return x, y, R
+
+#===============#
+# Interpolation #
+#===============#
 
 def y_to_x_spline(x: np.ndarray, y: np.ndarray, k: int = 3, y_low = None, y_up = None) -> tuple[None | scipy.interpolate.BSpline, scipy.interpolate.BSpline | None]:
     ''' 
@@ -178,7 +194,7 @@ def y_to_x_spline(x: np.ndarray, y: np.ndarray, k: int = 3, y_low = None, y_up =
         y = y[mask]
         x = x[mask]
 
-    # Creating a spline requires a monotonically increasing array, reverse if not decreasing
+    # Creating a spline requires a monotonically increasing array, reverse if  decreasing
     # Save to new variables so that original x and y can be used for x to y interpolation if y to x fails
     if y[-1] - y[0] < 0:
         y_new = y[::-1]
@@ -209,3 +225,145 @@ def y_to_x_interp(ys, y_to_x_spline=None, x_to_y_spline=None):
     else:
         xs = np.zeros(len(ys))
     return xs
+
+#===================#
+# Resonator Fitting #
+#===================#
+
+def phase_fit(f: np.ndarray,
+              phase: np.ndarray,
+              I: np.ndarray | None = None,
+              Q: np.ndarray | None = None,
+              R: float | None = None,
+              window: float | None = None, 
+              unwrap_threshold = 1.9*np.pi,
+              params: Parameters | None = None,
+              nonlinear: bool = False):
+    ''' Method for fitting to the phase of a kinetic inductance detector (KID)
+
+    Notes:
+        Using method from https://doi.org/10.1117/12.3019161. 
+
+    Args:
+        f (np.ndarray): Array of frequencies (in Hz)
+        I (np.ndarray, optional): Array of in-phase components of complex transmission. Required for nonlinear fit
+        Q (np.ndarray, optional): Array of quadrature components of complex transmission. Required for nonlinear fit
+        params (lmfit.Parameters, optional): lmfit Parameters object to use as initial guess for fit
+        R (float, optional): Radius of the IQ circle. Only required for nonlinear fit and if not passed as a lmfit.Parameter in params
+        nonlinear (bool, optional): Whether to use nonlinear fit. Defaults to False
+    '''
+    
+    @njit(cache=True)
+    def _guess_params(f, phase, R):
+        ninety_phase_ind = np.argmin(np.abs(np.abs(phase) - np.pi/2)) # Get the index at which the phase is closest to 90 degrees 
+        
+        f_0_guess = (f[zero_phase_ind_up] + f[zero_phase_ind_low])/2  # Guess resonant frequency to be near zero phase
+        f_0_min, f_0_max = f[0], f[-1] # Bound resonant frequency to be within sampled frequencies
+        
+        FWHM_guess = 2*np.abs(f[ninety_phase_ind] - f_0_guess)
+        FWHM_min, FWHM_max = f[2] - f[0], 5*(f[-1] - f[0])
+
+        Qr_min, Qr_max = f_0_guess/FWHM_max, f_0_guess/FWHM_min
+        Qr_guess = f_0_guess/FWHM_guess if FWHM_guess != 0 else np.sqrt(Qr_min*Qr_max)
+
+        # Create param tuples in form (name, value, vary, min, max)
+        f_0_param = ('f_0', f_0_guess, True, f_0_min, f_0_max)
+        Qr_param =  ('Qr',  Qr_guess,  True, Qr_min,  Qr_max)
+        theta_0_param = ('theta_0', 0, True, -np.pi, np.pi)
+        a_param = ('a', 0, True, 0, np.inf)
+        R_param = ('R', R, False)
+
+        return f_0_param, Qr_param, theta_0_param, a_param, R_param
+
+    @njit(cache=True)
+    def _phase_fit(f, I, Q, f_0, Qr, theta_0, a, R):
+        ''' Calculates phases for the given frequencies for a nonlinear KID
+        Args:
+            f (np.ndarray): Array of frequencies (in Hz)
+            I (np.ndarray): Array of in-phase components of complex transmission
+            Q (np.ndarray): Array of quadrature components of complex transmission
+            f_0 (float): KID resonant frequency
+            Q (float): KID total quality factor
+            theta_0 (float): KID phase angle
+            beta (float): Factor related to KID kinetic inductance nonlinearity. Use a = 0 for a linear resonator.
+            R (float): Radius of KID IQ circle. 
+
+        Returns:
+            np.ndarray: Array of calculated phases for the given frequencies
+        '''
+
+        f_0 = np.ones(f.size)*f_0
+        
+        # Calculate nonlinear correction only if a nonzero beta is provided
+        if not a == 0: 
+            # Calculate off resonance I and Q (I_off, Q_off)
+            sin = np.sin(theta_0 + np.pi)
+            cos = np.sqrt(1 - sin**2)
+            I_off, Q_off = R*cos, R*sin
+
+            # Calculate distance between arbitrary (I, Q) point and off resonance point (I_off, Q_off)
+            dist = (I - I_off)**2 + (Q - Q_off)**2
+
+            # Shift resonant frequency using nonlinear term
+            beta = a*(f_0/Qr)/(2*R)**2
+            f_0 = f_0 + beta*dist
+
+        x = (f - f_0)/f_0
+        return theta_0 + 2*np.arctan(-2*Qr*x)
+
+    # Unwrap phase
+    # ------------
+    zero_phase_ind_up, zero_phase_ind_low = np.argmin(phase[np.where(phase >= 0)]), np.argmax(phase[np.where(phase <= 0)])
+    ref_phase = phase[zero_phase_ind_up]
+
+    curr_shift = 0
+    for i in range(len(phase) - 1):
+        diff = phase[i+1] - phase[i]
+        phase[i] -= curr_shift
+        if diff > unwrap_threshold:
+            curr_shift += 2*np.pi 
+        elif diff < -1*unwrap_threshold:
+            curr_shift -= 2*np.pi
+    phase[-1] -= curr_shift
+    phase += ref_phase - phase[zero_phase_ind_up]
+
+    # Create/validate params for model
+    # --------------------------------
+    if params is None: params = Parameters()
+    if nonlinear:
+        if I is None: raise ValueError(f'I is a required argument for nonlinear fits.')
+        if Q is None: raise ValueError(f'Q is a required argument for nonlinear fits.')
+        if (R is None) and (not 'R' in params): raise ValueError(f'R must be passed as an argument or through params for a nonlinear fit.')
+    
+    in_params = [param in params for param in ['f_0', 'Qr', 'theta_0', 'a', 'R']]
+
+    if not all(in_params):
+        guess_params = _guess_params(f, phase, R)
+
+        for incl, guess in zip(in_params, guess_params):
+            if not incl: params.add(*guess)
+    
+    # Set 'a' value correctly for a linear vs. nonlinear fit
+    if nonlinear:
+        a_vary = True
+        if params['a'].value <= 0:
+            a_value = 0.1
+        else:
+            a_value = None
+    else:
+        a_value, a_vary = 0, False
+    params['a'].set(value=a_value, vary=a_vary)
+
+    if window is not None:
+        f_0, Qr = params['f_0'].value, params['Qr'].value
+        f_win = 0.5*window*(f_0/Qr)    
+        mask = np.where((f > f_0 + f_win ) | (f < f_0 - f_win))
+        f[mask], phase[mask] = np.nan, np.nan
+
+    # Create lmfit model for phase fit
+    # --------------------------------
+    phase_model = Model(_phase_fit, independent_vars=['f', 'I', 'Q'])
+
+    # Fit model 
+    # ---------
+    return phase_model.fit(phase, params=params, nan_policy='propagate', f=f, I=I, Q=Q)

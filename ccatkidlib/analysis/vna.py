@@ -221,6 +221,7 @@ def stitch_phase(f, phase, sweep_steps, threshold, stitch_percent, result):
             curr_shift += 2*np.pi 
         elif diff < -1*threshold:
             curr_shift -= 2*np.pi
+    phase[-1] -= curr_shift
     
     # Need to ensure that arrays are allocated in a contiguous block of memory for reshaping
     phase_bins = np.ascontiguousarray(phase).reshape((-1, sweep_steps))
