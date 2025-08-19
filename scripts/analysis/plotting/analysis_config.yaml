@@ -1,11 +1,11 @@
 ---
 file_paths:
-  root_data_dir: '/mnt/md0/cooldown_june'
-  g3_root_dir: '/mnt/md0/'
-  fit_dir: '/home/jovyan/fitting'
+  root_data_dir: '/ccat/data-280GHz/md0/cooldown_june'
+  g3_root_dir: '/ccat/data-280GHz/md0/'
+  fit_dir: '/home/pcs/fitting'
 
 io:
-  file_level: 'CRITICAL'    # * File logging level
+  file_level: 'DEBUG'    # * File logging level
   terminal_level: 'INFO' # * Terminal logging level 
   logging_dir: ""        # * Logging directory. Will create log in ccatkidlib/logs if ""
 

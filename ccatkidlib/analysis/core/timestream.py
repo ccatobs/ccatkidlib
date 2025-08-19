@@ -2,12 +2,10 @@ import gc
 import so3g
 import numpy as np
 import polars as pl
-import multiprocessing as mp
 import pickle
 import time
 
 from scipy.signal import welch
-from multiprocessing import Pool, shared_memory, Lock
 from functools import partial, cached_property
 from pathlib import Path
 from collections.abc import Iterable
@@ -18,10 +16,8 @@ from numba import guvectorize, float64
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
-import ccatkidlib.analysis.plot_utils as putils
 
-from ccatkidlib.analysis.mp_utils import init_worker, clear_shared_mem, frame_worker
-from ccatkidlib.analysis.data import Data
+from ccatkidlib.analysis.core.data import Data
 from ccatkidlib.utils import method_timer
 
 
@@ -29,7 +25,7 @@ class Timestream(Data):
     '''Class representing a timestream taken with a Radio Frequency System on a Chip
     '''
 
-    def __init__(self, com_to, tones = -1, start = 0, end = -1, analysis_cfg = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to, tones = -1, start = 0, end = -1, analysis_cfg = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         '''
         Constructor for Timestream. 
 
@@ -43,19 +39,6 @@ class Timestream(Data):
         '''
         kwargs['data_type'] = 'timestream'
         super().__init__(com_to, analysis_cfg, **kwargs)
-        
-
-        self.mp = False
-        self.processes = None
-        self.chunk_size = None
-        for key, value in kwargs.items():
-            if key == 'mp':
-                self.mp = value
-            elif key == 'processes':
-                self.processes = value
-            elif key == 'chunk_size':
-                self.chunk_size = value
-
 
         # Define array of resonator numbers
         # ---------------------------------
@@ -97,7 +80,7 @@ class Timestream(Data):
         '''
 
         if self._data is None:
-            ftype = self.data_path[0].suffix
+            ftype = Path(self.data_path[0]).suffix
             data = {}
 
             # Load g3 timestreams
@@ -337,64 +320,16 @@ class Timestream(Data):
 
         shape = (len(self.tones), len(ts))
 
-        if self.mp:
-            nbytes = np.prod(shape) * np.dtype(np.int32).itemsize
+        Is, Qs = np.empty(shape, dtype=np.int32), np.empty(shape, dtype=np.int32)
+        curr_ind = 0
+        for i in range(len(frames)):
+            mask = masks[i]
+            t, I, Q = self.load_frame(self, frames[i], start_time, time_precision, mask = mask)
 
-            # Close and unlink the I and Q shared memory blocks if they already exist (e.g. if the program crashed without cleaning them)
-            clear_shared_mem('I_mem')
-            clear_shared_mem('Q_mem')
-            clear_shared_mem('frames')
-            clear_shared_mem('masks')
-            
-            frames_pk = pickle.dumps(frames)
-            masks_pk = pickle.dumps(masks)
-
-            # Create shared memory blocks for storing the I and Q data arrays
-            I_mem = shared_memory.SharedMemory(name='I_mem', create=True, size=nbytes)
-            Q_mem = shared_memory.SharedMemory(name='Q_mem', create=True, size=nbytes)
-            frames_mem = shared_memory.SharedMemory(name='frames', create=True, size=len(frames_pk))
-            masks_mem = shared_memory.SharedMemory(name='masks', create=True, size=len(masks_pk))
-            
-            frames_mem.buf[:len(frames_pk)] = frames_pk
-            masks_mem.buf[:len(masks_pk)] = masks_pk
-
-            frames_info = (frames_mem.name, len(frames_pk))
-            masks_info = (masks_mem.name, len(masks_pk))
-            
-            I_name = I_mem.name
-            Q_name = Q_mem.name
-
-            args = [(i, self, shape, frames_info, masks_info, I_name, Q_name, start_time, time_precision) for i in range(len(frames))]
-
-            try:
-                lock = Lock()
-                if self.processes is None: self.processes=min([int(0.7*len(frames)) + 1, mp.cpu_count()])
-                if self.chunk_size is None: self.chunk_size = 1
-                start_time = time.time()
-                with Pool(processes=self.processes, initializer=init_worker, initargs=(lock,)) as pool:
-                    result = pool.starmap(frame_worker, args, self.chunk_size)          
-                Is = np.ndarray(shape, dtype=np.int32, buffer=I_mem.buf)
-                Qs = np.ndarray(shape, dtype=np.int32, buffer=Q_mem.buf) 
-                Is = np.array(Is[:])
-                Qs = np.array(Qs[:])
-            except Exception as e:
-                print(e)
-                Is = []
-                Qs = []
-            finally:
-                I_mem.close(), Q_mem.close(), frames_mem.close(), masks_mem.close()
-                I_mem.unlink(), Q_mem.unlink(), frames_mem.unlink(), masks_mem.unlink()
-        else:
-            Is, Qs = np.empty(shape, dtype=np.int32), np.empty(shape, dtype=np.int32)
-            curr_ind = 0
-            for i in range(len(frames)):
-                mask = masks[i]
-                t, I, Q = self.load_frame(self, frames[i], start_time, time_precision, mask = mask)
-
-                num_samps = int(np.sum(mask))
-                Is[:, curr_ind:num_samps + curr_ind] = I
-                Qs[:, curr_ind:num_samps + curr_ind] = Q
-                curr_ind += num_samps
+            num_samps = int(np.sum(mask))
+            Is[:, curr_ind:num_samps + curr_ind] = I
+            Qs[:, curr_ind:num_samps + curr_ind] = Q
+            curr_ind += num_samps
 
         return ts, Is, Qs
  

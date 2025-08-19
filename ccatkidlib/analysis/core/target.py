@@ -2,7 +2,9 @@ import gc
 import sys
 import numpy as np
 import polars as pl
+from numba import njit
 
+from functools import cached_property
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -16,7 +18,8 @@ import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
 
-from ccatkidlib.analysis.sweep import Sweep
+from ccatkidlib.analysis.core.sweep import Sweep
+from ccatkidlib.analysis.fit.fit import linear_fit
 
 
 class Target(Sweep):
@@ -25,7 +28,7 @@ class Target(Sweep):
     Subclasses Sweep.
     '''
 
-    def __init__(self, com_to: str, tones: int | list[int] | None = None, analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, tones: int | list[int] | None = None, analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         '''Subclass of Sweep with additional arguments
 
         Args:
@@ -99,29 +102,33 @@ class Target(Sweep):
         else:
             rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars DataFrame!')
     
+    @cached_property
+    def cable_delay(self) -> dict | None:
+        '''Get the cable delay of the RF chain using the phase data
+
+        Returns:
+            float: The cable delay in nanoseconds
+        '''
+
+        @njit(cache=True)
+        def _calc_cable_delay(f, phase):
+            window = int(0.1*len(f))
+            cable_delay_low, _ = linear_fit(f[:window], phase[:window])
+            cable_delay_high, _ = linear_fit(f[-window:], phase[-window:])
+            cable_delay = (cable_delay_high + cable_delay_low)/2
+            return cable_delay*1e9/(2*np.pi)
+
+        tones = self.tones
+        if tones is None: 
+            cable_delay = None
+        else:
+            self.phase()
+            cable_delay = {f'det_{tone:04d}': self.data.select(pl.struct([f'f_{tone:04d}', f'phase_{tone:04d}'])
+                                                       .map_batches(lambda arrs: _calc_cable_delay(arrs.struct.field(f'f_{tone:04d}').to_numpy(), arrs.struct.field(f'phase_{tone:04d}').to_numpy()),
+                                                       returns_scalar=True, return_dtype=pl.Float64,)).item() for tone in tones}
+        return cable_delay
+    
     #==================#
     # Plotting Methods #
     #==================#
-
-    #==========================#
-    # Internal Loading Methods #
-    #==========================#
-
-    def _load_res_freqs(self):
-        res_freqs = super()._load_res_freqs()
-        if res_freqs is not None: res_freqs = np.array(res_freqs[self.res_num]) if self.res_num is not None else res_freqs
-        return res_freqs
-
-    def _get_res_s21z(self):
-        res_s21z = None
-        res_freqs = self.res_freqs
-        if res_freqs is not None and len(res_freqs) > 0:
-            try:
-                sweep_steps = self.drone_cfg['tones']['sweep_steps']
-            except KeyError:
-                sweep_steps = self.drone_cfg['tones']['N_step']
-            freq_bins = np.array(self.freqs).reshape((-1, sweep_steps))
-            data_bins = np.array(self.s21z).reshape((-1, sweep_steps))
-            res_s21z = [data[np.argmin(np.abs(freqs - res))] for res, freqs, data in zip(self.res_freqs, freq_bins, data_bins)]
-        return res_s21z
 

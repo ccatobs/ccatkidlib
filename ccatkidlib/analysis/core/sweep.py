@@ -17,9 +17,8 @@ from bokeh.plotting import curdoc
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
-import ccatkidlib.analysis.plot_utils as putils
 
-from ccatkidlib.analysis.data import Data
+from ccatkidlib.analysis.core.data import Data
 
 
 class Sweep(Data):
@@ -28,7 +27,7 @@ class Sweep(Data):
     Subclasses the general ccatkidlib Data class.
     '''
 
-    def __init__(self, com_to: str, analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         super().__init__(com_to, analysis_cfg, **kwargs)
         
     #==================#
@@ -83,17 +82,6 @@ class Sweep(Data):
                 rfsoc_io.send_msg('ERROR', error)
                 raise FileNotFoundError(error)
         return det_f
-
-    #===============================#
-    # Internal Data Loading Methods #
-    #===============================#
-    
-    def _get_res_s21z(self):
-        res_s21z = None
-        res_freqs = self.res_freqs
-        if res_freqs is not None and len(res_freqs) > 0:
-            res_s21z = [self.s21z[np.argmin(np.abs(self.freqs - freq))] for freq in res_freqs]
-        return res_s21z
     
     #=====================#
     # Data Getter Methods #

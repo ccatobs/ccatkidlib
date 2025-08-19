@@ -87,6 +87,10 @@ def circle_fit(x: np.ndarray, y: np.ndarray, bounds: tuple[list[float], list[flo
         D = (B**2 + C**2 - 1)/(4*A)
         return A, B, C, D
 
+    # Filter out NaNs from input arrays
+    x = x[~np.isnan(x)]
+    y = y[~np.isnan(y)]
+
     # Shift the circle if too close to the origin
     mean_x, mean_y = np.mean(x), np.mean(y)
     center_mag = np.sqrt(mean_x**2 + mean_y**2)
@@ -238,7 +242,8 @@ def phase_fit(f: np.ndarray,
               window: float | None = None, 
               unwrap_threshold = 1.9*np.pi,
               params: Parameters | None = None,
-              nonlinear: bool = False):
+              nonlinear: bool = False,
+              method: str = 'least_squares'):
     ''' Method for fitting to the phase of a kinetic inductance detector (KID)
 
     Notes:
@@ -270,13 +275,13 @@ def phase_fit(f: np.ndarray,
         f_0_param = ('f_0', f_0_guess, True, f_0_min, f_0_max)
         Qr_param =  ('Qr',  Qr_guess,  True, Qr_min,  Qr_max)
         theta_0_param = ('theta_0', 0, True, -np.pi, np.pi)
-        a_param = ('a', 0, True, 0, np.inf)
-        R_param = ('R', R, False)
+        beta_param = ('beta', 0, True, -1e4, 1e4)
+        R_param = ('R', R, False, 0.9*R, 1.1*R)
 
-        return f_0_param, Qr_param, theta_0_param, a_param, R_param
+        return f_0_param, Qr_param, theta_0_param, beta_param, R_param
 
     @njit(cache=True)
-    def _phase_fit(f, I, Q, f_0, Qr, theta_0, a, R):
+    def _phase_fit(f, I, Q, f_0, Qr, theta_0, beta, R):
         ''' Calculates phases for the given frequencies for a nonlinear KID
         Args:
             f (np.ndarray): Array of frequencies (in Hz)
@@ -295,7 +300,7 @@ def phase_fit(f: np.ndarray,
         f_0 = np.ones(f.size)*f_0
         
         # Calculate nonlinear correction only if a nonzero beta is provided
-        if not a == 0: 
+        if not beta == 0: 
             # Calculate off resonance I and Q (I_off, Q_off)
             sin = np.sin(theta_0 + np.pi)
             cos = np.sqrt(1 - sin**2)
@@ -305,17 +310,18 @@ def phase_fit(f: np.ndarray,
             dist = (I - I_off)**2 + (Q - Q_off)**2
 
             # Shift resonant frequency using nonlinear term
-            beta = a*(f_0/Qr)/(2*R)**2
-            f_0 = f_0 + beta*dist
+            beta *= 1e-8
+            f_0 = f_0 - beta*dist
 
         x = (f - f_0)/f_0
         return theta_0 + 2*np.arctan(-2*Qr*x)
 
+
     # Unwrap phase
     # ------------
-    zero_phase_ind_up, zero_phase_ind_low = np.argmin(phase[np.where(phase >= 0)]), np.argmax(phase[np.where(phase <= 0)])
+    zero_phase_ind_up, zero_phase_ind_low = np.argmin(phase[phase >= 0]), np.argmax(phase[phase <= 0])
     ref_phase = phase[zero_phase_ind_up]
-
+    
     curr_shift = 0
     for i in range(len(phase) - 1):
         diff = phase[i+1] - phase[i]
@@ -326,7 +332,8 @@ def phase_fit(f: np.ndarray,
             curr_shift -= 2*np.pi
     phase[-1] -= curr_shift
     phase += ref_phase - phase[zero_phase_ind_up]
-
+    
+    
     # Create/validate params for model
     # --------------------------------
     if params is None: params = Parameters()
@@ -335,7 +342,7 @@ def phase_fit(f: np.ndarray,
         if Q is None: raise ValueError(f'Q is a required argument for nonlinear fits.')
         if (R is None) and (not 'R' in params): raise ValueError(f'R must be passed as an argument or through params for a nonlinear fit.')
     
-    in_params = [param in params for param in ['f_0', 'Qr', 'theta_0', 'a', 'R']]
+    in_params = [param in params for param in ['f_0', 'Qr', 'theta_0', 'beta', 'R']]
 
     if not all(in_params):
         guess_params = _guess_params(f, phase, R)
@@ -343,27 +350,33 @@ def phase_fit(f: np.ndarray,
         for incl, guess in zip(in_params, guess_params):
             if not incl: params.add(*guess)
     
-    # Set 'a' value correctly for a linear vs. nonlinear fit
-    if nonlinear:
-        a_vary = True
-        if params['a'].value <= 0:
-            a_value = 0.1
-        else:
-            a_value = None
-    else:
-        a_value, a_vary = 0, False
-    params['a'].set(value=a_value, vary=a_vary)
-
-    if window is not None:
-        f_0, Qr = params['f_0'].value, params['Qr'].value
-        f_win = 0.5*window*(f_0/Qr)    
-        mask = np.where((f > f_0 + f_win ) | (f < f_0 - f_win))
-        f[mask], phase[mask] = np.nan, np.nan
-
     # Create lmfit model for phase fit
     # --------------------------------
     phase_model = Model(_phase_fit, independent_vars=['f', 'I', 'Q'])
 
+    beta_guess = params['beta'].value
+    params['beta'].set(value=0, vary=False)
+
+    if window is not None:
+        f_0, Qr = params['f_0'].value, params['Qr'].value
+        f_win = 0.5*window*(f_0/Qr)    
+        mask = (f < (f_0 + f_win)) & (f > (f_0 - f_win))
+
+    fit = phase_model.fit(phase[mask], params=params, nan_policy='omit', f=f[mask], I=I[mask], Q=Q[mask])
+    params = fit.params
+
+    if window is not None:
+        f_0, Qr = params['f_0'].value, params['Qr'].value
+        f_win = 0.5*window*(f_0/Qr)    
+        mask = (f < (f_0 + f_win)) & (f > (f_0 - f_win))
+
+    if nonlinear:
+        if beta_guess == 0: beta_guess = 0.1e8*(params['f_0'].value / params['Qr'].value)/(2*params['R'].value)**2
+        params['beta'].set(value=beta_guess, vary=True)
+    
+    fit = phase_model.fit(phase[mask], params=params, nan_policy='omit', f=f[mask], I=I[mask], Q=Q[mask], method=method)
+    fit.mask = mask
+
     # Fit model 
     # ---------
-    return phase_model.fit(phase, params=params, nan_policy='propagate', f=f, I=I, Q=Q)
+    return fit

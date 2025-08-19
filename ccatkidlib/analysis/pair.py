@@ -171,6 +171,8 @@ def get_sweep(path: str | pathlib.PosixPath, **kwargs):
                 return 'invalid/path', recent_sweeps[0]
         elif 'vna' in recent_sweeps[0].parts:
             return  str(recent_sweeps[0]), 'invalid/path'
+        else:
+            return 'invalid/path', 'invalid/path'
 
 def replace_root(path: str | pathlib.PosixPath, old_root: str, new_root: str):
     '''Replace the root directory of a file path with a new root

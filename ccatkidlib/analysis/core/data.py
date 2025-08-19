@@ -17,7 +17,6 @@ from math import ceil
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
-import ccatkidlib.analysis.plot_utils as putils
 
 from ccatkidlib.utils import method_timer
 
@@ -44,7 +43,7 @@ class Data:
     '''
 
     def __init__(self, com_to: str,
-                 analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'),
+                 analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
                  data_type: str | None = None,
                  timestamp: int | str | None = None,
                  data_path: str | pathlib.PosixPath | list[str] | list[pathlib.PosixPath] | None = None,
@@ -186,8 +185,8 @@ class Data:
 
         data = self.data
 
+        if isinstance(col_name, str): col_name = [col_name]
         if self.tones is not None:
-            if isinstance(col_name, str): col_name = [col_name]
 
             exprs=[]
             # Timestreams never have self.tones = None but do have columns (the time columns in particular) without tones so need to handle those seperately (may be a way to add to expr pattern matching instead)
@@ -203,7 +202,7 @@ class Data:
 
             return self.data.select(*exprs)
         else:
-            return self.data.select(pl.col(col_name))
+            return self.data.select([pl.col(f'^{name}$') for name in col_name])
 
     def tone(self, include: int | list[int] | None = None, exclude: int | list[int] | None = None) -> pl.dataframe.frame.DataFrame:
         '''Get all of the data columns in the self.data Polars DataFrame for the specified tones
@@ -211,7 +210,7 @@ class Data:
         Note:
             Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
 
-        Args:
+        # Args:
             include (int | list[int], optional): List of tones to include. Defaults to None
             exclude (int | list[int], optional): List of tones to exclude. Defaults to None
         Returns:
@@ -281,7 +280,7 @@ class Data:
         self.transform([Data.calc_phase]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
-    def mag(self, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:
+    def mag(self, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, dB: bool = False, recalc: bool = False) -> pl.dataframe.frame.DataFrame:
         '''Calculate and get the magnitude ``sqrt(I^2 + Q^2)`` data of the specified tones
 
         Note:
@@ -293,14 +292,16 @@ class Data:
         Returns:
             polars.dataframe.frame.DataFrame: Polars DataFrame with specified data columns
         '''
-        col_name = ['I', 'Q', 'mag']
+        col_name = ['I', 'Q', f"{'dB_' if dB else ''}mag"]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
-        self.transform([Data.calc_mag]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+
+        args = [[dB]]*num_prefix
+        self.transform([Data.calc_mag]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
     #============================#
@@ -314,20 +315,14 @@ class Data:
 
         if not isinstance(angle, Iterable) or not len(angle) == num_prefix: angle = [angle]
 
-        col_names_I = [[]]*num_prefix
-        col_names_Q = [[]]*num_prefix
+        col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
-            data_name_I = f"{pre}{'_' if pre else ''}{col_name[0]}"
-            data_name_Q = f"{pre}{'_' if pre else ''}{col_name[1]}"
-
-            col_names_I[i] = [data_name_I, data_name_Q, f'{col_name[-1]}_{data_name_I}']
-            col_names_Q[i] = [data_name_I, data_name_Q, f'{col_name[-1]}_{data_name_Q}']
+            col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
 
         args = [[a, self.tones] for a in angle]
-        self.transform([Data.calc_I_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names_I)
-        self.transform([Data.calc_Q_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names_Q)
+        self.transform([Data.calc_IQ_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
 
-        return self.get_data(col_name=[col_name[-1] for col_name in col_names_I] + [col_name[-1] for col_name in col_names_Q], include=include, exclude=exclude)
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
     
     def IQ_scale(self, prefix: str | list[str] = '', scale: float = 1, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
         col_name = ['I', 'Q', f"{name}{'_' if name else ''}scale"]
@@ -350,18 +345,43 @@ class Data:
 
         if not isinstance(shift_I, Iterable) or not len(shift_I) == num_prefix: shift_I = [shift_I]
         if not isinstance(shift_Q, Iterable) or not len(shift_Q) == num_prefix: shift_Q = [shift_Q]
-
-        col_names_I = [[]]*num_prefix
-        col_names_Q = [[]]*num_prefix
+    
+        col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
-            col_names_I[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
-            col_names_Q[i] = [f"{pre}{'_' if pre else ''}{col_name[1]}", col_name[-1]]
+            col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
 
-        args_I, args_Q = [[s, self.tones] for s in shift_I], [[s, self.tones] for s in shift_Q]
-        self.transform([Data.calc_I_shift]*num_prefix, *args_I, include=include, exclude=exclude, recalc=recalc, col_name = col_names_I)
-        self.transform([Data.calc_Q_shift]*num_prefix, *args_Q, include=include, exclude=exclude, recalc=recalc, col_name = col_names_Q)
+        args = [[I, Q, self.tones] for I, Q in zip(shift_I, shift_Q)]
+        self.transform([Data.calc_IQ_shift]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+    
+    def IQ_trim(self, prefix: str | list[str] = '', lower_bound=0, upper_bound=-1, name='', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        col_name = ['sample', 'I', 'Q', f"{name}{'_' if name else ''}trim"]
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
 
-        return self.get_data(col_name=[col_name[-1] for col_name in col_names_I], include=include, exclude=exclude)
+        if not isinstance(lower_bound, Iterable) or not len(lower_bound) == num_prefix: lower_bound = [lower_bound]
+        if not isinstance(upper_bound, Iterable) or not len(upper_bound) == num_prefix: upper_bound = [upper_bound]
+
+        # Handle negative indicing
+        for i, low in enumerate(lower_bound): 
+            if isinstance(low, Iterable): 
+                lower_bound[i] = [int(self.data.height + l) for l in low if l < 0]
+            elif low < 0:
+                lower_bound[i] = int(self.data.height + low)
+
+        for i, up in enumerate(upper_bound): 
+            if isinstance(up, Iterable):
+                upper_bound[i] = [int(self.data.height + u) for u in up if u < 0]
+            elif up < 0:
+                upper_bound[i] = int(self.data.height + up)
+            
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [col_name[0]] + [f"{pre}{'_' if pre else ''}{name}" for name in col_name[1:-1]] + [col_name[-1]]
+
+        args = [[low, up, self.tones] for low, up in zip(lower_bound, upper_bound)]
+        self.transform([Data.calc_IQ_trim]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
     
     #==================#
     # Analysis Methods #
@@ -396,7 +416,13 @@ class Data:
             for func, f_arg, name, size in zip(funcs, funcs_args, col_name, batch_size):
                 batches = [tones[i*size:(i+1)*size] for i in range(ceil(len(tones) / size))]
                 for batch in batches:
-                    expr.append(func(schema, *f_arg, tones=batch, recalc=recalc, col_name = name))
+                    exp = func(schema, *f_arg, tones=batch, recalc=recalc, col_name = name)
+
+                    # Handle funcs that return a list of expressions and funcs that return single expressions
+                    if isinstance(exp, Iterable):
+                        expr += exp
+                    else:
+                        expr.append(exp)
             return expr
 
         def _include(include: list[int], *args) -> list[pl.expr.expr.Expr]:
@@ -500,111 +526,78 @@ class Data:
         
         I_col, Q_col, mag_col = col_name
 
+        if len(args) == 1:
+            dB = args[0]
+        else:
+            rfsoc_io.send_msg('ERROR', 'dB is a required argument.')
+
         if recalc or not (mag_col in schema):
-            return (pl.col(I_col)**2 + pl.col(Q_col)**2).sqrt().alias(mag_col)
+            mag_expr = (pl.col(I_col)**2 + pl.col(Q_col)**2).sqrt()
+            if dB: mag_expr = 20*np.log10(mag_expr)
+            return mag_expr.alias(mag_col)            
         else:
             return pl.col(mag_col)
 
     @staticmethod
-    def calc_I_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate_I']) -> pl.expr.expr.Expr:
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name]
-
-        I_col, Q_col, rotate_col = col_name
-
-        if len(args) == 2:
-            angle, tone_list = args
-            if isinstance(angle, Iterable):
-                if tones is not None: 
-                    angle = angle[tone_list.index(tone)]
-                else:
-                    error = 'Cannot use an array of angles when there is only one tone.'
-                    rfsoc_io.send_msg('ERROR', error)
-                    raise ValueError(error)
-        else:
-            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
-
-        if recalc or not (rotate_col in schema):
-            return (pl.col(I_col)*np.cos(angle) - pl.col(Q_col)*np.sin(angle)).alias(rotate_col)
-        else:
-            return pl.col(rotate_col)
-
-    @staticmethod
-    def calc_Q_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate_Q']) -> pl.expr.expr.Expr:
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name]
-
-        I_col, Q_col, rotate_col = col_name
-
-        if len(args) == 2:
-            angle, tone_list = args
-            if isinstance(angle, Iterable):
-                if tones is not None: 
-                    angle = angle[tone_list.index(tone)]
-                else:
-                    error = 'Cannot use an array of angles when there is only one tone.'
-                    rfsoc_io.send_msg('ERROR', error)
-                    raise ValueError(error)
-        else:
-            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
-
-        if recalc or not (rotate_col in schema):
-            return (pl.col(I_col)*np.sin(angle) + pl.col(Q_col)*np.cos(angle)).alias(rotate_col)
-        else:
-            return pl.col(rotate_col)
-    
-    @staticmethod
-    def calc_I_shift(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'shift_I']) -> pl.expr.expr.Expr:
+    def calc_IQ_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate']) -> pl.expr.expr.Expr:
         if tones is not None:
             tone = tones[0]
             col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
 
-        I_col, shift_col = col_name
+        I_col, Q_col, rotate_col = col_name
 
         if len(args) == 2:
-            shift, tone_list = args
-            if isinstance(shift, Iterable):
+            angle, tone_list = args
+            if isinstance(angle, Iterable):
                 if tones is not None: 
-                    shift = shift[tone_list.index(tone)]
+                    angle = angle[tone_list.index(tone)]
                 else:
-                    error = 'Cannot use an array of shifts when there is only one tone.'
+                    error = 'Cannot use an array of angles when there is only one tone.'
                     rfsoc_io.send_msg('ERROR', error)
                     raise ValueError(error)
         else:
-            rfsoc_io.send_msg('ERROR', 'shift is a required argument.')
+            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
+
+        if recalc or not (f'{rotate_col}_{I_col}' in schema):
+            return [(pl.col(I_col)*np.cos(angle) - pl.col(Q_col)*np.sin(angle)).alias(f'{rotate_col}_{I_col}'),
+                    (pl.col(I_col)*np.sin(angle) + pl.col(Q_col)*np.cos(angle)).alias(f'{rotate_col}_{Q_col}')]
+        else:
+            return pl.col(f'{rotate_col}_{I_col}')    
+
+    @staticmethod
+    def calc_IQ_shift(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'shift']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        I_col, Q_col, shift_col = col_name
+
+        if len(args) == 3:
+            I_shift, Q_shift, tone_list = args
+            if isinstance(I_shift, Iterable):
+                if tones is not None: 
+                    I_shift = I_shift[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of I_shifts when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+            if isinstance(Q_shift, Iterable):
+                if tones is not None: 
+                    Q_shift = Q_shift[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of Q_shifts when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        
+        else:
+            rfsoc_io.send_msg('ERROR', 'I_shift, Q_shift, and tone_list are required arguments.')
 
         if recalc or not (f'{shift_col}_{I_col}' in schema):
-            return (pl.col(I_col) + shift).name.prefix(shift_col + '_')
+            return [(pl.col(I_col) + I_shift).name.prefix(shift_col + '_'),
+                    (pl.col(Q_col) + Q_shift).name.prefix(shift_col + '_')]
         else:
             return pl.col(f'{shift_col}_{I_col}')
 
-    @staticmethod
-    def calc_Q_shift(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['Q', 'shift_Q']) -> pl.expr.expr.Expr:
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
-
-        Q_col, shift_col = col_name
-
-        if len(args) == 2:
-            shift, tone_list = args
-            if isinstance(shift, Iterable):
-                if tones is not None: 
-                    shift = shift[tone_list.index(tone)]
-                else:
-                    error = 'Cannot use an array of shifts when there is only one tone.'
-                    rfsoc_io.send_msg('ERROR', error)
-                    raise ValueError(error)
-        else:
-            rfsoc_io.send_msg('ERROR', 'shift is a required argument.')
-
-        if recalc or not (f'{shift_col}_{Q_col}' in schema):
-            return (pl.col(Q_col) + shift).name.prefix(shift_col + '_')
-        else:
-            return pl.col(f'{shift_col}_{Q_col}')
-    
     @staticmethod
     def calc_IQ_scale(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'scale']) -> pl.expr.expr.Expr:
         if tones is not None:
@@ -629,6 +622,41 @@ class Data:
             return (pl.col([I_col, Q_col]) * scale).name.prefix(scale_col + '_')
         else:
             return pl.col(f'{scale_col}_{I_col}')
+
+    @staticmethod
+    def calc_IQ_trim(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['sample', 'I', 'Q', 'trim']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [col_name[0]] + [f'{name}_{tone:04d}' for name in col_name[1:-1]] + [col_name[-1]]
+
+        sample_col, I_col, Q_col, trim_col = col_name
+
+        if len(args) == 3:
+            lower_bound, upper_bound, tone_list = args
+            if isinstance(lower_bound, Iterable):
+                if tones is not None: 
+                    lower_bound = lower_bound[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of lower bounds when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+            if isinstance(upper_bound, Iterable):
+                if tones is not None: 
+                    upper_bound = upper_bound[tone_list.index(tone)]
+                else:
+                    error = 'Cannot use an array of upper bounds when there is only one tone.'
+                    rfsoc_io.send_msg('ERROR', error)
+                    raise ValueError(error)
+        else:
+            rfsoc_io.send_msg('ERROR', 'lower_bound, upper_bound, and tone_list are required arguments.')
+
+        if recalc or not (f'{trim_col}_{I_col}' in schema):
+            return [pl.when((pl.col(sample_col) < lower_bound) | (pl.col(sample_col) > upper_bound))
+                      .then(None)
+                      .otherwise(pl.col(col))
+                      .alias(f'{trim_col}_{col}') for col in [I_col, Q_col]]  
+        else:
+            return pl.col(f'{trim_col}_{I_col}')
 
     #==========================#
     # Lazily Loaded Attributes #
@@ -669,11 +697,11 @@ class Data:
             else:
                 try:
                     comb_path = pair.replace_root(value, self.original_root, self.root_dir)
-                    value = np.load(value).real
+                    value = np.load(comb_path).real
                 except:
                     value = None
             comb[key] = value if self.tones is None else value[self.tones]
-        comb['dets'] = range(len(comb['tone_freqs'])) if self.tones is None else self.tones
+        comb['det'] = range(len(comb['tone_freqs'])) if self.tones is None else self.tones
         comb = pl.DataFrame(comb)
         return comb
 
@@ -702,6 +730,23 @@ class Data:
             return func_exclude(exclude, *args)
         else:
             return func_all(*args)
+
+    def _get_prefix(self, col_name, data_name):
+        ''' Get the prefix of the given column name
+
+        Assumes that the column name is of the form {prefix}_{data_name}_{tone}
+
+        Args:
+            col_name (str): Full name of the column
+            data_name(str): Data that column corresponds to (e.g., 'phase' or 'f')
+        Returns:
+            str: Prefix of the column name
+        '''
+
+        segments = 0
+        if self.tones is not None: segments -= 1
+        segments -= len(data_name.split('_'))
+        return '_'.join(col_name.split('_')[:segments])
 
     def _load_cfg(self, id: str) -> dict:
         '''Internal method for loading io, ext, or drone cfg file corresponding to data file.

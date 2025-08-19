@@ -3,16 +3,15 @@ import polars as pl
 
 from collections.abc import Iterable
 from pathlib import Path
-
+from tqdm import tqdm
 
 import ccatkidlib
 import ccatkidlib.rfsoc_io as rfsoc_io
 
-from ccatkidlib.analysis.vna import VNA
-from ccatkidlib.analysis.target import Target
-from ccatkidlib.analysis.timestream import Timestream
+from ccatkidlib.analysis.core.vna import VNA
+from ccatkidlib.analysis.core.target import Target
 
-from ccatkidlib.analysis.detector import Detector
+from ccatkidlib.analysis.core.detector import Detector
 from ccatkidlib.analysis import pair
 
 class Network:
@@ -21,10 +20,10 @@ class Network:
     '''
 
     def __init__(self, com_to: str,
-                 analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'),
+                 analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
                  dets: int | list[int] = -1,
                  cable_delay: float | None = None,
-                 detectors: list[ccatkidlib.analysis.detector.Detector] | None = None,
+                 detectors: list[ccatkidlib.analysis.core.detector.Detector] | None = None,
                  sess_ids: str | list[str] | None  = None,
                  include_streams: bool = True,
                  include_targs:   bool = False,
@@ -98,19 +97,22 @@ class Network:
 
             detectors = []
             detector_types = []
+            detector_timestamps = []
             if include_targs:
-                det_objs, det_types = self._create_detectors('Target', com_to, self.targs, analysis_cfg, dets, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, self.targs, analysis_cfg, dets, cable_delay)
                 detectors += det_objs
                 detector_types += det_types
+                detector_timestamps += det_timestamps
 
             if include_streams:
-                det_objs, det_types = self._create_detectors('Timestream', com_to, self.streams, analysis_cfg, dets, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, self.streams, analysis_cfg, dets, cable_delay)
                 detectors += det_objs
                 detector_types += det_types
+                detector_timestamps += det_timestamps
         else:
             # Ensure that all objects in the detectors list are the correct type
             if any([not isinstance(detector, Detector) for detector in detectors]):
-                error = 'All detectors must be of type ccatkidlib.analysis.detector.Detector.'
+                error = 'All detectors must be of type ccatkidlib.analysis.core.detector.Detector.'
                 rfsoc_io.send_msg('CRITICAL', error)
                 raise ValueError(error)
             
@@ -118,7 +120,7 @@ class Network:
             for i, detector in enumerate(detectors):
                 if detector.stream is None: detector_types[i] = 'Target'
 
-        self.data = pl.DataFrame({'detector': detectors, 'type': detector_types})
+        self.data = pl.DataFrame({'detector': detectors, 'type': detector_types, 'timestamp': detector_timestamps})
 
     def add_columns(self, data_cols: str | list[str], max_workers: int = 1) -> pl.dataframe.frame.DataFrame:
         ''' Add columns to the Network.data DataFrame using fields from the ext_cfg or drone_cfg
@@ -163,7 +165,7 @@ class Network:
             '''
             '''
             if Path(sweep_path).exists():
-                sweep = sweep_dict[sweep_path]
+                sweep = sweep_dict[str(sweep_path)]
                 if sweep is None:
                     sweep = sweep_class(com_to = com_to, analysis_cfg = analysis_cfg, data_path = sweep_path, tones=dets)
                     sweep_dict[sweep_path] = sweep
@@ -173,7 +175,8 @@ class Network:
 
         detectors = [None]*len(path_dict)
         detector_types = ['']*len(path_dict)
-        for i, data_path in enumerate(path_dict):
+        detector_timestamps = ['']*len(path_dict)
+        for i, data_path in enumerate(tqdm(path_dict, desc='Creating Detectors...')):
             vna_path, targ_path = pair.get_sweep(data_path)
 
             if det_type == 'Timestream':
@@ -181,14 +184,17 @@ class Network:
             else:
                 stream_path = None
                 targ_path = data_path
+            
 
             vna = _create_sweep(vna_path, self.vnas, VNA, None)
             targ = _create_sweep(targ_path, self.targs, Target, dets)
             
             detector = Detector(com_to=com_to, analysis_cfg=analysis_cfg, dets=dets, cable_delay=cable_delay, targ=targ, vna=vna, stream_path=stream_path)
+            
             detectors[i] = detector
             detector_types[i] = det_type
-        return detectors, detector_types
+            detector_timestamps[i] = pair.get_timestamp(data_path)
+        return detectors, detector_types, detector_timestamps
     
     @staticmethod
     def _extract_data(detector, detector_type, data_cols):
