@@ -1,16 +1,19 @@
-import gc
 import so3g
 import numpy as np
 import polars as pl
-import pickle
 import time
 
 from scipy.signal import welch
-from functools import partial, cached_property
+from functools import cached_property
 from pathlib import Path
 from collections.abc import Iterable
 from spt3g import core
-from numba import guvectorize, float64
+
+import holoviews as hv
+import datashader as ds
+from holoviews import opts
+from holoviews.operation.datashader import rasterize, datashade, dynspread
+
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
@@ -69,6 +72,189 @@ class Timestream(Data):
         # -----------------------------
         self.packet_counts = []
 
+    #==================#
+    # Plotting Methods #
+    #==================#
+
+    def plot(self, x_dim, y_dim, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, unpivot_x=True):
+        col_dict = {'sample': 'sample',
+                    'x': x_dim,
+                    'y': y_dim}
+
+        df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude, unpivot_x=unpivot_x) 
+        df = df.filter(~pl.col(col_dict['x']).is_nan())
+
+        # Create HoloViews plot objects
+        line = df.hvplot.line(x=col_dict['x'],
+                              y=col_dict['y'],
+                              by=by,
+                              label='Curve')
+
+        scatter = df.hvplot.scatter(x=col_dict['x'],
+                                    y=col_dict['y'],
+                                    by=by,
+                                    label='Scatter')
+        
+        overlay = hv.Overlay([line, scatter])
+
+        cfg = self.drone_cfg['det_config']
+        title = rf"$${cfg['detector_type']}\ {cfg['network']}$$"
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Curve.opts(opts.Curve(title=title))
+            overlay.NdOverlay.Scatter.opts(opts.Scatter(title=title))
+        else:
+            overlay.Curve.Curve.opts(opts.Curve(title=title))
+            overlay.Scatter.Scatter.opts(opts.Scatter(title=title))
+
+        return overlay, df
+
+    def stream_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+        overlay, df = self.plot('t', col_name, y_prefix=prefix, include=include, exclude=exclude, unpivot_x=False)
+        xlabel = r'$$Time [s]$$'
+        ylabel = f'{prefix}_{col_name}'
+
+        curve_opts = opts.Curve(xlabel=xlabel,
+                                ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Curve.opts(curve_opts)
+            overlay = overlay.NdOverlay.Curve
+            aggregator = ds.by('det', ds.count())
+        else:
+            overlay.Curve.Curve.opts(curve_opts)
+            overlay = overlay.Curve.Curve
+            aggregator = ds.count()
+        
+        if rasterize: overlay = datashade(overlay, aggregator=aggregator)
+        
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+    
+    def mag_plot(self, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+        overlay, df = self.plot('f', 'mag', x_prefix=x_prefix, y_prefix=y_prefix, include=include, exclude=exclude)
+        xlabel = r'$$Frequency$$'
+        ylabel = r'$$|S_{21}|$$'
+
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay = overlay.NdOverlay.Scatter
+            aggregator = ds.by('det', ds.count())
+        else:
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay = overlay.Scatter.Scatter
+            aggregator = ds.count()
+        
+        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+
+    def phase_plot(self, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+        overlay, df = self.plot('f', 'phase', x_prefix=x_prefix, y_prefix=y_prefix, include=include, exclude=exclude)
+        xlabel = r'$$Frequency$$'
+        ylabel = r'$$Phase [rad]$$'
+
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay = overlay.NdOverlay.Scatter
+            aggregator = ds.by('det', ds.count())
+        else:
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay = overlay.Scatter.Scatter
+            aggregator = ds.count()
+        
+        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+
+    def IQ_plot(self, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+        overlay, df = self.plot('I', 'Q', x_prefix=prefix, y_prefix=prefix, include=include, exclude=exclude)
+        xlabel = r'$$I$$'
+        ylabel = r'$$Q$$'
+
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay = overlay.NdOverlay.Scatter
+            aggregator = ds.by('det', ds.count())
+        else:
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay = overlay.Scatter.Scatter
+            aggregator = ds.count()
+        
+        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+
+    def psd_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
+        overlay, df = self.plot('f', col_name, x_prefix=f"psd_{prefix}{'_' if prefix else ''}{col_name}",  y_prefix=f"psd{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
+        xlabel = r'$$Frequency [Hz]$$'
+        ylabel = f'psd_{prefix}_{col_name}'
+
+        curve_opts = opts.Curve(xlabel=xlabel,
+                                ylabel=ylabel)
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Curve.opts(curve_opts)
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay.NdOverlay.opts(logx=True, logy=True)
+        else:
+            overlay.Curve.Curve.opts(curve_opts)
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay.Curve.opts(logx=True, logy=True)
+            overlay.Scatter.opts(logx=True, logy=True)
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+    
+    def fft_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
+        overlay, df = self.plot('f', col_name, x_prefix=f'fft',  y_prefix=f"fft{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
+        xlabel = r'$$Frequency [Hz]$$'
+        ylabel = f'fft_{prefix}_{col_name}'
+
+        curve_opts = opts.Curve(xlabel=xlabel,
+                                ylabel=ylabel)
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Curve.opts(curve_opts)
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay.NdOverlay.opts(logy=True)
+        else:
+            overlay.Curve.Curve.opts(curve_opts)
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay.Curve.opts(logy=True)
+            overlay.Scatter.opts(logy=True)
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+    
     #==========================#
     # Lazily Loaded Attributes #
     #==========================#
@@ -168,6 +354,7 @@ class Timestream(Data):
         height = self.data.height
 
         psd_f, _ = welch(np.array([0]*height), fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
+        psd_f = psd_f[1:]
         psd_f = pl.Series(np.pad(psd_f, (0, height - len(psd_f)), constant_values=np.nan))
         for f_col in f_cols:
             if recalc or not f_col in self.data.schema: self.data = self.data.with_columns(psd_f.alias(f_col))
@@ -175,7 +362,7 @@ class Timestream(Data):
         args = [[sampling_freq, height, window, nperseg, detrend, average]]*num_prefix # Allow different psd args to be passed for each prefix?
         self.transform([Timestream.calc_psd]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         self.data = self._unnest(col_name[-1])
-        return self.get_data(col_name=f_cols + [col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+        return self.get_data(col_name =  [col_name[-1] for col_name in col_names], include=include, exclude=exclude)
    
     #==================#
     # Analysis Methods #
@@ -184,7 +371,7 @@ class Timestream(Data):
     @staticmethod
     def calc_fft(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['t', 'phase', 'fft_phase']):
         def _fft(data):
-            return np.abs(np.fft.fft(data))
+            return np.abs(np.fft.fftshift(np.fft.fft(data)))
         
         if tones is not None:
             tone = tones[0]
@@ -201,6 +388,7 @@ class Timestream(Data):
     def calc_psd(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['t', 'phase', 'psd_phase']):
         def _psd(data):
             _, psd = welch(data.to_numpy().T, fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
+            psd = psd[1:]
             psd = np.pad(psd, (0, height - len(psd)), constant_values=np.nan)
             return psd
         

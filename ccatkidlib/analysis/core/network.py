@@ -1,5 +1,6 @@
 import concurrent.futures
 import polars as pl
+import time
 
 from collections.abc import Iterable
 from pathlib import Path
@@ -177,7 +178,9 @@ class Network:
         detector_types = ['']*len(path_dict)
         detector_timestamps = ['']*len(path_dict)
         for i, data_path in enumerate(tqdm(path_dict, desc='Creating Detectors...')):
+            start = time.time()
             vna_path, targ_path = pair.get_sweep(data_path)
+            print(time.time() - start)
 
             if det_type == 'Timestream':
                 stream_path = data_path

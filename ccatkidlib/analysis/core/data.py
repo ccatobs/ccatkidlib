@@ -150,7 +150,7 @@ class Data:
     # Data Getter Methods #
     #=====================#
 
-    def get_data(self, col_name: str | list[str] = '.*', include: int | list[int] | None = None, exclude: int | list[int] | None = None) -> pl.dataframe.frame.DataFrame:
+    def get_data(self, col_name: str | list[str] = '.*', include: int | list[int] | None = None, exclude: int | list[int] | None = None, strict=False) -> pl.dataframe.frame.DataFrame:
         '''Get the specified data columns from the self.data Polars DataFrame for the specified tones
 
         Note:
@@ -169,37 +169,35 @@ class Data:
             expr = []
 
             for tones in include:
-                expr.append(pl.col([f'^.*{name}_{tones:04d}$' for name in col_name]))
+                expr.append(pl.col([f"^{'' if strict else '.*'}{name}_{tones:04d}$" for name in col_name]))
             return expr
 
         def _exclude(exclude, *args):
             col_name = args[0]
             expr = []
             for tones in exclude:
-                expr += [f'^{name}_{tones:04d}$' for name in col_name]
-            return [pl.col([f'^.*{name}_.*$' for name in col_name]).exclude(expr)]
+                expr += [f"^{'' if strict else '.*'}{name}_{tones:04d}$" for name in col_name]
+            return [pl.col([f"^{'' if strict else '.*'}{name}_\d+.*$" for name in col_name]).exclude(expr)]
 
         def _all(*args):
             col_name = args[0]
-            return [pl.col([f'^.*{name}_.*$' for name in col_name])]
+            return [pl.col([f"^{'' if strict else '.*'}{name}_\d+.*$" for name in col_name])]
 
         data = self.data
 
         if isinstance(col_name, str): col_name = [col_name]
         if self.tones is not None:
-
             exprs=[]
             # Timestreams never have self.tones = None but do have columns (the time columns in particular) without tones so need to handle those seperately (may be a way to add to expr pattern matching instead)
-            for no_tone_name in ['^t$', '^dt$', '^fft.*_f$', '^psd.*_f$']:
+            for no_tone_name in ['^sample$', '^t$', '^dt$', '^fft_f$', '^psd.*_f$']:
                 pattern = re.compile(no_tone_name)
                 for name in col_name[::-1]:
                     if pattern.match(name):
-                        exprs.append(pl.col(no_tone_name))
+                        exprs.append(pl.col(name))
                         col_name.remove(name)
                         break
             args = [col_name]
             exprs += self._parse_tones(_include, _exclude, _all, include, exclude, *args)
-
             return self.data.select(*exprs)
         else:
             return self.data.select([pl.col(f'^{name}$') for name in col_name])
@@ -705,9 +703,70 @@ class Data:
         comb = pl.DataFrame(comb)
         return comb
 
+    #==========#
+    # Plotting #
+    #==========#
+
+    def _get_plot_df(self, col_dict, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, unpivot_x=True):
+        # Get frequency and magnitude data
+        x_df = self.get_data([col_dict['sample'], f"{x_prefix}{'_' if x_prefix else ''}{col_dict['x']}"], include=include, exclude=exclude, strict=True)
+        y_df = self.get_data([col_dict['sample'], f"{y_prefix}{'_' if y_prefix else ''}{col_dict['y']}"], include=include, exclude=exclude, strict=True)
+
+
+        on, by = [col_dict['sample']], None
+
+        # Convert frequency and magnitude DataFrames from wide to long
+        if self.tones is not None and unpivot_x:
+            x_df = self.unpivot(x_df, col_dict['x'], index_cols=[col_dict['sample']])
+            y_df = self.unpivot(y_df, col_dict['y'], index_cols=[col_dict['sample']])
+            on += ['det']
+            if include is not None or exclude is not None: by = 'det'
+
+        # Combine into a single DataFrame
+        df = x_df.join(y_df, on=on, how='left')
+
+        if not unpivot_x: 
+            df = df.rename({f"{x_prefix}{'_' if x_prefix else ''}{col_dict['x']}": col_dict['x']})
+            df = self.unpivot(df, col_dict['y'], index_cols=[col_dict['sample'], col_dict['x']])
+            on += ['det']
+            if include is not None or exclude is not None: by = 'det'
+
+        return df, by
+
     #================#
     # Helper Methods #
     #================#
+
+    def unpivot(self, df, data_name, index_cols=['sample']):
+        unpivot_cols = df.columns
+        for col in index_cols: unpivot_cols.remove(col)
+        prefix = self.get_prefix(unpivot_cols[0], data_name)
+        
+        df = (df.unpivot(index=index_cols,
+                         on=unpivot_cols,
+                         variable_name='det',
+                         value_name=data_name))
+        
+        df = df.with_columns(pl.col('det').str.strip_prefix(f"{prefix}{'_' if prefix else ''}{data_name}_").cast(int))
+        return df
+
+    def get_prefix(self, col_name, data_name):
+        ''' Get the prefix of the given column name
+
+        Assumes that the column name is of the form {prefix}_{data_name}_{tone}
+
+        Args:
+            col_name (str): Full name of the column
+            data_name(str): Data that column corresponds to (e.g., 'phase' or 'f')
+        Returns:
+            str: Prefix of the column name
+        '''
+
+        segments = 0
+        if self.tones is not None: segments -= 1
+        segments -= len(data_name.split('_'))
+        return '_'.join(col_name.split('_')[:segments])
+
     def _unnest(self, col_names):
         struct_cols = []
         if isinstance(col_names, str): col_names = [col_names]
@@ -730,23 +789,6 @@ class Data:
             return func_exclude(exclude, *args)
         else:
             return func_all(*args)
-
-    def _get_prefix(self, col_name, data_name):
-        ''' Get the prefix of the given column name
-
-        Assumes that the column name is of the form {prefix}_{data_name}_{tone}
-
-        Args:
-            col_name (str): Full name of the column
-            data_name(str): Data that column corresponds to (e.g., 'phase' or 'f')
-        Returns:
-            str: Prefix of the column name
-        '''
-
-        segments = 0
-        if self.tones is not None: segments -= 1
-        segments -= len(data_name.split('_'))
-        return '_'.join(col_name.split('_')[:segments])
 
     def _load_cfg(self, id: str) -> dict:
         '''Internal method for loading io, ext, or drone cfg file corresponding to data file.
