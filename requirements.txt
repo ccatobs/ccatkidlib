@@ -6,6 +6,8 @@ numba==0.60.0
 polars
 hvplot
 holoviews
+datashader
+pyarrow
 tqdm==4.67.1
 fabric==3.2.2
 paramiko==3.5.0
