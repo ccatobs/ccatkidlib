@@ -41,7 +41,6 @@ class R:
             init_boards (bool) : Whether to initialize RFSoC boards (default: False)
             init_drones (bool) : Whether to initialize RFSoC drones (default: False)
         '''
-
         # Load config files and setup logging
         # -----------------------------------
 
@@ -122,7 +121,6 @@ class R:
         init_drones = init_drones if init_drones is not None else self.io_cfg['init']['initialize_drones']
         if init_drones: self.setup_drones()
         rfsoc_io.send_msg('INFO', f'Communicating with drones: {self.drone_list}!')
-
         # Update Measurment Information 
         # -----------------------------
         self._update_measurement(name = self.io_cfg['name'], desc = self.io_cfg['desc'])
@@ -149,6 +147,7 @@ class R:
         rfsoc_io.save_config(self.log_dir / f'init_config_io_{self.timestamp}.yaml', self.io_cfg, self.save_cfg)
         for rfsoc_dir, cfg in zip(self.config_dirs, self.drone_cfg):
             rfsoc_io.save_config(rfsoc_dir / f'init_config_drone_{self.timestamp}.yaml', cfg, self.save_cfg)
+
 
     #################
     # Setup Methods #
@@ -1869,7 +1868,7 @@ class R:
 
             # Check if max comb power is less than max DAC power. Rescale power if specified
             if best_peak > max_power and rescale_power:
-                rfsoc_io.send_msg('DEBUG', f"The custom comb has points(s) with output power {comb_max} which exceeds the maximum DAC power of {max_power}! Rescaling to lower tone power.")
+                rfsoc_io.send_msg('WARNING', f"The custom comb has points(s) with output power {best_peak} which exceeds the maximum DAC power of {max_power}! Rescaling to lower tone power.")
                 tone_powers *= max_power/best_peak
             
             if gen_amps or rescale_power: rfsoc_io.save_array_board(bip, ssh_key, amp_path, utils.arr_to_list(tone_powers), self.tmp_dir)

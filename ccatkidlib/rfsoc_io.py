@@ -16,6 +16,7 @@ import yaml
 import logging
 import subprocess
 import numpy as np
+import traceback
 
 from pathlib import Path
 from tqdm import tqdm
@@ -46,7 +47,6 @@ def create_tree(com_to: list[str], curr_date: str, sess_id: int, data_dir: str) 
     Returns:
         tuple[list[str], list[str], list[str], list[str]]: Config directories, target directories, timestream directories, and VNA sweep directories in that order.
     '''
-
     # Create tmp directory
     data_dir = Path(data_dir)
 
@@ -156,7 +156,6 @@ def save_config(cfg_path, cfg_dic, save = True):
     Returns:
         cfg_dic (dict) : Returns dictionary that was saved to config file
     '''
-
     if save:
         # Save config file
         with open(cfg_path, 'w') as config:
@@ -183,7 +182,6 @@ def edit_config(cfg, key, value, append = False):
     Returns:
         done   (bool) : True if key was successfully created or updated.
     '''
-
     # Edit config file dictionary
     # ---------------------------
     done = utils.dict_set(cfg, key, value)
@@ -361,27 +359,29 @@ def setup_logging(log_path, file_level, terminal_level, name = __name__):
     # -------------------
 
     # Setup logging to file
-    file_log = logging.FileHandler(log_path, mode='a')
+    if not any(isinstance(handler, logging.FileHandler) for handler in logger.handlers):
+        file_log = logging.FileHandler(log_path, mode='a')
 
-    file_level = logging.getLevelName(file_level)
-    file_log.setLevel(file_level)
+        file_level = logging.getLevelName(file_level)
+        file_log.setLevel(file_level)
 
-    file_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
-    file_log.setFormatter(file_format)
+        file_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
+        file_log.setFormatter(file_format)
+        logger.addHandler(file_log)
 
     # Setup logging to terminal
-    terminal_log = logging.StreamHandler(sys.stdout)
+    if not any(isinstance(handler, tqdm_logging._TqdmLoggingHandler) for handler in logger.handlers):
+        terminal_log = tqdm_logging._TqdmLoggingHandler()
 
-    terminal_level = logging.getLevelName(terminal_level)
-    terminal_log.setLevel(terminal_level)
+        terminal_level = logging.getLevelName(terminal_level)
+        terminal_log.setLevel(terminal_level)
 
-    terminal_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
-    terminal_log.setFormatter(terminal_format)
-    
+        terminal_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
+        terminal_log.setFormatter(terminal_format)
+        logger.addHandler(terminal_log)
+        
     # Set logger level and add handlers
     logger.setLevel(min(file_level, terminal_level)) # Set logger level to the minimum of file and terminal levels
-    logger.addHandler(file_log)
-    logger.addHandler(terminal_log)
 
     # Test logging/confirm successful logger setup
     send_msg('DEBUG', "Successfully initialized logger: %s", name, name = name)
@@ -397,13 +397,7 @@ def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
     '''
     # Get logger
     logger = logging.getLogger(name)
-
-    # Fetch the level of the stream handler logging to terminal
-    # ---------------------------------------------------------
-    terminal_level = logging.getLevelName('CRITICAL') # Default to critical level if no stream handler
-    for handler in logger.handlers:
-        if isinstance(handler, logging.StreamHandler):
-            terminal_level = handler.level
+    logger.propagate = False
 
     # Try logging message
     # -------------------
@@ -411,18 +405,11 @@ def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
         log_level = logging.getLevelName(level)
         style = Style()
 
-        # Log message with given level. Redirect stdout logs to tqdm
-        with tqdm_logging.logging_redirect_tqdm(loggers=[logger]):
-            # TQDM log handler does not respect original StreamHandler level (see https://github.com/tqdm/tqdm/issues/1272) so we need to override it
-            for handler in logger.handlers:
-                if isinstance(handler, tqdm_logging._TqdmLoggingHandler):
-                    handler.setLevel(terminal_level)
-            msg = f'{style.log_begin(level, getattr(style, level))} {msg}'
-            logger.log(log_level, msg, *args) if not len(args) == 0 else logger.log(log_level, msg)
+        msg = f'{style.log_begin(level, getattr(style, level))} {msg}'
+        logger.log(log_level, msg, *args) if not len(args) == 0 else logger.log(log_level, msg)
     except Exception as e:
         # Log error message
-        with tqdm_logging.logging_redirect_tqdm(loggers=[logger]):
-            logger.log(logging.ERROR, 'Failed to log message %s with error %s!', msg, e)
+        logger.log(logging.ERROR, 'Failed to log message %s with error %s!', msg, e)
 
 def wait(t_sec, desc = ""):
     '''

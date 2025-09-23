@@ -144,6 +144,6 @@ def function_timer(func):
         time_diff = time.time() - start_time
 
         s = Style()
-        rfsoc_io.send_msg('TIMER', f'Function {s.func_name(name)} executed in {time_diff} seconds.')
+        rfsoc_io.send_msg('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper
