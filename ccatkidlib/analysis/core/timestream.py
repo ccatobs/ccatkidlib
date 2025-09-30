@@ -63,7 +63,7 @@ class Timestream(Data):
         self.end = np.inf if end < 0 else end
 
         # End time should be larger than start time
-        if not self.end - self.start > 0: 
+        if not (self.end - self.start > 0): 
             error = "End time must be greater than start time!"
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)
@@ -82,23 +82,27 @@ class Timestream(Data):
                     'y': y_dim}
 
         df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude, unpivot_x=unpivot_x) 
-        df = df.filter(~pl.col(col_dict['x']).is_nan())
+        df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
 
         # Create HoloViews plot objects
         line = df.hvplot.line(x=col_dict['x'],
                               y=col_dict['y'],
                               by=by,
-                              label='Curve')
+                              label='Curve',
+                              width=self.viz_cfg['plot']['width'],
+                              height=self.viz_cfg['plot']['height'])
 
         scatter = df.hvplot.scatter(x=col_dict['x'],
                                     y=col_dict['y'],
                                     by=by,
-                                    label='Scatter')
+                                    label='Scatter',
+                                    width=self.viz_cfg['plot']['width'],
+                                    height=self.viz_cfg['plot']['height'])
         
         overlay = hv.Overlay([line, scatter])
 
         cfg = self.drone_cfg['det_config']
-        title = rf"$${cfg['detector_type']}\ {cfg['network']}$$"
+        title = rf"${cfg['detector_type']}\ {cfg['network']}$"
 
         if not (include is None and exclude is None):
             overlay.NdOverlay.Curve.opts(opts.Curve(title=title))
@@ -111,7 +115,7 @@ class Timestream(Data):
 
     def stream_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
         overlay, df = self.plot('t', col_name, y_prefix=prefix, include=include, exclude=exclude, unpivot_x=False)
-        xlabel = r'$$Time [s]$$'
+        xlabel = r'$Time [s]$'
         ylabel = f'{prefix}_{col_name}'
 
         curve_opts = opts.Curve(xlabel=xlabel,
@@ -135,8 +139,8 @@ class Timestream(Data):
     
     def mag_plot(self, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
         overlay, df = self.plot('f', 'mag', x_prefix=x_prefix, y_prefix=y_prefix, include=include, exclude=exclude)
-        xlabel = r'$$Frequency$$'
-        ylabel = r'$$|S_{21}|$$'
+        xlabel = r'$Frequency\ [Hz]$'
+        ylabel = r'$|S_{21}|$'
 
         scatter_opts = opts.Scatter(xlabel=xlabel,
                                     ylabel=ylabel)
@@ -159,8 +163,8 @@ class Timestream(Data):
 
     def phase_plot(self, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
         overlay, df = self.plot('f', 'phase', x_prefix=x_prefix, y_prefix=y_prefix, include=include, exclude=exclude)
-        xlabel = r'$$Frequency$$'
-        ylabel = r'$$Phase [rad]$$'
+        xlabel = r'$Frequency\ [Hz]$'
+        ylabel = r'$Phase\ [rad]$'
 
         scatter_opts = opts.Scatter(xlabel=xlabel,
                                     ylabel=ylabel)
@@ -183,8 +187,8 @@ class Timestream(Data):
 
     def IQ_plot(self, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
         overlay, df = self.plot('I', 'Q', x_prefix=prefix, y_prefix=prefix, include=include, exclude=exclude)
-        xlabel = r'$$I$$'
-        ylabel = r'$$Q$$'
+        xlabel = r'$I$'
+        ylabel = r'$Q$'
 
         scatter_opts = opts.Scatter(xlabel=xlabel,
                                     ylabel=ylabel)
@@ -206,8 +210,8 @@ class Timestream(Data):
             return overlay
 
     def psd_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
-        overlay, df = self.plot('f', col_name, x_prefix=f"psd_{prefix}{'_' if prefix else ''}{col_name}",  y_prefix=f"psd{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
-        xlabel = r'$$Frequency [Hz]$$'
+        overlay, df = self.plot('psd_f', col_name, x_prefix=f"psd_{prefix}{'_' if prefix else ''}{col_name}",  y_prefix=f"psd{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
+        xlabel = r'$PSD\ Frequency\ [Hz]$'
         ylabel = f'psd_{prefix}_{col_name}'
 
         curve_opts = opts.Curve(xlabel=xlabel,
@@ -232,7 +236,7 @@ class Timestream(Data):
     
     def fft_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
         overlay, df = self.plot('f', col_name, x_prefix=f'fft',  y_prefix=f"fft{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
-        xlabel = r'$$Frequency [Hz]$$'
+        xlabel = r'$FFT\ Frequency\ [Hz]$'
         ylabel = f'fft_{prefix}_{col_name}'
 
         curve_opts = opts.Curve(xlabel=xlabel,
@@ -347,15 +351,15 @@ class Timestream(Data):
         f_cols = ['']*num_prefix
         for i, pre in enumerate(prefix):
             data_name = f"{pre}{'_' if pre else ''}{col_name[0]}"
-            f_cols[i] = f'{col_name[-1]}_{data_name}_f'
+            f_cols[i] = f'{col_name[-1]}_{data_name}_psd_f'
             col_names[i] = ['t',  data_name, f'{col_name[-1]}_{data_name}']
 
         sampling_freq = self.sampling_freq
         height = self.data.height
 
         psd_f, _ = welch(np.array([0]*height), fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
-        psd_f = psd_f[1:]
-        psd_f = pl.Series(np.pad(psd_f, (0, height - len(psd_f)), constant_values=np.nan))
+        psd_f = psd_f[1:-1]
+        psd_f = pl.Series(np.pad(psd_f, (0, height - len(psd_f)), constant_values=None))
         for f_col in f_cols:
             if recalc or not f_col in self.data.schema: self.data = self.data.with_columns(psd_f.alias(f_col))
 
@@ -387,9 +391,12 @@ class Timestream(Data):
     @staticmethod
     def calc_psd(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['t', 'phase', 'psd_phase']):
         def _psd(data):
-            _, psd = welch(data.to_numpy().T, fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
-            psd = psd[1:]
-            psd = np.pad(psd, (0, height - len(psd)), constant_values=np.nan)
+            try:
+                _, psd = welch(data.to_numpy().T, fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
+                psd = np.sqrt(psd[1:-1])
+                psd = np.pad(psd, (0, height - len(psd)), constant_values=None)
+            except:
+                psd = np.zeros(height)
             return psd
         
         if len(args) == 6:
@@ -452,7 +459,10 @@ class Timestream(Data):
         for path in sorted(self.data_path):
             if ftype == '.txt':
                 g3_root = self.analysis_cfg['file_paths']['g3_root_dir']
-                original_g3_root = self.io_cfg['file_paths']['g3_root_dir']
+                try:
+                    original_g3_root = self.io_cfg['file_paths']['g3_root_dir']
+                except KeyError:
+                    original_g3_root = self.analysis_cfg['file_paths']['original_g3_root_dir']
 
                 if not g3_root[-1] == '/': g3_root += '/'
                 if not original_g3_root[-1] == '/': original_g3_root += '/'

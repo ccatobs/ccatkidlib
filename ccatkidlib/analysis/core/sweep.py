@@ -37,6 +37,7 @@ class Sweep(Data):
                     'y': y_dim}
 
         df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude)    
+        df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
 
         tone_sample = int((self.drone_cfg['tones']['sweep_steps']-1)/2)
         df = (df.with_columns(pl.when(pl.col(col_dict['sample']) == tone_sample)
@@ -44,28 +45,31 @@ class Sweep(Data):
                                .otherwise(pl.lit('circle'))
                                .alias('markers'))
                 .with_columns(pl.when(pl.col('markers') == 'diamond_dot')
-                               .then(pl.lit(100))
-                               .otherwise(pl.lit(5))
+                               .then(pl.lit(400))
+                               .otherwise(pl.lit(20))
                                .alias('size')))
 
         # Create HoloViews plot objects
         line = df.hvplot.line(x=col_dict['x'],
                               y=col_dict['y'],
                               by=by,
-                              label='Curve')
+                              label='Curve',
+                              width=self.viz_cfg['plot']['width'],
+                              height=self.viz_cfg['plot']['height'])
 
         scatter = df.hvplot.scatter(x=col_dict['x'],
                                     y=col_dict['y'],
                                     by=by,
                                     s='size',
-                                    scale=1.5,
-                                    marker='markers',
-                                    label='Scatter')
+                                    scale=1,
+                                    label='Scatter',
+                                    width=self.viz_cfg['plot']['width'],
+                                    height=self.viz_cfg['plot']['height'])
         
         overlay = hv.Overlay([line, scatter])
 
         cfg = self.drone_cfg['det_config']
-        title = rf"$${cfg['detector_type']}\ {cfg['network']}$$"
+        title = rf"${cfg['detector_type']}\ {cfg['network']}$"
 
         if not (include is None and exclude is None):
             overlay.NdOverlay.Curve.opts(opts.Curve(title=title))
@@ -78,8 +82,8 @@ class Sweep(Data):
 
     def mag_plot(self, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
         overlay, df = self.plot('f', 'mag', y_prefix=prefix, include=include, exclude=exclude)
-        xlabel = r'$$Frequency [Hz]$$'
-        ylabel = r'$$|S_{21}|$$'
+        xlabel = r'$Frequency\ [Hz]$'
+        ylabel = r'$|S_{21}|$'
 
         curve_opts = opts.Curve(xlabel=xlabel,
                                 ylabel=ylabel)
@@ -100,8 +104,8 @@ class Sweep(Data):
     
     def phase_plot(self, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
         overlay, df = self.plot('f', 'phase', y_prefix=prefix, include=include, exclude=exclude)
-        xlabel = r'$$Frequency [Hz]$$'
-        ylabel = r'$$Phase [rad]$$'
+        xlabel = r'$Frequency\ [Hz]$'
+        ylabel = r'$Phase\ [rad]$'
 
         curve_opts = opts.Curve(xlabel=xlabel,
                                 ylabel=ylabel)
@@ -122,13 +126,15 @@ class Sweep(Data):
     
     def IQ_plot(self, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
         overlay, df = self.plot('I', 'Q', x_prefix=prefix, y_prefix=prefix, include=include, exclude=exclude)
-        xlabel = r'$$I$$'
-        ylabel = r'$$Q$$'
+        xlabel = r'$I\ [arb]$'
+        ylabel = r'$Q\ [arb]$'
 
         curve_opts = opts.Curve(xlabel=xlabel,
-                                ylabel=ylabel)
+                                ylabel=ylabel,
+                                aspect=1)
         scatter_opts = opts.Scatter(xlabel=xlabel,
-                                    ylabel=ylabel)
+                                    ylabel=ylabel,
+                                    aspect=1)
 
         if not (include is None and exclude is None):
             overlay.NdOverlay.Curve.opts(curve_opts)

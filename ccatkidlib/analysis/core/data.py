@@ -189,7 +189,7 @@ class Data:
         if self.tones is not None:
             exprs=[]
             # Timestreams never have self.tones = None but do have columns (the time columns in particular) without tones so need to handle those seperately (may be a way to add to expr pattern matching instead)
-            for no_tone_name in ['^sample$', '^t$', '^dt$', '^fft_f$', '^psd.*_f$']:
+            for no_tone_name in ['^sample$', '^t$', '^dt$', '^fft_f$', '^psd.*psd_f$']:
                 pattern = re.compile(no_tone_name)
                 for name in col_name[::-1]:
                     if pattern.match(name):
@@ -678,7 +678,11 @@ class Data:
     
     @cached_property
     def original_root(self) -> str:
-        original_root = self.io_cfg['file_paths']['root_dir']
+        try:
+            original_root = self.io_cfg['file_paths']['root_dir']
+        except:
+            # Fall back to using original root data directory specified in analysis config for old data files
+            original_root = self.analysis_cfg['file_paths']['original_root_data_dir']
         if not original_root[-1] == '/': original_root += '/'
         return original_root
 
@@ -692,12 +696,11 @@ class Data:
             value = self.drone_cfg['tones'][key]
             if isinstance(value, list):
                 value = value.real
+            elif isinstance(value, str):
+                comb_path = pair.replace_root(value, self.original_root, self.root_dir)
+                value = np.load(comb_path).real if Path(comb_path).exists() else np.zeros(self.num_tones)
             else:
-                try:
-                    comb_path = pair.replace_root(value, self.original_root, self.root_dir)
-                    value = np.load(comb_path).real
-                except:
-                    value = None
+                value = np.zeros(self.num_tones)
             comb[key] = value if self.tones is None else value[self.tones]
         comb['det'] = range(len(comb['tone_freqs'])) if self.tones is None else self.tones
         comb = pl.DataFrame(comb)
@@ -712,11 +715,12 @@ class Data:
         x_df = self.get_data([col_dict['sample'], f"{x_prefix}{'_' if x_prefix else ''}{col_dict['x']}"], include=include, exclude=exclude, strict=True)
         y_df = self.get_data([col_dict['sample'], f"{y_prefix}{'_' if y_prefix else ''}{col_dict['y']}"], include=include, exclude=exclude, strict=True)
 
-
         on, by = [col_dict['sample']], None
 
         # Convert frequency and magnitude DataFrames from wide to long
-        if self.tones is not None and unpivot_x:
+        if self.tones is None:
+            y_df = y_df.rename({f"{y_prefix}{'_' if y_prefix else ''}{col_dict['y']}": col_dict['y']})
+        elif unpivot_x:
             x_df = self.unpivot(x_df, col_dict['x'], index_cols=[col_dict['sample']])
             y_df = self.unpivot(y_df, col_dict['y'], index_cols=[col_dict['sample']])
             on += ['det']
@@ -746,7 +750,6 @@ class Data:
                          on=unpivot_cols,
                          variable_name='det',
                          value_name=data_name))
-        
         df = df.with_columns(pl.col('det').str.strip_prefix(f"{prefix}{'_' if prefix else ''}{data_name}_").cast(int))
         return df
 

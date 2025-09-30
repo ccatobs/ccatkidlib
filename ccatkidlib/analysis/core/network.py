@@ -1,5 +1,6 @@
 import concurrent.futures
 import polars as pl
+import holoviews as hv
 import time
 
 from collections.abc import Iterable
@@ -30,7 +31,7 @@ class Network:
                  include_streams: bool = True,
                  include_targs:   bool = False,
                  **kwargs):
-        ''' Initialize Network object by creating detector objects and loading them into a Polars DataFrame with the specified data columns
+        ''' Initialize Network object by creating Detector objects and loading them into a Polars DataFrame with the specified data columns
 
         Note:
             Either the full data path must be provided via the ``data_path`` key word argument or
@@ -91,11 +92,10 @@ class Network:
                     sess_dir = pair.get_sess_dir(sess_id, data_dir = data_dir, root_data_dir = self.root_dir, date = date)
                     if Path(sess_dir).exists():
                         sess_paths.append(Path(sess_dir))
-                        break
-
-            self.vnas  = {str(vna_file): None for sess_path in sess_paths for vna_file in (sess_path / 'vna' / network_dir).iterdir()}
-            self.targs = {str(targ_file): None for sess_path in sess_paths for targ_file in (sess_path / 'targ' / network_dir).iterdir()}
-            if include_streams: self.streams = {str(stream_file): None for sess_path in sess_paths for stream_file in (sess_path / 'timestream' / network_dir).iterdir()}
+                        break            
+            self.vnas  = {str(vna_file): None for sess_path in sess_paths if (vna_dir := (sess_path / 'vna' / network_dir)).exists() for vna_file in vna_dir.iterdir()}
+            self.targs = {str(targ_file): None for sess_path in sess_paths if (targ_dir := (sess_path / 'targ' / network_dir)).exists() for targ_file in targ_dir.iterdir()}
+            if include_streams: self.streams = {str(stream_file): None for sess_path in sess_paths if (stream_dir := (sess_path / 'timestream' / network_dir)).exists() for stream_file in stream_dir.iterdir()}
 
             detectors = []
             detector_types = []
@@ -132,13 +132,13 @@ class Network:
             max_workers (int, optional): Maximum number of CPU cores to use. Defaults to 1. 
         '''
         detectors = self.data.select(pl.col(['detector', 'type'])).to_numpy()
+        detector_cfgs = [[detector.stream.drone_cfg, detector.stream.ext_cfg] if detector_type == 'Timestream' else [detector.targ.drone_cfg, detector.targ.ext_cfg] for detector, detector_type in detectors]
         num_detectors = self.data.height
         data_dict = {data_col: [None]*num_detectors for data_col in data_cols}
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             future_to_batch = {executor.submit(Network._extract_data,
-                                               detector,
-                                               detector_type,
-                                               data_cols): i for i, (detector, detector_type) in enumerate(detectors)}
+                                               detector_cfg,
+                                               data_cols): i for i, detector_cfg in enumerate(detector_cfgs)}
             for future in concurrent.futures.as_completed(future_to_batch):
                 i = future_to_batch[future]
                 data = future.result()
@@ -155,6 +155,56 @@ class Network:
 
 
         return
+
+    def combine_properties(self, data_cols = []):
+        properties_df = None
+        for i, (det, *cols) in enumerate(self.data.select(['detector'] + data_cols).iter_rows()):
+            df = det.properties
+            df = df.with_columns([pl.lit(data).alias(name) for name, data in zip(data_cols, cols)])
+            properties_df = df if properties_df is None else pl.concat([properties_df, df], how='vertical')
+        return properties_df
+
+    #==================#
+    # Plotting Methods #
+    #==================#
+    
+    def plot(self, func, data_type, *args, data_cols = [], return_df = True, **kwargs):
+        '''
+        Args:
+            func (str): 
+            data_type (str):
+        '''
+        
+        # Validate data_type
+        if not data_type in ['vna', 'targ', 'stream']:
+            error = "data_type must be one of: 'vna', 'targ', or 'stream'"
+            rfsoc_io.send_msg('CRITICAL', error)
+            raise ValueError(error)
+        
+        # Parse func
+        func_parts = func.split('_')
+        if not func_parts[-1] == 'plot':
+            func_parts.append('plot')
+            func = '_'.join(func_parts)
+        
+        # Always want to return plot DataFrames
+        kwargs['return_df'] = True
+        
+        figs = [None]*self.data.height
+        plot_df = None
+        for i, (det, *cols) in enumerate(self.data.select(['detector'] + data_cols).iter_rows()):
+            data_obj = getattr(det, data_type)
+            if hasattr(data_obj, func) and callable(plot_func := getattr(data_obj, func)): 
+                fig, df = plot_func(*args, **kwargs)
+                figs[i] = fig
+                
+                df = df.with_columns([pl.lit(data).alias(name) for name, data in zip(data_cols, cols)])
+                plot_df = df if plot_df is None else pl.concat([plot_df, df], how='diagonal')
+        
+        if return_df:
+            return hv.Overlay(figs), plot_df
+        else:
+            return hv.Overlay(figs)
 
     #================#
     # Helper Methods #
@@ -199,8 +249,7 @@ class Network:
         return detectors, detector_types, detector_timestamps
     
     @staticmethod
-    def _extract_data(detector, detector_type, data_cols):
-        cfgs = [detector.stream.drone_cfg, detector.stream.ext_cfg] if detector_type == 'Timestream' else [detector.targ.drone_cfg, detector.targ.ext_cfg]
+    def _extract_data(cfgs, data_cols):
         data = [None]*len(data_cols)
         for i, col in enumerate(data_cols):
             for cfg in cfgs:
