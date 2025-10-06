@@ -146,6 +146,7 @@ class Data:
         # ------------------------------------------------------------------
         self._configs = pair.get_config(self.data_path[0], all_cfg=False)
 
+
     #=====================#
     # Data Getter Methods #
     #=====================#
@@ -745,11 +746,12 @@ class Data:
         unpivot_cols = df.columns
         for col in index_cols: unpivot_cols.remove(col)
         prefix = self.get_prefix(unpivot_cols[0], data_name)
-        
+        value_name = data_name if not data_name in df.columns else data_name*2
+
         df = (df.unpivot(index=index_cols,
                          on=unpivot_cols,
                          variable_name='det',
-                         value_name=data_name))
+                         value_name=value_name))
         df = df.with_columns(pl.col('det').str.strip_prefix(f"{prefix}{'_' if prefix else ''}{data_name}_").cast(int))
         return df
 

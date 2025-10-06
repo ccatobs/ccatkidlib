@@ -3,12 +3,13 @@
 
 # Temp data directory
 tmp/
+log/
 
 # Config files
 system_config.yaml
 drone_configs/
 
-ccatkidlib/_version.py
+_version.py
 
 
 # Byte-compiled / optimized / DLL files

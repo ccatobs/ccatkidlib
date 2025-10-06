@@ -72,6 +72,9 @@ class Timestream(Data):
         # -----------------------------
         self.packet_counts = []
 
+        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+        self._properties_df = pl.DataFrame({'det': self.tones})
+
     #==================#
     # Plotting Methods #
     #==================#
@@ -81,7 +84,8 @@ class Timestream(Data):
                     'x': x_dim,
                     'y': y_dim}
 
-        df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude, unpivot_x=unpivot_x) 
+        df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude, unpivot_x=unpivot_x)
+        col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns
         df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
 
         # Create HoloViews plot objects
@@ -306,6 +310,38 @@ class Timestream(Data):
         else:
             rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
 
+    @property
+    def properties(self):
+        # Reshape properties dictionary to have resonator properties as primary keys
+        new_dict = {'det': []}
+
+        props_dict = self._properties
+        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+
+        all_props = set([prop for props in props_dict.values() for prop in props.keys()])
+        if len(all_props) == 0: return self._properties_df
+        
+        for det, props in props_dict.items():
+            new_dict['det'].append(int(det.split('_')[-1]))
+            for prop in all_props:
+                curr = new_dict.get(prop, [])
+                value = props.get(prop, None)
+                if curr: 
+                    curr.append(value)
+                else:
+                    new_dict[prop] = [value]
+
+        new_df = pl.DataFrame(new_dict)
+        shared_cols = set(self._properties_df.columns) & set(new_df.columns) - {'det'}
+        self._properties_df = self._properties_df.drop(list(shared_cols))
+        self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
+        return self._properties_df
+    
+    @properties.setter
+    def properties(self, value):
+        if isinstance(value, pl.DataFrame):
+            self._properties_df = value
+
     @cached_property
     def sampling_freq(self):
         return self.io_cfg['boards'][f'b{self.bid}']['sampling_freq']
@@ -314,12 +350,11 @@ class Timestream(Data):
     # Data Getter Methods #
     #=====================#
 
-    def fft(self, prefix: str | list[str] = '', col_name: str = 'phase', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:        
+    def fft(self, prefix: str | list[str] = '', col_name: str = 'phase', sampling_freq=None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:        
         col_name = [col_name, 'fft']
         f_col = f'{col_name[-1]}_f'
-        if not f_col in self.data.schema: self.data = self.data.with_columns(pl.Series(
-                                                                             np.fft.fftshift(
-                                                                             np.fft.fftfreq(self.data.height, d=1/self.sampling_freq))).alias(f_col))
+        if sampling_freq is None: sampling_freq = self.sampling_freq
+        if recalc or not f_col in self.data.schema: self.data = self.data.with_columns(pl.Series(np.fft.fftshift(np.fft.fftfreq(self.data.height, d=1/sampling_freq))).alias(f_col))
 
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -337,6 +372,7 @@ class Timestream(Data):
             include: int | list[int] | None = None,
             exclude: int | list[int] | None = None,
             recalc: bool = False,
+            sampling_freq = None,
             window='hann',
             nperseg=None,
             detrend=False,
@@ -354,7 +390,7 @@ class Timestream(Data):
             f_cols[i] = f'{col_name[-1]}_{data_name}_psd_f'
             col_names[i] = ['t',  data_name, f'{col_name[-1]}_{data_name}']
 
-        sampling_freq = self.sampling_freq
+        if sampling_freq is None: sampling_freq = self.sampling_freq
         height = self.data.height
 
         psd_f, _ = welch(np.array([0]*height), fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)

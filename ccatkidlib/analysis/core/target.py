@@ -51,6 +51,9 @@ class Target(Sweep):
             error = f"Invalid type {type(tones)} for argument 'tones'. Should be int, list[int], or None."
             rfsoc_io.send_msg('CRITICAL', error)
             raise ValueError(error)
+        
+        self._properties = {f'det_{tone:04d}': {} for tone in self.tones} if tones is not None else {}
+        self._properties_df = pl.DataFrame({'det': self.tones})
 
     #==========================#
     # Lazily Loaded Attributes #
@@ -102,6 +105,40 @@ class Target(Sweep):
         else:
             rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars DataFrame!')
     
+    @property
+    def properties(self):
+        if self.tones is None: return self._properties_df
+        
+        # Reshape properties dictionary to have resonator properties as primary keys
+        new_dict = {'det': []}
+
+        props_dict = self._properties
+        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+
+        all_props = set([prop for props in props_dict.values() for prop in props.keys()])
+        if len(all_props) == 0: return self._properties_df
+        
+        for det, props in props_dict.items():
+            new_dict['det'].append(int(det.split('_')[-1]))
+            for prop in all_props:
+                curr = new_dict.get(prop, [])
+                value = props.get(prop, None)
+                if curr: 
+                    curr.append(value)
+                else:
+                    new_dict[prop] = [value]
+
+        new_df = pl.DataFrame(new_dict)
+        shared_cols = set(self._properties_df.columns) & set(new_df.columns) - {'det'}
+        self._properties_df = self._properties_df.drop(list(shared_cols))
+        self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
+        return self._properties_df
+    
+    @properties.setter
+    def properties(self, value):
+        if isinstance(value, pl.DataFrame):
+            self._properties_df = value
+
     @cached_property
     def cable_delay(self) -> dict | None:
         '''Get the cable delay of the RF chain using the phase data

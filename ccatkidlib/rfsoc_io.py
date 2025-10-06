@@ -375,27 +375,29 @@ def setup_logging(log_path, file_level, terminal_level, name = __name__):
     # -------------------
 
     # Setup logging to file
-    file_log = logging.FileHandler(log_path, mode='a')
+    if not any(isinstance(handler, logging.FileHandler) for handler in logger.handlers):
+        file_log = logging.FileHandler(log_path, mode='a')
 
-    file_level = logging.getLevelName(file_level)
-    file_log.setLevel(file_level)
+        file_level = logging.getLevelName(file_level)
+        file_log.setLevel(file_level)
 
-    file_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
-    file_log.setFormatter(file_format)
+        file_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
+        file_log.setFormatter(file_format)
+        logger.addHandler(file_log)
 
     # Setup logging to terminal
-    terminal_log = tqdm_logging._TqdmLoggingHandler()
+    if not any(isinstance(handler, tqdm_logging._TqdmLoggingHandler) for handler in logger.handlers):
+        terminal_log = tqdm_logging._TqdmLoggingHandler()
 
-    terminal_level = logging.getLevelName(terminal_level)
-    terminal_log.setLevel(terminal_level)
+        terminal_level = logging.getLevelName(terminal_level)
+        terminal_log.setLevel(terminal_level)
 
-    terminal_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
-    terminal_log.setFormatter(terminal_format)
-    
+        terminal_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
+        terminal_log.setFormatter(terminal_format)
+        logger.addHandler(terminal_log)
+        
     # Set logger level and add handlers
     logger.setLevel(min(file_level, terminal_level)) # Set logger level to the minimum of file and terminal levels
-    logger.addHandler(file_log)
-    logger.addHandler(terminal_log)
 
     # Test logging/confirm successful logger setup
     send_msg('DEBUG', "Successfully initialized logger: %s", name, name = name)

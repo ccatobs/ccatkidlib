@@ -36,7 +36,8 @@ class Sweep(Data):
                     'x': x_dim,
                     'y': y_dim}
 
-        df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude)    
+        df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude)
+        col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns    
         df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
 
         tone_sample = int((self.drone_cfg['tones']['sweep_steps']-1)/2)

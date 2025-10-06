@@ -87,10 +87,9 @@ class Detector:
         self.targ = targ
         self.vna = vna
 
+        # Create internal attributes corresponding to lazily loaded attributes
+        # ====================================================================
         self._cable_delay = cable_delay
-
-        # Fitting 
-        self._properties = {f'det_{det:04d}': {} for det in self.dets}
         self._properties_df = self.targ.comb
 
     #==========================#
@@ -99,28 +98,14 @@ class Detector:
 
     @property
     def properties(self):
-        # Reshape properties dictionary to have resonator properties as primary keys
-        new_dict = {'det': []}
-
-        props_dict = self._properties
-        self._properties = {f'det_{det:04d}': {} for det in self.dets}
-
-        all_props = set([prop for props in props_dict.values() for prop in props.keys()])
+        def _merge_properties(new_properties_df):
+            shared_cols = (set(self._properties_df.columns) & set(new_properties_df.columns)) - {'det'}
+            self._properties_df = self._properties_df.drop(list(shared_cols))
+            self._properties_df = self._properties_df.join(new_properties_df, on='det', how='full', coalesce=True)
         
-        for det, props in props_dict.items():
-            new_dict['det'].append(int(det.split('_')[-1]))
-            for prop in all_props:
-                curr = new_dict.get(prop, [])
-                value = props.get(prop, None)
-                if curr: 
-                    curr.append(value)
-                else:
-                    new_dict[prop] = [value]
-
-        new_df = pl.DataFrame(new_dict)
-        shared_cols = set(self._properties_df.columns) & set(new_df.columns) - {'det'}
-        self._properties_df = self._properties_df.drop(list(shared_cols))
-        self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
+        if self.targ._properties_df is not None: _merge_properties(self.targ.properties)
+        if self.stream is not None and self.stream._properties_df is not None: _merge_properties(self.stream.properties)
+        
         return self._properties_df
     
     @properties.setter
@@ -131,17 +116,17 @@ class Detector:
     @cached_property
     def cable_delay(self):
         self._cable_delay = self.vna.cable_delay if self._cable_delay is None and isinstance(self.vna, VNA) else self._cable_delay
-
         self.properties
 
         # Get cable delays for individual detectors using target sweep data. The target sweep cable delays tend to be too large so average with the overall network cable delay 
-        self._properties = {det: {'cable_delay': 0.4*delay + 0.6*self._cable_delay} for det, delay in self.targ.cable_delay.items()}
+        self.targ._properties = {det: {'det_cable_delay': 0.4*delay + 0.6*self._cable_delay} for det, delay in self.targ.cable_delay.items()}
         
         # Replace cable delays that are far from the overall network cable delay with the network cable delay
         self._properties_df = (self.properties.with_columns(pl.when(np.abs(pl.col('cable_delay') - self._cable_delay) > 100)
-                                                          .then(self._cable_delay)
-                                                          .otherwise(pl.col('cable_delay'))
-                                                          .alias('cable_delay')))
+                                                                .then(self._cable_delay)
+                                                                .otherwise(pl.col('cable_delay'))
+                                                                .alias('cable_delay'))
+                                              .with_columns(pl.lit(self._cable_delay).alias('network_cable_delay')))
         return self._cable_delay
 
     @cached_property
@@ -410,7 +395,6 @@ class Detector:
             phase_up (float): Upper bound of phase to use for interpolation. Defaults to +pi
             k (int): Degree of polynomials to use for interpolation. Defaults to degree 3.
         '''
-
         col_name = ['f', 'phase', 'f', 'phase']
 
         if isinstance(prefix, str): prefix = [prefix]
@@ -422,8 +406,9 @@ class Detector:
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [col_name[0], f"{pre}{'_' if pre else ''}{col_name[1]}", 'to_' + col_name[-2] + '_spline', f"to_{pre}{'_' if pre else ''}{col_name[-1]}_spline"]
-
-        args = [[self, low, up, k, max_workers] for low, up in zip(phase_low, phase_up)]
+        
+        stream_timestamp = self.stream.timestamp
+        args = [[self, low, up, k, stream_timestamp, max_workers] for low, up in zip(phase_low, phase_up)]
         self.targ.transform([Detector.calc_phase_spline]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.targ.tones))   
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.targ.get_data(col_name=([col_name[-1] for col_name in col_names] + [col_name[-2] for col_name in col_names]), include=include, exclude=exclude)
@@ -495,12 +480,12 @@ class Detector:
                         cable_fit = resonator_model_v3.fine_s21_model(struct.field(f_col).to_numpy(), result.params, cable=True)
                         best_vals_dict = {f'{col_name[-1]}_{k}': float(v) for k, v in result.best_values.items()}
                         if save_model_result: best_vals_dict[f'{col_name[-1]}_model_result'] = result
-                        self._properties[f'det_{tone:04d}'] = best_vals_dict
+                        self.targ._properties[f'det_{tone:04d}'] = best_vals_dict
                     except Exception as e:
                         rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, e)
                         best_fit = np.zeros(df.len())
                         cable_fit = np.zeros(df.len())
-                        self._properties[f'det_{tone:04d}'] = {}
+                        self.targ._properties[f'det_{tone:04d}'] = {}
                     results_dict[f'{col_name[-1]}_{I_col}'] = best_fit.real
                     results_dict[f'{col_name[-1]}_{Q_col}'] = best_fit.imag
                     results_dict[f'cable_{col_name[-1]}_{I_col}'] = cable_fit.real
@@ -553,11 +538,11 @@ class Detector:
                         if save_model_result: 
                             best_vals_dict[f'{col_name[-1]}_{prefix}_model_result'] = result
                             best_vals_dict[f'{col_name[-1]}_{prefix}_params'] = result.params
-                        self._properties[f'det_{tone:04d}'] = best_vals_dict | init_vals_dict
+                        self.targ._properties[f'det_{tone:04d}'] = best_vals_dict | init_vals_dict
                     except Exception as e:
                         rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, e)
                         best_fit = np.full(df.len(), np.nan)
-                        self._properties[f'det_{tone:04d}'] = {}
+                        self.targ._properties[f'det_{tone:04d}'] = {}
                     results_dict[f'{col_name[-1]}_{phase_col}'] = best_fit
 
             df = pl.DataFrame(results_dict)
@@ -614,11 +599,11 @@ class Detector:
                         
                         A, D, theta = result.x
                         property_vals = [I_c, Q_c, R, A, D, theta, result.optimality, result.nfev, result.njev]
-                        self._properties[f'det_{tone:04d}'] = {f'{col_name[-1]}_{prefix}_{k}': v for k, v in zip(property_keys, property_vals)}
+                        self.targ._properties[f'det_{tone:04d}'] = {f'{col_name[-1]}_{prefix}_{k}': v for k, v in zip(property_keys, property_vals)}
                     except Exception as e:
                         rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, e)
                         fit_I, fit_Q = np.zeros(df.len()), np.zeros(df.len())
-                        self._properties[f'det_{tone:04d}'] = {}
+                        self.targ._properties[f'det_{tone:04d}'] = {}
                     results_dict[f'{col_name[-1]}_{I_col}'] = fit_I
                     results_dict[f'{col_name[-1]}_{Q_col}'] = fit_Q
 
@@ -674,15 +659,15 @@ class Detector:
                         rfsoc_io.send_msg('WARNING', 'Spline calculation for tone %s failed with exception: %s', tone, e)
                         property_dict = {}
                         to_phase, to_f = np.zeros(df.len()), np.zeros(df.len())
-                    self._properties[f'det_{tone:04d}'] = property_dict
-                    results_dict[f'{interp_names[0]}_{tone:04d}'] = to_f
-                    results_dict[f'{interp_names[1]}_{tone:04d}'] = to_phase
+                    self.stream._properties[f'det_{tone:04d}'] = property_dict
+                    results_dict[f'{interp_names[0]}_{stream_timestamp}_{tone:04d}'] = to_f
+                    results_dict[f'{interp_names[1]}_{stream_timestamp}_{tone:04d}'] = to_phase
             
             df = pl.DataFrame(results_dict)
             return pl.Series(df.select(pl.struct(df.columns)))
 
-        if len(args) == 5:
-            self, phase_low, phase_up, k, max_workers = args
+        if len(args) == 6:
+            self, phase_low, phase_up, k, stream_timestamp, max_workers = args
 
             if isinstance(phase_low, float): phase_low = len(tones)*[phase_low]
             if isinstance(phase_up, float): phase_up = len(tones)*[phase_up]
