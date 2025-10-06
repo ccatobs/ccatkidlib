@@ -666,12 +666,12 @@ class Data:
             value = self.drone_cfg['tones'][key]
             if isinstance(value, list):
                 value = value.real
+            elif isinstance(value, str):
+                comb_path = pair.replace_root(value, self.original_root, self.root_dir)
+                value = np.load(comb_path).real if Path(comb_path).exists() else np.zeros(self.num_tones)
             else:
-                try:
-                    comb_path = pair.replace_root(value, self.original_root, self.root_dir)
-                    value = np.load(value).real
-                except:
-                    value = None
+                value = np.zeros(self.num_tones)
+
             comb[key] = value if self.tones is None else value[self.tones]
         comb['dets'] = range(len(comb['tone_freqs'])) if self.tones is None else self.tones
         comb = pl.DataFrame(comb)

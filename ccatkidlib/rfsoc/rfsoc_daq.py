@@ -321,7 +321,7 @@ class R:
         cfg = rfsoc_io.load_config(cfg_path)
         try:
             self.ext_cfg, self.io_cfg = cfg # Split config into external and IO config
-        except:
+        except ValueError:
             print("System config must contain two config files (an external config and an IO config)! Please reference the example system config file.")
             sys.exit()
 
@@ -1085,9 +1085,9 @@ class R:
 
                 tstream_parts = g3_file.stem.split('_')
                 tstream_name = '_'.join(tstream_parts[0:-1])
-                try:
+                try: 
                     tstream_num = int(tstream_parts[-1])
-                except:
+                except ValueError:
                     tstream_num = -1
 
                 g3_files = []
@@ -1640,7 +1640,7 @@ class R:
             try:
                 found_freq = np.load(res_dir / fname, mmap_mode='r')
                 found_num = len(found_freq)
-            except:
+            except FileNotFoundError:
                 rfsoc_io.send_msg('ERROR', f"Failed to retrieve found resonators file!")
                 found_num = None
             found_nums.append(found_num)
@@ -1748,7 +1748,6 @@ class R:
                     if not rfsoc_io.path_exists(c, path):
                         rfsoc_io.send_msg('ERROR', f"Could not find {key} custom comb file at path {path}.")
                         raise FileNotFoundError
-                    curr_comb = comb_dict[key]["comb"]
                     rfsoc_io.send_msg('DEBUG', f'Modifying {key} for drone {com}!')
                 except:
                     comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])

@@ -305,7 +305,7 @@ class Detector:
             mismatch_col_name = f'{pre}_{col_name[-1]}_angle'
             if recalc or not mismatch_col_name in self.properties.schema:
                 mismatch_df = self.targ.data.select([((np.mod(np.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").first(), pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").first()), 2*np.pi) +
-                                                        np.mod(np.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").last(), pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").last()), 2*np.pi))/2).alias(f'{tone:04d}') for tone in self.targ.tones])
+                                                        np.mod(np.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").last(), pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").last()), 2*np.pi))/2).alias(f'{tone:04d}') if tone in include else pl.lit(0).alias(f'{tone:04d}') for tone in self.targ.tones])
                 
 
                 unpivot_cols = mismatch_df.select(pl.all()).columns

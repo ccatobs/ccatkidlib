@@ -141,12 +141,14 @@ class Timestream(Data):
     # Data Getter Methods #
     #=====================#
 
-    def fft(self, prefix: str | list[str] = '', col_name: str = 'phase', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:        
+    def fft(self, prefix: str | list[str] = '', col_name: str = 'phase', sampling_freq = None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:        
         col_name = [col_name, 'fft']
         f_col = f'{col_name[-1]}_f'
+        
+        if sampling_freq is None: sampling_freq = self.sampling_freq
         if not f_col in self.data.schema: self.data = self.data.with_columns(pl.Series(
                                                                              np.fft.fftshift(
-                                                                             np.fft.fftfreq(self.data.height, d=1/self.sampling_freq))).alias(f_col))
+                                                                             np.fft.fftfreq(self.data.height, d=1/sampling_freq))).alias(f_col))
 
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -164,6 +166,7 @@ class Timestream(Data):
             include: int | list[int] | None = None,
             exclude: int | list[int] | None = None,
             recalc: bool = False,
+            sampling_freq = None,
             window='hann',
             nperseg=None,
             detrend=False,
@@ -181,7 +184,7 @@ class Timestream(Data):
             f_cols[i] = f'{col_name[-1]}_{data_name}_f'
             col_names[i] = ['t',  data_name, f'{col_name[-1]}_{data_name}']
 
-        sampling_freq = self.sampling_freq
+        if sampling_freq is None: sampling_freq = self.sampling_freq
         height = self.data.height
 
         psd_f, _ = welch(np.array([0]*height), fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
@@ -378,7 +381,6 @@ class Timestream(Data):
                 Is = np.array(Is[:])
                 Qs = np.array(Qs[:])
             except Exception as e:
-                print(e)
                 Is = []
                 Qs = []
             finally:
