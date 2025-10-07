@@ -10,9 +10,8 @@ import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.analysis.pair as pair
 
 from ccatkidlib.utils import method_timer
-from ccatkidlib.analysis.data import Data
-from ccatkidlib.analysis.sweep import Sweep
-from ccatkidlib.analysis.fit import linear_fit
+from ccatkidlib.analysis.core.sweep import Sweep
+from ccatkidlib.analysis.fit.fit import linear_fit
 
 class VNA(Sweep):
     '''Class representing a vector network analyzer (VNA) esque sweep taken with a Radio Frequency System on a Chip (RFSoC). 
@@ -23,7 +22,7 @@ class VNA(Sweep):
         cable_delay (float): Cable delay of the RF chain in nanoseconds
     '''
 
-    def __init__(self, com_to: str, analysis_cfg: str = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         kwargs['data_type'] = 'vna'
         super().__init__(com_to, analysis_cfg, **kwargs)
 
@@ -196,7 +195,7 @@ class VNA(Sweep):
 def stitch_phase(f, phase, sweep_steps, threshold, stitch_percent, result):
     '''NumPy generalized universal function for stitching vna sweep phase data to remove discontinuities from phase wrapping and bin edges.
     
-    Phase wrapping discontinuities are removed by shifting adjancent points that differ by more than the specified threshold.
+    Phase wrapping discontinuities are removed by shifting adjacent points that differ by more than the specified threshold.
     
     Bin edge discontinuities are removed by linearly fitting the edges of adjacent bins using the percent specified and using 
     the fits to determine the phase difference between the bins. The bins are then shifted to remove the phase difference.
@@ -221,6 +220,7 @@ def stitch_phase(f, phase, sweep_steps, threshold, stitch_percent, result):
             curr_shift += 2*np.pi 
         elif diff < -1*threshold:
             curr_shift -= 2*np.pi
+    phase[-1] -= curr_shift
     
     # Need to ensure that arrays are allocated in a contiguous block of memory for reshaping
     phase_bins = np.ascontiguousarray(phase).reshape((-1, sweep_steps))

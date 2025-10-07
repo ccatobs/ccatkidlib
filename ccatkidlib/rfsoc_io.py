@@ -16,6 +16,7 @@ import yaml
 import logging
 import subprocess
 import numpy as np
+import traceback
 
 from pathlib import Path
 from tqdm import tqdm
@@ -46,7 +47,6 @@ def create_tree(com_to: list[str], curr_date: str, sess_id: int, data_dir: str) 
     Returns:
         tuple[list[str], list[str], list[str], list[str]]: Config directories, target directories, timestream directories, and VNA sweep directories in that order.
     '''
-
     # Create tmp directory
     data_dir = Path(data_dir)
 
@@ -156,14 +156,13 @@ def save_config(cfg_path, cfg_dic, save = True):
     Returns:
         cfg_dic (dict) : Returns dictionary that was saved to config file
     '''
-
     if save:
         # Save config file
         with open(cfg_path, 'w') as config:
             yaml.safe_dump(cfg_dic, config, sort_keys=False, default_flow_style=None)
         
-        send_msg('DEBUG', f"Saved configuration file '{cfg_path}'!")
-        send_msg('DEBUG', f'Configuration file contents: {cfg_dic}')
+        send_msg('DEBUG', f"Saved configuration file: '{cfg_path}'!")
+        #send_msg('DEBUG', f'Configuration file contents: {cfg_dic}')
 
         # Load new config file
         with open(cfg_path, 'r') as config:
@@ -183,7 +182,6 @@ def edit_config(cfg, key, value, append = False):
     Returns:
         done   (bool) : True if key was successfully created or updated.
     '''
-
     # Edit config file dictionary
     # ---------------------------
     done = utils.dict_set(cfg, key, value)
@@ -228,15 +226,29 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = No
             files.extend(path.glob(file_id))
         files = sorted(files, key = get_creation_time, reverse = True)
 
-        # Check if creation time is within the specified time_past 
-        for file in files:
-            if 0 <= time_ref - get_creation_time(file) < time_past:
-                send_msg('DEBUG', f"Found most recent file '{file}' in {path}.")
-                return file
+        # Find file with time closest to time_ref using a binary search
+        min_ind, max_ind = 0, len(files) - 1
+        curr_ind, shifted_time, num_its = None, None, 0 
+        while max_ind >= min_ind:
+            num_its += 1
+            curr_ind = min_ind + (max_ind - min_ind)//2
+
+            shifted_time = time_ref - get_creation_time(files[curr_ind])
+            if shifted_time < 0: # If time difference is negative, then file is too new
+                min_ind = curr_ind + 1
+            elif shifted_time > 0 and not (max_ind == min_ind): # If time difference is positive, then file is a candidate but there could be more recent files
+                max_ind = curr_ind
+            else: # If no time difference between file time and reference time, there cannot be a more recent file so break out of loop
+                break 
+        # Check that most recent file satisfies time constraints
+        if 0 <= shifted_time < time_past:
+            file = files[curr_ind]
+            send_msg('DEBUG', f"Found most recent file '{file}' in {path}.")
+            return file
         else:
             raise Exception("No files found within specified time range!")
     except Exception as e:
-        send_msg('WARNING', f"Failed to fetch most recent file in '{path}' with identifier '{file_identifier}'")
+        send_msg('DEBUG', f"Failed to fetch most recent file in '{path}' with identifier '{file_identifier}' with Exception:\n{e}")
         return Path("invalid/path")
 
 def get_creation_time(file_path):
@@ -361,27 +373,29 @@ def setup_logging(log_path, file_level, terminal_level, name = __name__):
     # -------------------
 
     # Setup logging to file
-    file_log = logging.FileHandler(log_path, mode='a')
+    if not any(isinstance(handler, logging.FileHandler) for handler in logger.handlers):
+        file_log = logging.FileHandler(log_path, mode='a')
 
-    file_level = logging.getLevelName(file_level)
-    file_log.setLevel(file_level)
+        file_level = logging.getLevelName(file_level)
+        file_log.setLevel(file_level)
 
-    file_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
-    file_log.setFormatter(file_format)
+        file_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
+        file_log.setFormatter(file_format)
+        logger.addHandler(file_log)
 
     # Setup logging to terminal
-    terminal_log = logging.StreamHandler(sys.stdout)
+    if not any(isinstance(handler, tqdm_logging._TqdmLoggingHandler) for handler in logger.handlers):
+        terminal_log = tqdm_logging._TqdmLoggingHandler()
 
-    terminal_level = logging.getLevelName(terminal_level)
-    terminal_log.setLevel(terminal_level)
+        terminal_level = logging.getLevelName(terminal_level)
+        terminal_log.setLevel(terminal_level)
 
-    terminal_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
-    terminal_log.setFormatter(terminal_format)
-    
+        terminal_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
+        terminal_log.setFormatter(terminal_format)
+        logger.addHandler(terminal_log)
+        
     # Set logger level and add handlers
     logger.setLevel(min(file_level, terminal_level)) # Set logger level to the minimum of file and terminal levels
-    logger.addHandler(file_log)
-    logger.addHandler(terminal_log)
 
     # Test logging/confirm successful logger setup
     send_msg('DEBUG', "Successfully initialized logger: %s", name, name = name)
@@ -398,31 +412,17 @@ def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
     # Get logger
     logger = logging.getLogger(name)
 
-    # Fetch the level of the stream handler logging to terminal
-    # ---------------------------------------------------------
-    terminal_level = logging.getLevelName('CRITICAL') # Default to critical level if no stream handler
-    for handler in logger.handlers:
-        if isinstance(handler, logging.StreamHandler):
-            terminal_level = handler.level
-
     # Try logging message
     # -------------------
     try:
         log_level = logging.getLevelName(level)
         style = Style()
 
-        # Log message with given level. Redirect stdout logs to tqdm
-        with tqdm_logging.logging_redirect_tqdm(loggers=[logger]):
-            # TQDM log handler does not respect original StreamHandler level (see https://github.com/tqdm/tqdm/issues/1272) so we need to override it
-            for handler in logger.handlers:
-                if isinstance(handler, tqdm_logging._TqdmLoggingHandler):
-                    handler.setLevel(terminal_level)
-            msg = f'{style.log_begin(level, getattr(style, level))} {msg}'
-            logger.log(log_level, msg, *args) if not len(args) == 0 else logger.log(log_level, msg)
+        msg = f'{style.log_begin(level, getattr(style, level))} {msg}'
+        logger.log(log_level, msg, *args) if not len(args) == 0 else logger.log(log_level, msg)
     except Exception as e:
         # Log error message
-        with tqdm_logging.logging_redirect_tqdm(loggers=[logger]):
-            logger.log(logging.ERROR, 'Failed to log message %s with error %s!', msg, e)
+        logger.log(logging.ERROR, 'Failed to log message %s with error %s!', msg, e)
 
 def wait(t_sec, desc = ""):
     '''
