@@ -1,11 +1,15 @@
-# Dont want images from scripts
-*.png
-
 # Drone List
 *override_drone_list*
 
 # Temp data directory
 tmp/
+log/
+
+# Config files
+system_config.yaml
+drone_configs/
+
+_version.py
 
 
 # Byte-compiled / optimized / DLL files
@@ -33,5 +37,3 @@ docs/_build/
 profile_default/
 ipython_config.py
 
-# Version files
-*_version.py

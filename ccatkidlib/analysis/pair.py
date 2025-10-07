@@ -1,27 +1,29 @@
 #=================================#
-# rfsoc_io.py               2025 #
+# pair.py                    2025 #
 # Darshan Patel dp649@cornell.edu #
 #=================================#
 
 '''
-Library of helper functions for getting output data files of rfsoc_daq.py and pairing with corresponding configuration files.
+Library of helper functions for getting ccatkidlib data files and pairing with corresponding configuration files.
 '''
 
-from pathlib import Path
 import numpy as np
 import sys
+import pathlib
+
+from pathlib import Path
+from tqdm import tqdm
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 
-def get_timestamp(path) -> int:
-    '''
-    Extract the timestamp from a file name.
+def get_timestamp(path: str | pathlib.PosixPath) -> int:
+    '''Extract the timestamp from a ccatkidlib file name.
 
-    Parameters:
-        path (str | Path): Path of the file
+    Args:
+        path (str | pathlib.PosixPath): Path of the file
     Returns:
-        timestamp (int): Timestamp of file. -1 if no valid timestamp is found
+        int: Timestamp of the file. -1 if no valid timestamp is found
     '''
 
     try: # Check that the passed path is a string or Path object
@@ -35,11 +37,38 @@ def get_timestamp(path) -> int:
                 if tstamp > 1.7e9: return tstamp # Check that integer is a valid timestamp
             except:
                 pass
-        return -1 # Return -1 if no valid timestamp was found
+        raise ValueError(f'The file {file} has no valid timestamp.') # Raise ValueError if timestamp could not be determined
     except Exception as e: # If exception is thrown, return -1 to represent invalid path
+        rfsoc_io.send_msg('ERROR', 'Failed to determine timestamp of file %s with Exception %s', path, e)
         return -1
 
-def get_data_file(com_to, timestamp, data_dir = '**', date = '**', sess_id = '**', data_type = '**', root_data_dir = '/'):
+def get_sess_dir(sess_id, data_dir: str = '**', date: str = '**', root_data_dir: str = '/') -> str:
+    root_data_dir = Path(root_data_dir)
+    
+    file_tree = Path(data_dir) / date / sess_id
+    try:
+        # The session ID directory is unique so we can stop searching after it is found
+        # Will raise a StopIteration Error if directory is not found
+        sess_dir = str(next(root_data_dir.glob(str(file_tree))))
+    except StopIteration:
+        sess_dir = "invalid/path" 
+    return sess_dir
+
+def get_data_file(com_to: str, timestamp: str | int, data_type: str, data_dir: str = '**', date: str = '**', sess_id: str = '**', root_data_dir: str = '/') -> list[str]:
+    '''Get a ccatkidlib data file based on provided path information.
+
+    Args:
+        com_to (str): Drone that took the data. In form 'Board.Drone'
+        timestamp (str | int): Timestamp of data file
+        data_type (str): Type of data file. Should be one of 'vna', 'targ', 'timestream'. 
+        data_dir (str, optional): Directory where data is stored. Defaults to wildcard '**'
+        date (str, optional): Date data was taken. Defaults to wildcard '**'
+        sess_id (str, optional): ccatkidlib session ID of data. Defaults to wildcard '**'
+        root_data_dir (str, optional): Root directory where data is stored. Defaults to '/'
+    Returns:
+        str: Path of found data file. Returns 'invalid/path' if data file not found.
+    '''
+    
     root_data_dir = Path(root_data_dir)
 
     bid, drid = com_to.split('.')
@@ -50,16 +79,17 @@ def get_data_file(com_to, timestamp, data_dir = '**', date = '**', sess_id = '**
     for tree in file_trees:
         tree = str(tree / f'*{timestamp}*')
         data_files = sorted(root_data_dir.glob(tree))
-        if len(data_files) > 0: return data_files
-    return []
+        if len(data_files) > 0: return data_files # Return data files, return as list because multiple timestream files could be found
+    return ["invalid/path"]
 
-def get_config(path, all_cfg = False) -> list:
-    '''
-    Get the config file associated with the specified VNA sweep, target sweep, or timestream data file.
-    Parameters:
-        path (str | Path): Path of a VNA sweep, target sweep, or timestream data file
+def get_config(path: str | pathlib.PosixPath, all_cfg: bool = False) -> list[str]:
+    ''' Get the config files associated with the specified data file.
+    
+    Args:
+        path (str | pathlib.PosixPath): Path of data file
+        all_cfg (bool, optional): Whether to return config files for all drones. Defaults to False. 
     Returns:
-        cfg_path (list): List of config file paths (io_cfg, drone_cfg(s), and ext_cfg) associated with the specified data file
+        list[str]: List of config file paths (io_cfg, drone_cfg(s), and ext_cfg) associated with the specified data file
     '''
 
     timestamp = get_timestamp(path) # Get timestamp of data file
@@ -80,7 +110,7 @@ def get_config(path, all_cfg = False) -> list:
                 parts[ind] = name # If not the first iteration through loop, part of path that needs to be replaced is already known
             else:
                 for i, part in enumerate(parts): # If first iteration through loop, find part in path that needs to be replaced
-                    if any(part in data_name for data_name in data_names): # Check if part name matches any of the data_names
+                    if any(part == data_name for data_name in data_names): # Check if part name matches any of the data_names
                         parts[i] = name
                         ind = i
                         break # Should only be one part that needs to be replaced so break out of loop
@@ -96,7 +126,63 @@ def get_config(path, all_cfg = False) -> list:
                 if not all_cfg: # Find ext config if all_cfg is False (since it is not in the drone config directory)
                     ext_cfg = rfsoc_io.get_most_recent_file(cfg_path.parent, f'*{timestamp}*.yaml', time_past = np.inf) 
                     cfgs += [ext_cfg]
-                return cfgs # Return found config files
+                return list(map(str, cfgs)) # Return found config files
         return [] # Return an empty list if none of the searched config directories contain config files matching data file
     else: # Return an empty list if invalid data file is passed
         return []
+
+def get_sweep(path: str | pathlib.PosixPath, **kwargs):
+    timestamp = get_timestamp(path) # Get timestamp of data file
+
+    if not timestamp == -1: # Make sure a valid data file is passed
+        timestamp = Path(path).stat().st_ctime
+        # Get parent directory and split path into parts. Path casting is safe since already validated in get_timestamp function
+        parts = list(Path(path).parts)[:-1] 
+        
+        # Replace instance of 'vna', 'targ', or 'timestream' in data file path with 'config' or 'rfsoc' to get file path of config files
+        # ------------------------------------------------------------------------------------------------------------------------------
+        for i, part in enumerate(parts): # If first iteration through loop, find part in path that needs to be replaced
+            if part == 'timestream':
+                targ_parts = parts.copy()
+                vna_parts = parts.copy()
+
+                targ_parts[i] = 'targ'
+                vna_parts[i] = 'vna'
+
+                parts_list = [targ_parts, vna_parts]
+                break
+            elif part == 'targ':
+                parts[i] = 'vna'
+                parts_list = [parts]
+                break
+        
+        # Check config directory for matching config files
+        # ------------------------------------------------
+
+        sweeps = [None]*len(parts_list)
+        for i, parts in enumerate(parts_list):
+            sweep_path = Path(*parts)
+            sweeps[i] = rfsoc_io.get_most_recent_file(sweep_path, '*.npy', time_past = np.inf, time_ref = timestamp) 
+
+        recent_sweeps = sorted(sweeps, key = rfsoc_io.get_creation_time, reverse = True)
+        if 'targ' in recent_sweeps[0].parts:
+            for sweep in recent_sweeps:
+                if 'vna' in sweep.parts:
+                    return str(sweep), str(recent_sweeps[0])
+            else:
+                return 'invalid/path', recent_sweeps[0]
+        elif 'vna' in recent_sweeps[0].parts:
+            return  str(recent_sweeps[0]), 'invalid/path'
+        else:
+            return 'invalid/path', 'invalid/path'
+
+def replace_root(path: str | pathlib.PosixPath, old_root: str, new_root: str):
+    '''Replace the root directory of a file path with a new root
+    '''
+    path = str(path).strip()
+    new_path = path.replace(old_root, new_root)
+    if Path(new_path).exists(): 
+        return new_path
+    else:
+        rfsoc_io.send_msg('ERROR', 'Could not find file %s with original root directory %s replaced with %s', new_path, old_root, new_root)
+        return path

@@ -1,0 +1,11 @@
+from ccatkidlib.rfsoc.rfsoc_daq import R
+
+
+def main():
+    RC = R(cfg_path='/app/pcs/ccatkidlib/scripts/controller/system_config.yaml')
+    RC.find_detectors()
+    RC.take_target_sweep()
+    RC.take_timestream(60)
+
+if __name__ == "__main__":
+    main()

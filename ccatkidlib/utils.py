@@ -7,7 +7,8 @@ from datetime import datetime
 import pytz
 from tqdm import tqdm
 from functools import wraps
-from .style import Style
+from ccatkidlib.style import Style
+import ccatkidlib.rfsoc_io as rfsoc_io
 
 def convert_timestamp(timestamp, timezone = 'America/New_York'):
     timestamp = int(timestamp)
@@ -39,6 +40,7 @@ def dict_get(dic, keys):
         '''
 
         done = False
+        value = None
         for k, v in dic.items():
             if isinstance(v, dict):
                 done, value = _dict_get_r(v, key)
@@ -98,7 +100,7 @@ def dict_set(dic, keys, value):
             return False
     return _dict_set_r(dic, keys[-1], value)
 
-def convert_from_dB(power):
+def from_dB(power):
     '''
     Convert a power from dB into normal units.
     '''
@@ -107,7 +109,7 @@ def convert_from_dB(power):
     except:
         return 10**(power/20)
 
-def convert_to_dB(power):
+def to_dB(power):
     '''
     Convert a power from normal units into dB.
     '''
@@ -127,7 +129,7 @@ def method_timer(func):
         time_diff = time.time() - start_time
 
         s = Style()
-        tqdm.write(f'{s.log_begin("TIMER", Style.TIMER)} Method {s.func_name(name)} executed in {time_diff} seconds.')
+        rfsoc_io.send_msg('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper
 
@@ -142,6 +144,6 @@ def function_timer(func):
         time_diff = time.time() - start_time
 
         s = Style()
-        tqdm.write(f'{s.log_begin("TIMER", Style.TIMER)} Function {s.func_name(name)} executed in {time_diff} seconds.')
+        rfsoc_io.send_msg('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper

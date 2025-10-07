@@ -1,199 +1,247 @@
----
-sess_id: None
+#=========================================#
+# Example ccatkidlib Drone Config    2025 #
+# Darshan Patel         dp649@cornell.edu #
+#=========================================#
 
-# bid.drid (Board ID & Drone ID)
-com_to: '1.1'
-udp_source_ip: '192.168.3.50'
-udp_source_port: 4096
+# ============================================================================================= #
+# Parameters with * are measurment specific, ? are system specific, and - should not be edited  #
+# ============================================================================================= #
+
+---
+sess_id: null
+
+# Drone configuration
+com_to: '1.1'                 # ? bid.drid (Board ID & Drone ID)
+udp_source_ip: '192.168.3.50' # ? UDP IP address of drone used for timestreaming
+udp_source_port: 4096         # ? UDP port
 
 # Tone configuration
 tones:
-  NCLO: 850                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 2                 # Bandwidth of each target sweep tone
-  N_step: 500                  # Number of points of each target sweep tone
-  dB: True                     # True if tone powers are given in dB
-  num_tones: None
-  tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: 54              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
+  NCLO: 257                # * Numerically controlled local oscillator frequency (in MHz)
+  full_bandwidth: 512      # - Full bandwidth of sweeps (in MHz) (cannot change currently)
+  chan_bw: 0.5             # * Bandwidth of each target sweep tone (in MHz) 
+  sweep_steps: 500         # * Number of points of each target sweep tone
+  num_tones: null          # - Number of tones
+  tone_freqs: null         # - Tone frequencies of most recent comb 
+  tone_powers: null        # - Tone powers of most recent comb
+  tone_phis: null          # - Tone phases of most recent comb
+  custom:
+    tone_freqs: []         # * Custom tone frequencies as float, list of floats, or npy file path (in Hz)
+    tone_powers: []        # * Custom tone powers as float, list of floats, or npy file path
+    tone_phis: []          # * Custom tone phases as float, list of floats, or npy file path (in radians)
+    generation:
+      gen_attempts: 5      # * Number of attempts to randomly generate phases for given frequency and amplitude comb to minimize crest factor
+      rescale_power: False # * Whether to rescale amplitudes if power exceeds DAC limit
 
-# Attenuator configuration
+# * Attenuator configuration (if using bulit in digital attenuators)
 atten:
-  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 15 # * Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 15 # * Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
-# Detector configuration
+# * Detector configuration
 det_config:
-  detector_type: "TiN" # Material of detectors
-  nominal_num_detectors: 500
-  nominal_detector_freqs: [] # Units of Hz
+  network: "loopback"        # * Array.Network (naming convention for CCAT detector array networks, not used for anything)
+  detector_type: "loopback"  # * Material of detectors (for logging purposes, not used for anything)
+  nominal_num_detectors: 0   # * Nominal number of detectors being measured (for logging purposes, not used for anything)
+  nominal_detector_freqs: [] # * Nominal resonant frequencies of detectors being measured (for logging purposes, not used for anything)
 
-  found_num_detectors: None # Number of detectors found using find_detectors method
-  found_detector_freqs: None # Array of found detector frequencies
+  found_num_detectors: null           # * Number of detectors found using find_detectors method
+  found_detector_freqs: null          # * Found detector frequencies
+  found_detector_freqs_filtered: null # * Number of detector retained after filtering
 
+# * primecam_readout detector finding parameters
 det_find:
-  peak_prom_std: 5
+  peak_prom_std: 2
   peak_prom_db: 0
-  peak_dis: 100
+  peak_dis: 50
   width_min: 5
-  width_max: 100
+  width_max: 800
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+  filter_wn: 3
 
+
+ADC_RMS: null # * RMS power measured at the ADC
 ---
-sess_id: None
+sess_id: null
 
-# bid.drid (Board ID & Drone ID)
-com_to: '1.2'
-udp_source_ip: '192.168.3.51'
-udp_source_port: 4096
+# Drone configuration
+com_to: '1.2'                 # ? bid.drid (Board ID & Drone ID)
+udp_source_ip: '192.168.3.51' # ? UDP IP address of drone used for timestreaming
+udp_source_port: 4096         # ? UDP port
 
 # Tone configuration
 tones:
-  NCLO: 850                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 2                 # Bandwidth of each target sweep tone
-  N_step: 500                  # Number of points of each target sweep tone 
-  dB: True                     # True if tone powers are given in dB
-  num_tones: None
-  tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: 54              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
+  NCLO: 257                # * Numerically controlled local oscillator frequency (in MHz)
+  full_bandwidth: 512      # - Full bandwidth of sweeps (in MHz) (cannot change currently)
+  chan_bw: 0.5             # * Bandwidth of each target sweep tone (in MHz) 
+  sweep_steps: 500         # * Number of points of each target sweep tone
+  num_tones: null          # - Number of tones
+  tone_freqs: null         # - Tone frequencies of most recent comb 
+  tone_powers: null        # - Tone powers of most recent comb
+  tone_phis: null          # - Tone phases of most recent comb
+  custom:
+    tone_freqs: []         # * Custom tone frequencies as float, list of floats, or npy file path (in Hz)
+    tone_powers: []        # * Custom tone powers as float, list of floats, or npy file path
+    tone_phis: []          # * Custom tone phases as float, list of floats, or npy file path (in radians)
+    generation:
+      gen_attempts: 5      # * Number of attempts to randomly generate phases for given frequency and amplitude comb to minimize crest factor
+      rescale_power: False # * Whether to rescale amplitudes if power exceeds DAC limit
 
-# Attenuator configuration
+# * Attenuator configuration (if using bulit in digital attenuators)
 atten:
-  drive: 6 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 15 # * Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 15 # * Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
-# Detector configuration
+# * Detector configuration
 det_config:
-  detector_type: "TiN" # Material of detectors
-  nominal_num_detectors: 500
-  nominal_detector_freqs: [] # Units of Hz
+  network: "loopback"        # * Array.Network (naming convention for CCAT detector array networks, not used for anything)
+  detector_type: "loopback"  # * Material of detectors (for logging purposes, not used for anything)
+  nominal_num_detectors: 0   # * Nominal number of detectors being measured (for logging purposes, not used for anything)
+  nominal_detector_freqs: [] # * Nominal resonant frequencies of detectors being measured (for logging purposes, not used for anything)
 
-  found_num_detectors: None # Number of detectors found using find_detectors method
-  found_detector_freqs: None # Array of found detector frequencies
+  found_num_detectors: null           # * Number of detectors found using find_detectors method
+  found_detector_freqs: null          # * Found detector frequencies
+  found_detector_freqs_filtered: null # * Number of detector retained after filtering
 
+# * primecam_readout detector finding parameters
 det_find:
-  peak_prom_std: 5
+  peak_prom_std: 2
   peak_prom_db: 0
-  peak_dis: 100
+  peak_dis: 50
   width_min: 5
-  width_max: 100
+  width_max: 800
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+  filter_wn: 3
 
+
+ADC_RMS: null # * RMS power measured at the ADC
 ---
-sess_id: None
+sess_id: null
 
-# bid.drid (Board ID & Drone ID)
-com_to: '1.3'
-udp_source_ip: '192.168.3.52'
-udp_source_port: 4096
-
+# Drone configuration
+com_to: '1.3'                 # ? bid.drid (Board ID & Drone ID)
+udp_source_ip: '192.168.3.52' # ? UDP IP address of drone used for timestreaming
+udp_source_port: 4096         # ? UDP port
 
 # Tone configuration
 tones:
-  NCLO: 500                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 2                 # Bandwidth of each target sweep tone
-  N_step: 500                  # Number of points of each target sweep tone
-  dB: True                     # True if tone powers are given in dB
-  num_tones: None
-  tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: 54              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
+  NCLO: 257                # * Numerically controlled local oscillator frequency (in MHz)
+  full_bandwidth: 512      # - Full bandwidth of sweeps (in MHz) (cannot change currently)
+  chan_bw: 0.5             # * Bandwidth of each target sweep tone (in MHz) 
+  sweep_steps: 500         # * Number of points of each target sweep tone
+  num_tones: null          # - Number of tones
+  tone_freqs: null         # - Tone frequencies of most recent comb 
+  tone_powers: null        # - Tone powers of most recent comb
+  tone_phis: null          # - Tone phases of most recent comb
+  custom:
+    tone_freqs: []         # * Custom tone frequencies as float, list of floats, or npy file path (in Hz)
+    tone_powers: []        # * Custom tone powers as float, list of floats, or npy file path
+    tone_phis: []          # * Custom tone phases as float, list of floats, or npy file path (in radians)
+    generation:
+      gen_attempts: 5      # * Number of attempts to randomly generate phases for given frequency and amplitude comb to minimize crest factor
+      rescale_power: False # * Whether to rescale amplitudes if power exceeds DAC limit
 
-# Attenuator configuration
+# * Attenuator configuration (if using bulit in digital attenuators)
 atten:
-  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 15 # * Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 15 # * Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
-# Detector configuration
+# * Detector configuration
 det_config:
-  detector_type: "TiN" # Material of detectors
-  nominal_num_detectors: 500
-  nominal_detector_freqs: [] # Units of Hz
+  network: "loopback"        # * Array.Network (naming convention for CCAT detector array networks, not used for anything)
+  detector_type: "loopback"  # * Material of detectors (for logging purposes, not used for anything)
+  nominal_num_detectors: 0   # * Nominal number of detectors being measured (for logging purposes, not used for anything)
+  nominal_detector_freqs: [] # * Nominal resonant frequencies of detectors being measured (for logging purposes, not used for anything)
 
-  found_num_detectors: None # Number of detectors found using find_detectors method
-  found_detector_freqs: None # Array of found detector frequencies
+  found_num_detectors: null           # * Number of detectors found using find_detectors method
+  found_detector_freqs: null          # * Found detector frequencies
+  found_detector_freqs_filtered: null # * Number of detector retained after filtering
 
+# * primecam_readout detector finding parameters
 det_find:
-  peak_prom_std: 5
+  peak_prom_std: 2
   peak_prom_db: 0
-  peak_dis: 100
+  peak_dis: 50
   width_min: 5
-  width_max: 100
+  width_max: 800
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
----
-sess_id: None
+  filter_wn: 3
 
-# bid.drid (Board ID & Drone ID)
-com_to: '1.4'
-udp_source_ip: '192.168.3.53'
-udp_source_port: 4096
+
+ADC_RMS: null # * RMS power measured at the ADC
+---
+sess_id: null
+
+# Drone configuration
+com_to: '1.4'                 # ? bid.drid (Board ID & Drone ID)
+udp_source_ip: '192.168.3.53' # ? UDP IP address of drone used for timestreaming
+udp_source_port: 4096         # ? UDP port
 
 # Tone configuration
 tones:
-  NCLO: 500                    # Numerically controlled oscillator frequency (in MHz)
-  bandwidth: 2                 # Bandwidth of each target sweep tone
-  N_step: 500                  # Number of points of each target sweep tone
-  dB: True                     # True if tone powers are given in dB
-  num_tones: None
-  tone_freqs: []               # Tone frequencies used for target sweep
-  tone_powers: 54              # Tone powers used for target sweep
-  tone_phis: []                # Tone phases used for target sweep
+  NCLO: 257                # * Numerically controlled local oscillator frequency (in MHz)
+  full_bandwidth: 512      # - Full bandwidth of sweeps (in MHz) (cannot change currently)
+  chan_bw: 0.5             # * Bandwidth of each target sweep tone (in MHz) 
+  sweep_steps: 500         # * Number of points of each target sweep tone
+  num_tones: null          # - Number of tones
+  tone_freqs: null         # - Tone frequencies of most recent comb 
+  tone_powers: null        # - Tone powers of most recent comb
+  tone_phis: null          # - Tone phases of most recent comb
+  custom:
+    tone_freqs: []         # * Custom tone frequencies as float, list of floats, or npy file path (in Hz)
+    tone_powers: []        # * Custom tone powers as float, list of floats, or npy file path
+    tone_phis: []          # * Custom tone phases as float, list of floats, or npy file path (in radians)
+    generation:
+      gen_attempts: 5      # * Number of attempts to randomly generate phases for given frequency and amplitude comb to minimize crest factor
+      rescale_power: False # * Whether to rescale amplitudes if power exceeds DAC limit
 
-# Attenuator configuration
+# * Attenuator configuration (if using bulit in digital attenuators)
 atten:
-  drive: 10 # Drive (DAC) attenuation in dB (float between 0 and 31.75)
-  sense: 2  # Sense (ADC) attenuation in dB (float between 0 and 31.75)
+  drive: 15 # * Drive (DAC) attenuation in dB (float between 0 and 31.75)
+  sense: 15 # * Sense (ADC) attenuation in dB (float between 0 and 31.75)
 
-# Detector configuration
+# * Detector configuration
 det_config:
-  detector_type: "TiN" # Material of detectors
-  nominal_num_detectors: 500
-  nominal_detector_freqs: [] # Units of Hz
+  network: "loopback"        # * Array.Network (naming convention for CCAT detector array networks, not used for anything)
+  detector_type: "loopback"  # * Material of detectors (for logging purposes, not used for anything)
+  nominal_num_detectors: 0   # * Nominal number of detectors being measured (for logging purposes, not used for anything)
+  nominal_detector_freqs: [] # * Nominal resonant frequencies of detectors being measured (for logging purposes, not used for anything)
 
-  found_num_detectors: None # Number of detectors found using find_detectors method
-  found_detector_freqs: None   # Array of found detector frequencies
+  found_num_detectors: null           # * Number of detectors found using find_detectors method
+  found_detector_freqs: null          # * Found detector frequencies
+  found_detector_freqs_filtered: null # * Number of detector retained after filtering
 
+# * primecam_readout detector finding parameters
 det_find:
-  peak_prom_std: 5
+  peak_prom_std: 2
   peak_prom_db: 0
-  peak_dis: 100
+  peak_dis: 50
   width_min: 5
-  width_max: 100
+  width_max: 800
   stitch: True
   stitch_sw: 100
   continuum_wn: 300
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+  filter_wn: 3
+
+
+ADC_RMS: null # * RMS power measured at the ADC
 ...
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

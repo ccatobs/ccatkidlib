@@ -1,0 +1,171 @@
+import gc
+import sys
+import numpy as np
+import polars as pl
+from numba import njit
+
+from functools import cached_property
+from collections.abc import Iterable
+from pathlib import Path
+
+from bokeh.layouts import layout
+from bokeh.io import show
+from bokeh.plotting import curdoc
+
+
+# Local Imports
+import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.utils as utils
+import ccatkidlib.analysis.pair as pair
+
+from ccatkidlib.analysis.core.sweep import Sweep
+from ccatkidlib.analysis.fit.fit import linear_fit
+
+
+class Target(Sweep):
+    '''Class representing a target sweep taken with a Radio Frequency System on a Chip (RFSoC)
+    
+    Subclasses Sweep.
+    '''
+
+    def __init__(self, com_to: str, tones: int | list[int] | None = None, analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+        '''Subclass of Sweep with additional arguments
+
+        Args:
+            tones (int | list[int] | None, optional): Which tones to load. None for loading all data without splitting into individual tones. -1 for all data split into individual tones. Defaults to None
+        '''
+        kwargs['data_type'] = 'targ'
+        super().__init__(com_to, analysis_cfg, **kwargs)
+        
+        # Parse 'tone' argument specifying which tones should be loaded
+        # -------------------------------------------------------------
+        if isinstance(tones, int): 
+            if tones >= 0: 
+                tones = [tones]
+            else:
+                tones = list(range(self.num_tones))
+
+        if tones is None or isinstance(tones, Iterable):
+            self.tones = tones
+        else:
+            error = f"Invalid type {type(tones)} for argument 'tones'. Should be int, list[int], or None."
+            rfsoc_io.send_msg('CRITICAL', error)
+            raise ValueError(error)
+        
+        self._properties = {f'det_{tone:04d}': {} for tone in self.tones} if tones is not None else {}
+        self._properties_df = pl.DataFrame({'det': self.tones})
+
+    #==========================#
+    # Lazily Loaded Attributes #
+    #==========================#
+    
+    @property
+    def data(self):
+        if self._data is None:
+            data = super().data # Get DataFrame of sweep data 
+            tones = self.tones # Define local variable since it will be used often
+
+            if tones is not None: # Run if a specific tone(s) is specified
+                data = data.to_numpy().T
+                try:
+                    sweep_steps = self.drone_cfg['tones']['sweep_steps']
+                except KeyError:
+                    sweep_steps = self.drone_cfg['tones']['N_step']    
+
+                data = data[1:].reshape((3, -1, sweep_steps))
+                num_tones = len(tones)
+
+                try:
+                    fs, Is, Qs = [None]*num_tones, [None]*num_tones, [None]*num_tones
+                    for i, t in enumerate(tones):
+                        f, I, Q = data[:, t, :]
+                        fs[i] = f
+                        Is[i] = I
+                        Qs[i] = Q
+                    fs, Is, Qs = np.array(fs), np.array(Is), np.array(Qs)
+                except Exception as e:
+                    fs, Is, Qs = [None]*num_tones, [None]*num_tones, [None]*num_tones
+                    rfsoc_io.send_msg('ERROR', 'Failed to reshape data array with error %s.', e)
+
+                data_dict = {'sample': range(sweep_steps)}
+                for t, f, I, Q in zip(tones, fs, Is, Qs):
+                    data_dict[(f'f_{t:04d}')] = f
+                    data_dict[(f'I_{t:04d}')] = I
+                    data_dict[(f'Q_{t:04d}')] = Q
+                df = pl.DataFrame(data_dict)
+            else:
+                df = data
+            self._data = df 
+        return self._data
+
+    @data.setter
+    def data(self, value: pl.lazyframe.frame.LazyFrame | None): 
+        if value is None or isinstance(value, pl.dataframe.frame.DataFrame): 
+            self._data = value
+        else:
+            rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars DataFrame!')
+    
+    @property
+    def properties(self):
+        if self.tones is None: return self._properties_df
+        
+        # Reshape properties dictionary to have resonator properties as primary keys
+        new_dict = {'det': []}
+
+        props_dict = self._properties
+        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+
+        all_props = set([prop for props in props_dict.values() for prop in props.keys()])
+        if len(all_props) == 0: return self._properties_df
+        
+        for det, props in props_dict.items():
+            new_dict['det'].append(int(det.split('_')[-1]))
+            for prop in all_props:
+                curr = new_dict.get(prop, [])
+                value = props.get(prop, None)
+                if curr: 
+                    curr.append(value)
+                else:
+                    new_dict[prop] = [value]
+
+        new_df = pl.DataFrame(new_dict)
+        shared_cols = set(self._properties_df.columns) & set(new_df.columns) - {'det'}
+        self._properties_df = self._properties_df.drop(list(shared_cols))
+        self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
+        return self._properties_df
+    
+    @properties.setter
+    def properties(self, value):
+        if isinstance(value, pl.DataFrame):
+            self._properties_df = value
+
+    @cached_property
+    def cable_delay(self) -> dict | None:
+        '''Get the cable delay of the RF chain using the phase data
+
+        Returns:
+            float: The cable delay in nanoseconds
+        '''
+
+        @njit(cache=True)
+        def _calc_cable_delay(f, phase):
+            window = int(0.1*len(f))
+            cable_delay_low, _ = linear_fit(f[:window], phase[:window])
+            cable_delay_high, _ = linear_fit(f[-window:], phase[-window:])
+            cable_delay = (cable_delay_high + cable_delay_low)/2
+            return cable_delay*1e9/(2*np.pi)
+
+        tones = self.tones
+        if tones is None: 
+            cable_delay = None
+        else:
+            self.phase()
+            cable_delay = {f'det_{tone:04d}': self.data.select(pl.struct([f'f_{tone:04d}', f'phase_{tone:04d}'])
+                                                       .map_batches(lambda arrs: _calc_cable_delay(arrs.struct.field(f'f_{tone:04d}').to_numpy(), arrs.struct.field(f'phase_{tone:04d}').to_numpy()),
+                                                       returns_scalar=True, return_dtype=pl.Float64,)).item() for tone in tones}
+        return cable_delay
+    
+    #==================#
+    # Plotting Methods #
+    #==================#
+

@@ -1,0 +1,80 @@
+---
+sess_id: None
+
+# Config of output tones
+rfsoc_tones:
+  drone_NCLO: 625 # Center local oscillator frequency of drone in MHz
+  num_tones: 0  
+  bandwidth: 5 # Bandwidth of target sweep in MHz
+  N_steps: 300 # Number of points per tone
+  dB: True # True if tone powers are in dB
+  tone_powers: []
+  tone_freqs: []
+  tone_phis: []
+
+# Configuration parameters of MKID detectors
+det_config:
+  detector_type: "TiN" # Material of detectors
+  nominal_num_detectors: 0
+  nominal_detector_freqs: [] # Units of Hz
+  found_num_detectors: None # None if unknown
+  found_detector_freqs: None # Array of frequencies in Hz, None if unknown
+
+# Configuration parameters of readout system
+sys_config:
+  cable_delay: None # Units of seconds, None if unknown
+  pre_warm_amp_atten: 12 # In dB
+  post_warm_amp_atten: 10 # In dB
+  nominal_bath_temp: 80 # In mK
+  actual_bath_temp: None # None if unknown
+  
+# Polarization Grid Config
+pol_config:
+  centered_dets: None # Which pair of detectors are centered
+  angle: None # Current angle of the polarized grid
+  shift_factor: 1.6 # If use FWHM/2, determines what factor of FWHM/2 to shift by. Pos to shift left, Neg to shift right
+  source_on: True # Whether the IR source is on
+  source_freq: 10 # Frequency of the IR source in Hz
+  source_voltage: 8 # Voltage of the IR source in Volts
+  source_duty_cycle: 50 # Duty-cycle of the IR source square wave as a percent 
+
+---
+sess_id: None
+
+# Config of RFSoC IO
+rfsoc_io:
+  com_to: '1.1' # Board.Drone of RFSoC to use 
+  board_ip: "192.168.2.98"
+  udp_ip: "192.168.3.40"
+  udp_port: 4096
+  sampling_freq: '512e6/(2**20)' # Sampling frequency of RFSoC timestream
+
+# File paths
+file_paths:
+  analysis_code_dir: "./../../analysis/"
+  base_data_dir: "/home/rfsoc/rfsoc_result/polarization/data/"
+  tmp_data_dir: "/home/rfsoc/primecam_readout/src/tmp"
+  primecam_readout: "/home/rfsoc/primecam_readout/src/"
+  rfsoc_data_dir: "xilinx@192.168.2.98:/home/xilinx/primecam_readout/drones/drone1/"
+  pcs_dir: "/home/rfsoc/ocs-site-configs/cornell/pisco/clients/"
+
+# File names
+file_names:
+  stream_fname: 'tstream_{self.timestamp}'
+  targ_fname: 'targ_{self.timestamp}'
+  vna_fname: 'vna_{self.timestamp}'
+
+# PCS agent IDs
+pcs_agents:
+  rfsoc_agent: "queenagent"
+  pol_agent: "PBM"
+
+# Runtime IO config
+io:
+  logging_level: 'INFO'
+  logging_fname: "rfsoc_daq_log.txt"
+  terminal_output: True
+  save_data: True
+  save_config_copy: True
+  max_file_size: 5e7 # Max file size of timestreams in bytes
+...
