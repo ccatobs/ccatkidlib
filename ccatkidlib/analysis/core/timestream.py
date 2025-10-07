@@ -1,27 +1,26 @@
-import gc
 import so3g
 import numpy as np
 import polars as pl
-import multiprocessing as mp
-import pickle
 import time
 
 from scipy.signal import welch
-from multiprocessing import Pool, shared_memory, Lock
-from functools import partial, cached_property
+from functools import cached_property
 from pathlib import Path
 from collections.abc import Iterable
 from spt3g import core
-from numba import guvectorize, float64
+
+import holoviews as hv
+import datashader as ds
+from holoviews import opts
+from holoviews.operation.datashader import rasterize, datashade, dynspread
+
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.pair as pair
-import ccatkidlib.analysis.plot_utils as putils
 
-from ccatkidlib.analysis.mp_utils import init_worker, clear_shared_mem, frame_worker
-from ccatkidlib.analysis.data import Data
+from ccatkidlib.analysis.core.data import Data
 from ccatkidlib.utils import method_timer
 
 
@@ -29,7 +28,7 @@ class Timestream(Data):
     '''Class representing a timestream taken with a Radio Frequency System on a Chip
     '''
 
-    def __init__(self, com_to, tones = -1, start = 0, end = -1, analysis_cfg = str(Path(__file__).parent / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to, tones = -1, start = 0, end = -1, analysis_cfg = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         '''
         Constructor for Timestream. 
 
@@ -43,19 +42,6 @@ class Timestream(Data):
         '''
         kwargs['data_type'] = 'timestream'
         super().__init__(com_to, analysis_cfg, **kwargs)
-        
-
-        self.mp = False
-        self.processes = None
-        self.chunk_size = None
-        for key, value in kwargs.items():
-            if key == 'mp':
-                self.mp = value
-            elif key == 'processes':
-                self.processes = value
-            elif key == 'chunk_size':
-                self.chunk_size = value
-
 
         # Define array of resonator numbers
         # ---------------------------------
@@ -77,7 +63,7 @@ class Timestream(Data):
         self.end = np.inf if end < 0 else end
 
         # End time should be larger than start time
-        if not self.end - self.start > 0: 
+        if not (self.end - self.start > 0): 
             error = "End time must be greater than start time!"
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)
@@ -86,6 +72,197 @@ class Timestream(Data):
         # -----------------------------
         self.packet_counts = []
 
+        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+        self._properties_df = pl.DataFrame({'det': self.tones})
+
+    #==================#
+    # Plotting Methods #
+    #==================#
+
+    def plot(self, x_dim, y_dim, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, unpivot_x=True):
+        col_dict = {'sample': 'sample',
+                    'x': x_dim,
+                    'y': y_dim}
+
+        df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude, unpivot_x=unpivot_x)
+        col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns
+        df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
+
+        # Create HoloViews plot objects
+        line = df.hvplot.line(x=col_dict['x'],
+                              y=col_dict['y'],
+                              by=by,
+                              label='Curve',
+                              width=self.viz_cfg['plot']['width'],
+                              height=self.viz_cfg['plot']['height'])
+
+        scatter = df.hvplot.scatter(x=col_dict['x'],
+                                    y=col_dict['y'],
+                                    by=by,
+                                    label='Scatter',
+                                    width=self.viz_cfg['plot']['width'],
+                                    height=self.viz_cfg['plot']['height'])
+        
+        overlay = hv.Overlay([line, scatter])
+
+        cfg = self.drone_cfg['det_config']
+        title = rf"${cfg['detector_type']}\ {cfg['network']}$"
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Curve.opts(opts.Curve(title=title))
+            overlay.NdOverlay.Scatter.opts(opts.Scatter(title=title))
+        else:
+            overlay.Curve.Curve.opts(opts.Curve(title=title))
+            overlay.Scatter.Scatter.opts(opts.Scatter(title=title))
+
+        return overlay, df
+
+    def stream_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+        overlay, df = self.plot('t', col_name, y_prefix=prefix, include=include, exclude=exclude, unpivot_x=False)
+        xlabel = r'$Time [s]$'
+        ylabel = f'{prefix}_{col_name}'
+
+        curve_opts = opts.Curve(xlabel=xlabel,
+                                ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Curve.opts(curve_opts)
+            overlay = overlay.NdOverlay.Curve
+            aggregator = ds.by('det', ds.count())
+        else:
+            overlay.Curve.Curve.opts(curve_opts)
+            overlay = overlay.Curve.Curve
+            aggregator = ds.count()
+        
+        if rasterize: overlay = datashade(overlay, aggregator=aggregator)
+        
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+    
+    def mag_plot(self, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+        overlay, df = self.plot('f', 'mag', x_prefix=x_prefix, y_prefix=y_prefix, include=include, exclude=exclude)
+        xlabel = r'$Frequency\ [Hz]$'
+        ylabel = r'$|S_{21}|$'
+
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay = overlay.NdOverlay.Scatter
+            aggregator = ds.by('det', ds.count())
+        else:
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay = overlay.Scatter.Scatter
+            aggregator = ds.count()
+        
+        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+
+    def phase_plot(self, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+        overlay, df = self.plot('f', 'phase', x_prefix=x_prefix, y_prefix=y_prefix, include=include, exclude=exclude)
+        xlabel = r'$Frequency\ [Hz]$'
+        ylabel = r'$Phase\ [rad]$'
+
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay = overlay.NdOverlay.Scatter
+            aggregator = ds.by('det', ds.count())
+        else:
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay = overlay.Scatter.Scatter
+            aggregator = ds.count()
+        
+        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+
+    def IQ_plot(self, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+        overlay, df = self.plot('I', 'Q', x_prefix=prefix, y_prefix=prefix, include=include, exclude=exclude)
+        xlabel = r'$I$'
+        ylabel = r'$Q$'
+
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay = overlay.NdOverlay.Scatter
+            aggregator = ds.by('det', ds.count())
+        else:
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay = overlay.Scatter.Scatter
+            aggregator = ds.count()
+        
+        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+
+    def psd_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
+        overlay, df = self.plot('psd_f', col_name, x_prefix=f"psd_{prefix}{'_' if prefix else ''}{col_name}",  y_prefix=f"psd{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
+        xlabel = r'$PSD\ Frequency\ [Hz]$'
+        ylabel = f'psd_{prefix}_{col_name}'
+
+        curve_opts = opts.Curve(xlabel=xlabel,
+                                ylabel=ylabel)
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Curve.opts(curve_opts)
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay.NdOverlay.opts(logx=True, logy=True)
+        else:
+            overlay.Curve.Curve.opts(curve_opts)
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay.Curve.opts(logx=True, logy=True)
+            overlay.Scatter.opts(logx=True, logy=True)
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+    
+    def fft_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
+        overlay, df = self.plot('f', col_name, x_prefix=f'fft',  y_prefix=f"fft{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
+        xlabel = r'$FFT\ Frequency\ [Hz]$'
+        ylabel = f'fft_{prefix}_{col_name}'
+
+        curve_opts = opts.Curve(xlabel=xlabel,
+                                ylabel=ylabel)
+        scatter_opts = opts.Scatter(xlabel=xlabel,
+                                    ylabel=ylabel)
+
+        if not (include is None and exclude is None):
+            overlay.NdOverlay.Curve.opts(curve_opts)
+            overlay.NdOverlay.Scatter.opts(scatter_opts)
+            overlay.NdOverlay.opts(logy=True)
+        else:
+            overlay.Curve.Curve.opts(curve_opts)
+            overlay.Scatter.Scatter.opts(scatter_opts)
+            overlay.Curve.opts(logy=True)
+            overlay.Scatter.opts(logy=True)
+
+        if return_df:
+            return overlay, df
+        else:
+            return overlay
+    
     #==========================#
     # Lazily Loaded Attributes #
     #==========================#
@@ -97,7 +274,7 @@ class Timestream(Data):
         '''
 
         if self._data is None:
-            ftype = self.data_path[0].suffix
+            ftype = Path(self.data_path[0]).suffix
             data = {}
 
             # Load g3 timestreams
@@ -133,6 +310,38 @@ class Timestream(Data):
         else:
             rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
 
+    @property
+    def properties(self):
+        # Reshape properties dictionary to have resonator properties as primary keys
+        new_dict = {'det': []}
+
+        props_dict = self._properties
+        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+
+        all_props = set([prop for props in props_dict.values() for prop in props.keys()])
+        if len(all_props) == 0: return self._properties_df
+        
+        for det, props in props_dict.items():
+            new_dict['det'].append(int(det.split('_')[-1]))
+            for prop in all_props:
+                curr = new_dict.get(prop, [])
+                value = props.get(prop, None)
+                if curr: 
+                    curr.append(value)
+                else:
+                    new_dict[prop] = [value]
+
+        new_df = pl.DataFrame(new_dict)
+        shared_cols = set(self._properties_df.columns) & set(new_df.columns) - {'det'}
+        self._properties_df = self._properties_df.drop(list(shared_cols))
+        self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
+        return self._properties_df
+    
+    @properties.setter
+    def properties(self, value):
+        if isinstance(value, pl.DataFrame):
+            self._properties_df = value
+
     @cached_property
     def sampling_freq(self):
         return self.io_cfg['boards'][f'b{self.bid}']['sampling_freq']
@@ -141,14 +350,11 @@ class Timestream(Data):
     # Data Getter Methods #
     #=====================#
 
-    def fft(self, prefix: str | list[str] = '', col_name: str = 'phase', sampling_freq = None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:        
+    def fft(self, prefix: str | list[str] = '', col_name: str = 'phase', sampling_freq=None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:        
         col_name = [col_name, 'fft']
         f_col = f'{col_name[-1]}_f'
-        
         if sampling_freq is None: sampling_freq = self.sampling_freq
-        if not f_col in self.data.schema: self.data = self.data.with_columns(pl.Series(
-                                                                             np.fft.fftshift(
-                                                                             np.fft.fftfreq(self.data.height, d=1/sampling_freq))).alias(f_col))
+        if recalc or not f_col in self.data.schema: self.data = self.data.with_columns(pl.Series(np.fft.fftshift(np.fft.fftfreq(self.data.height, d=1/sampling_freq))).alias(f_col))
 
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -181,21 +387,22 @@ class Timestream(Data):
         f_cols = ['']*num_prefix
         for i, pre in enumerate(prefix):
             data_name = f"{pre}{'_' if pre else ''}{col_name[0]}"
-            f_cols[i] = f'{col_name[-1]}_{data_name}_f'
+            f_cols[i] = f'{col_name[-1]}_{data_name}_psd_f'
             col_names[i] = ['t',  data_name, f'{col_name[-1]}_{data_name}']
 
         if sampling_freq is None: sampling_freq = self.sampling_freq
         height = self.data.height
 
         psd_f, _ = welch(np.array([0]*height), fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
-        psd_f = pl.Series(np.pad(psd_f, (0, height - len(psd_f)), constant_values=np.nan))
+        psd_f = psd_f[1:-1]
+        psd_f = pl.Series(np.pad(psd_f, (0, height - len(psd_f)), constant_values=None))
         for f_col in f_cols:
             if recalc or not f_col in self.data.schema: self.data = self.data.with_columns(psd_f.alias(f_col))
 
         args = [[sampling_freq, height, window, nperseg, detrend, average]]*num_prefix # Allow different psd args to be passed for each prefix?
         self.transform([Timestream.calc_psd]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         self.data = self._unnest(col_name[-1])
-        return self.get_data(col_name=f_cols + [col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+        return self.get_data(col_name =  [col_name[-1] for col_name in col_names], include=include, exclude=exclude)
    
     #==================#
     # Analysis Methods #
@@ -204,7 +411,7 @@ class Timestream(Data):
     @staticmethod
     def calc_fft(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['t', 'phase', 'fft_phase']):
         def _fft(data):
-            return np.abs(np.fft.fft(data))
+            return np.abs(np.fft.fftshift(np.fft.fft(data)))
         
         if tones is not None:
             tone = tones[0]
@@ -220,8 +427,12 @@ class Timestream(Data):
     @staticmethod
     def calc_psd(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['t', 'phase', 'psd_phase']):
         def _psd(data):
-            _, psd = welch(data.to_numpy().T, fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
-            psd = np.pad(psd, (0, height - len(psd)), constant_values=np.nan)
+            try:
+                _, psd = welch(data.to_numpy().T, fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
+                psd = np.sqrt(psd[1:-1])
+                psd = np.pad(psd, (0, height - len(psd)), constant_values=None)
+            except:
+                psd = np.zeros(height)
             return psd
         
         if len(args) == 6:
@@ -284,7 +495,10 @@ class Timestream(Data):
         for path in sorted(self.data_path):
             if ftype == '.txt':
                 g3_root = self.analysis_cfg['file_paths']['g3_root_dir']
-                original_g3_root = self.io_cfg['file_paths']['g3_root_dir']
+                try:
+                    original_g3_root = self.io_cfg['file_paths']['g3_root_dir']
+                except KeyError:
+                    original_g3_root = self.analysis_cfg['file_paths']['original_g3_root_dir']
 
                 if not g3_root[-1] == '/': g3_root += '/'
                 if not original_g3_root[-1] == '/': original_g3_root += '/'
@@ -340,63 +554,16 @@ class Timestream(Data):
 
         shape = (len(self.tones), len(ts))
 
-        if self.mp:
-            nbytes = np.prod(shape) * np.dtype(np.int32).itemsize
+        Is, Qs = np.empty(shape, dtype=np.int32), np.empty(shape, dtype=np.int32)
+        curr_ind = 0
+        for i in range(len(frames)):
+            mask = masks[i]
+            t, I, Q = self.load_frame(self, frames[i], start_time, time_precision, mask = mask)
 
-            # Close and unlink the I and Q shared memory blocks if they already exist (e.g. if the program crashed without cleaning them)
-            clear_shared_mem('I_mem')
-            clear_shared_mem('Q_mem')
-            clear_shared_mem('frames')
-            clear_shared_mem('masks')
-            
-            frames_pk = pickle.dumps(frames)
-            masks_pk = pickle.dumps(masks)
-
-            # Create shared memory blocks for storing the I and Q data arrays
-            I_mem = shared_memory.SharedMemory(name='I_mem', create=True, size=nbytes)
-            Q_mem = shared_memory.SharedMemory(name='Q_mem', create=True, size=nbytes)
-            frames_mem = shared_memory.SharedMemory(name='frames', create=True, size=len(frames_pk))
-            masks_mem = shared_memory.SharedMemory(name='masks', create=True, size=len(masks_pk))
-            
-            frames_mem.buf[:len(frames_pk)] = frames_pk
-            masks_mem.buf[:len(masks_pk)] = masks_pk
-
-            frames_info = (frames_mem.name, len(frames_pk))
-            masks_info = (masks_mem.name, len(masks_pk))
-            
-            I_name = I_mem.name
-            Q_name = Q_mem.name
-
-            args = [(i, self, shape, frames_info, masks_info, I_name, Q_name, start_time, time_precision) for i in range(len(frames))]
-
-            try:
-                lock = Lock()
-                if self.processes is None: self.processes=min([int(0.7*len(frames)) + 1, mp.cpu_count()])
-                if self.chunk_size is None: self.chunk_size = 1
-                start_time = time.time()
-                with Pool(processes=self.processes, initializer=init_worker, initargs=(lock,)) as pool:
-                    result = pool.starmap(frame_worker, args, self.chunk_size)          
-                Is = np.ndarray(shape, dtype=np.int32, buffer=I_mem.buf)
-                Qs = np.ndarray(shape, dtype=np.int32, buffer=Q_mem.buf) 
-                Is = np.array(Is[:])
-                Qs = np.array(Qs[:])
-            except Exception as e:
-                Is = []
-                Qs = []
-            finally:
-                I_mem.close(), Q_mem.close(), frames_mem.close(), masks_mem.close()
-                I_mem.unlink(), Q_mem.unlink(), frames_mem.unlink(), masks_mem.unlink()
-        else:
-            Is, Qs = np.empty(shape, dtype=np.int32), np.empty(shape, dtype=np.int32)
-            curr_ind = 0
-            for i in range(len(frames)):
-                mask = masks[i]
-                t, I, Q = self.load_frame(self, frames[i], start_time, time_precision, mask = mask)
-
-                num_samps = int(np.sum(mask))
-                Is[:, curr_ind:num_samps + curr_ind] = I
-                Qs[:, curr_ind:num_samps + curr_ind] = Q
-                curr_ind += num_samps
+            num_samps = int(np.sum(mask))
+            Is[:, curr_ind:num_samps + curr_ind] = I
+            Qs[:, curr_ind:num_samps + curr_ind] = Q
+            curr_ind += num_samps
 
         return ts, Is, Qs
  

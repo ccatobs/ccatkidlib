@@ -402,7 +402,7 @@ class R:
 
             NCLOs = list(map(int, LOs)) # Parse NCLOs passed as argument and cast as int
 
-            autils.set_drone_args(self, com_to, NCLOs) # Update NCLOs in drone config files
+            autils.set_drone_args(self, com_to, "NCLO", NCLOs) # Update NCLOs in drone config files
         
         # Only set NCLOs that are different from the current ones
         # -------------------------------------------------------
@@ -433,7 +433,7 @@ class R:
     @utils.method_timer
     def set_atten(self, drive = None, sense = None, **kwargs):
         '''
-        Set drive/sense attenuations of RFSoC board frontend attenuations.
+        Set drive/sense attenuations of frontend attenuators connected to RFSoC board.
 
         Keyword Arguments:
             com_to     (str | List[str]) : List of drones for which to set attenuation
@@ -700,7 +700,7 @@ class R:
 
     def get_atten(self, **kwargs):
         '''
-        Set drive/sense attenuations of RFSoC board frontend attenuations.
+        Set drive/sense attenuations of frontend attenuators connected to RFSoC board.
 
         Keyword Arguments:
             com_to     (str | List[str]) : List of drones for which to get attenuation

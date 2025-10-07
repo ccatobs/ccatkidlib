@@ -12,6 +12,7 @@ import sys
 import pathlib
 
 from pathlib import Path
+from tqdm import tqdm
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
@@ -157,10 +158,11 @@ def get_sweep(path: str | pathlib.PosixPath, **kwargs):
         
         # Check config directory for matching config files
         # ------------------------------------------------
+
         sweeps = [None]*len(parts_list)
         for i, parts in enumerate(parts_list):
             sweep_path = Path(*parts)
-            sweeps[i] = rfsoc_io.get_most_recent_file(sweep_path, '*.npy', time_past = np.inf, time_ref = timestamp) # Get io config file
+            sweeps[i] = rfsoc_io.get_most_recent_file(sweep_path, '*.npy', time_past = np.inf, time_ref = timestamp) 
 
         recent_sweeps = sorted(sweeps, key = rfsoc_io.get_creation_time, reverse = True)
         if 'targ' in recent_sweeps[0].parts:
@@ -171,6 +173,8 @@ def get_sweep(path: str | pathlib.PosixPath, **kwargs):
                 return 'invalid/path', recent_sweeps[0]
         elif 'vna' in recent_sweeps[0].parts:
             return  str(recent_sweeps[0]), 'invalid/path'
+        else:
+            return 'invalid/path', 'invalid/path'
 
 def replace_root(path: str | pathlib.PosixPath, old_root: str, new_root: str):
     '''Replace the root directory of a file path with a new root

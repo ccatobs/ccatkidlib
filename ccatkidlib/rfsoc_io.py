@@ -161,8 +161,8 @@ def save_config(cfg_path, cfg_dic, save = True):
         with open(cfg_path, 'w') as config:
             yaml.safe_dump(cfg_dic, config, sort_keys=False, default_flow_style=None)
         
-        send_msg('DEBUG', f"Saved configuration file '{cfg_path}'!")
-        send_msg('DEBUG', f'Configuration file contents: {cfg_dic}')
+        send_msg('DEBUG', f"Saved configuration file: '{cfg_path}'!")
+        #send_msg('DEBUG', f'Configuration file contents: {cfg_dic}')
 
         # Load new config file
         with open(cfg_path, 'r') as config:
@@ -226,15 +226,29 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = No
             files.extend(path.glob(file_id))
         files = sorted(files, key = get_creation_time, reverse = True)
 
-        # Check if creation time is within the specified time_past 
-        for file in files:
-            if 0 <= time_ref - get_creation_time(file) < time_past:
-                send_msg('DEBUG', f"Found most recent file '{file}' in {path}.")
-                return file
+        # Find file with time closest to time_ref using a binary search
+        min_ind, max_ind = 0, len(files) - 1
+        curr_ind, shifted_time, num_its = None, None, 0 
+        while max_ind >= min_ind:
+            num_its += 1
+            curr_ind = min_ind + (max_ind - min_ind)//2
+
+            shifted_time = time_ref - get_creation_time(files[curr_ind])
+            if shifted_time < 0: # If time difference is negative, then file is too new
+                min_ind = curr_ind + 1
+            elif shifted_time > 0 and not (max_ind == min_ind): # If time difference is positive, then file is a candidate but there could be more recent files
+                max_ind = curr_ind
+            else: # If no time difference between file time and reference time, there cannot be a more recent file so break out of loop
+                break 
+        # Check that most recent file satisfies time constraints
+        if 0 <= shifted_time < time_past:
+            file = files[curr_ind]
+            send_msg('DEBUG', f"Found most recent file '{file}' in {path}.")
+            return file
         else:
             raise Exception("No files found within specified time range!")
     except Exception as e:
-        send_msg('WARNING', f"Failed to fetch most recent file in '{path}' with identifier '{file_identifier}'")
+        send_msg('DEBUG', f"Failed to fetch most recent file in '{path}' with identifier '{file_identifier}' with Exception:\n{e}")
         return Path("invalid/path")
 
 def get_creation_time(file_path):
@@ -397,7 +411,6 @@ def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
     '''
     # Get logger
     logger = logging.getLogger(name)
-    logger.propagate = False
 
     # Try logging message
     # -------------------
