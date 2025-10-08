@@ -1,3 +1,9 @@
+#=================================#
+# arg_utils.py               2025 #
+# Darshan Patel dp649@cornell.edu #
+#=================================#
+
+
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import numpy as np
@@ -31,13 +37,13 @@ def parse_args(R, com_to, arg):
 
     args = None
     try: # Check if argument is a list
-        if isinstance(arg, str): raise ValueError
+        if isinstance(arg, str): raise TypeError
         if len(arg) == len(com_to): # Length of argument list should match number of drones
             args = arg
         else:
             rfsoc_io.send_msg('WARNING', f'{arg} is not a valid argument. Must be a single value or match the length of {com_to}!')
             return None # Return None if argument is invalid
-    except:
+    except TypeError:
         try: # Assume argument is a single value and create a list of arugments with length equal to the number of drones
             args = [arg] * len(com_to)
         except:
@@ -92,7 +98,7 @@ def get_com_to(R, **kwargs):
         bids   (list of str): List of boards in com_to
     '''
 
-    # Set com_to to drone list specified in system config (make a copy so that it does not point to the class drone_list attribute)
+    # Set com_to to drone list specified in system config (make a copy so that it does not point to the R drone_list attribute)
     com_to = np.copy(R.drone_list).tolist()
     bids = R.board_list
     setup = True
@@ -103,7 +109,7 @@ def get_com_to(R, **kwargs):
             com_to = value
 
             # If com_to is not a list, make it a list
-            if not isinstance(com_to, list): com_to = [com_to]
+            if isinstance(com_to, str): com_to = [com_to]
 
             # Get list of boards used
             bids = set()
