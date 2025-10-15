@@ -13,7 +13,7 @@ from holoviews import opts
 
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
-import ccatkidlib.analysis.pair as pair
+import ccatkidlib.analysis.utils.pair as pair
 
 from ccatkidlib.analysis.core.data import Data
 

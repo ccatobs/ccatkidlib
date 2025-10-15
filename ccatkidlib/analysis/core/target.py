@@ -16,7 +16,7 @@ from bokeh.plotting import curdoc
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
-import ccatkidlib.analysis.pair as pair
+import ccatkidlib.analysis.utils.pair as pair
 
 from ccatkidlib.analysis.core.sweep import Sweep
 from ccatkidlib.analysis.fit.fit import linear_fit
@@ -28,7 +28,7 @@ class Target(Sweep):
     Subclasses Sweep.
     '''
 
-    def __init__(self, com_to: str, tones: int | list[int] | None = None, analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, tones: int | list[int] | None = None, noise_tones: int | list[int] | None = None, analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         '''Subclass of Sweep with additional arguments
 
         Args:
@@ -44,13 +44,24 @@ class Target(Sweep):
                 tones = [tones]
             else:
                 tones = list(range(self.num_tones))
-
-        if tones is None or isinstance(tones, Iterable):
+        if tones is None or (isinstance(tones, Iterable) and all([isinstance(tone, int) for tone in tones])):
             self.tones = tones
         else:
             error = f"Invalid type {type(tones)} for argument 'tones'. Should be int, list[int], or None."
             rfsoc_io.send_msg('CRITICAL', error)
             raise ValueError(error)
+        
+        # Define list of noise tones
+        # --------------------------
+        if noise_tones is not None:
+            if isinstance(noise_tones, int): 
+                noise_tones = [noise_tones]
+            elif not isinstance(noise_tones, Iterable) or not all([isinstance(noise_tone, int) for noise_tone in noise_tones]):
+                noise_tones = None
+                rfsoc_io.send_msg('CRITICAL', f"Invalid type {type(noise_tones)} for argument 'noise_tones'. Should be int, list[int], or None.")
+        else:
+            noise_tones = utils.dict_get(self.drone_cfg, ['tones', 'noise_tones'])
+        self.noise_tones = noise_tones
         
         self._properties = {f'det_{tone:04d}': {} for tone in self.tones} if tones is not None else {}
         self._properties_df = pl.DataFrame({'det': self.tones})

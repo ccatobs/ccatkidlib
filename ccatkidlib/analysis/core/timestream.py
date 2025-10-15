@@ -18,44 +18,65 @@ from holoviews.operation.datashader import rasterize, datashade, dynspread
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
-import ccatkidlib.analysis.pair as pair
+import ccatkidlib.analysis.utils.pair as pair
+import ccatkidlib.analysis.utils.mp as ccat_mp
 
 from ccatkidlib.analysis.core.data import Data
 from ccatkidlib.utils import method_timer
 
 
 class Timestream(Data):
-    '''Class representing a timestream taken with a Radio Frequency System on a Chip
+    '''Class representing a timestream taken with a radio frequency system on a chip (RFSoC)
+
+    Attributes:
+        tones (list[int]): List of tones with loaded timestreams
+        start (float): Start time of loaded timestreams in seconds (0 seconds is beginning of timestream) 
+        end (float): End time of loaded timestreams in seconds (relative to start time)
+        packet_counts (list[int]): List of packet numbers of loaded timestreams 
+        data (pl.DataFrame): Polars DataFrame with loaded (and transformed) timestream data
+        properties (pl.DataFrame): Polars DataFrame with timestream properties (a 'property' has one value per tone)
+        sampling_freq (float): Sampling frequency of timestream data in Hz
     '''
 
-    def __init__(self, com_to, tones = -1, start = 0, end = -1, analysis_cfg = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to, tones: int | list[int] = -1, noise_tones: int | list[int] | None = None, start = 0, end = -1, analysis_cfg = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         '''
         Constructor for Timestream. 
 
-        Parameters:
-            com_to (str): Which board and drone were used to take the timestream (in form 'bid.drid')
-            tones (list): List of resonators to use
+        Args:
+            com_to (str): Which board and drone were used to take the timestreams (in form ``bid.drid``)
+            tones (list): List of tones for which to load timestreams
             start (float): Start time in seconds (0 seconds is beginning of timestream) 
             end (float): End time in seconds (relative to start time, -1 for no end time)
-            analysis_cfg (str): File path of analysis config 
-
+            analysis_cfg (str): File path of analysis configuration file. Defaults to analysis configuration file in *ccatkidlib/analysis* directory.
         '''
         kwargs['data_type'] = 'timestream'
         super().__init__(com_to, analysis_cfg, **kwargs)
 
-        # Define array of resonator numbers
-        # ---------------------------------
+        # Define list of tones
+        # --------------------
         if isinstance(tones, int): 
             if tones >= 0: 
                 self.tones = [tones]
             else:
                 self.tones = list(range(self.num_tones))
-        elif isinstance(tones, Iterable):
+        elif isinstance(tones, Iterable) and all([isinstance(tone, int) for tone in tones]):
             self.tones = tones
         else:
             error = f"Invalid type {type(tones)} for argument 'tones'. Should be int, list[int], or None."
             rfsoc_io.send_msg('CRITICAL', error)
             raise ValueError(error)
+
+        # Define list of noise tones
+        # --------------------------
+        if noise_tones is not None:
+            if isinstance(noise_tones, int): 
+                noise_tones = [noise_tones]
+            elif not isinstance(noise_tones, Iterable) or not all([isinstance(noise_tone, int) for noise_tone in noise_tones]):
+                noise_tones = None
+                rfsoc_io.send_msg('CRITICAL', f"Invalid type {type(noise_tones)} for argument 'noise_tones'. Should be int, list[int], or None.")
+        else:
+            noise_tones = utils.dict_get(self.drone_cfg, ['tones', 'noise_tones'])
+        self.noise_tones = noise_tones
 
         # Define timestream start and end times
         # -------------------------------------
