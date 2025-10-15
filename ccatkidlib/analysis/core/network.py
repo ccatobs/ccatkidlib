@@ -7,15 +7,14 @@ from collections.abc import Iterable
 from pathlib import Path
 from tqdm import tqdm
 
-import gc
 import ccatkidlib
 import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.analysis.utils.pair as pair
 
 from ccatkidlib.analysis.core.vna import VNA
 from ccatkidlib.analysis.core.target import Target
 
 from ccatkidlib.analysis.core.detector import Detector
-from ccatkidlib.analysis import pair
 
 class Network:
     '''
@@ -25,6 +24,7 @@ class Network:
     def __init__(self, com_to: str,
                  analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
                  dets: int | list[int] = -1,
+                 noise_tones: int | list[int] | None = None,
                  cable_delay: float | None = None,
                  detectors: list[ccatkidlib.analysis.core.detector.Detector] | None = None,
                  sess_ids: str | list[str] | None  = None,
@@ -101,13 +101,13 @@ class Network:
             detector_types = []
             detector_timestamps = []
             if include_targs:
-                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, self.targs, analysis_cfg, dets, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, self.targs, analysis_cfg, dets, noise_tones, cable_delay)
                 detectors += det_objs
                 detector_types += det_types
                 detector_timestamps += det_timestamps
 
             if include_streams:
-                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, self.streams, analysis_cfg, dets, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, self.streams, analysis_cfg, dets, noise_tones, cable_delay)
                 detectors += det_objs
                 detector_types += det_types
                 detector_timestamps += det_timestamps
@@ -210,7 +210,7 @@ class Network:
     # Helper Methods #
     #================#
 
-    def _create_detectors(self, det_type, com_to, path_dict, analysis_cfg, dets, cable_delay):
+    def _create_detectors(self, det_type, com_to, path_dict, analysis_cfg, dets, noise_tones, cable_delay):
         '''
         '''
         def _create_sweep(sweep_path, sweep_dict, sweep_class, dets):
@@ -219,7 +219,7 @@ class Network:
             if Path(sweep_path).exists():
                 sweep = sweep_dict[str(sweep_path)]
                 if sweep is None:
-                    sweep = sweep_class(com_to = com_to, analysis_cfg = analysis_cfg, data_path = sweep_path, tones=dets)
+                    sweep = sweep_class(com_to = com_to, analysis_cfg = analysis_cfg, data_path = sweep_path, tones=dets, noise_tones=noise_tones)
                     sweep_dict[sweep_path] = sweep
             else:
                 sweep = None
@@ -241,7 +241,7 @@ class Network:
             vna = _create_sweep(vna_path, self.vnas, VNA, None)
             targ = _create_sweep(targ_path, self.targs, Target, dets)
             
-            detector = Detector(com_to=com_to, analysis_cfg=analysis_cfg, dets=dets, cable_delay=cable_delay, targ=targ, vna=vna, stream_path=stream_path)
+            detector = Detector(com_to=com_to, analysis_cfg=analysis_cfg, dets=dets, noise_tones=noise_tones, cable_delay=cable_delay, targ=targ, vna=vna, stream_path=stream_path)
             
             detectors[i] = detector
             detector_types[i] = det_type
@@ -250,7 +250,7 @@ class Network:
     
     @staticmethod
     def _extract_data(cfgs, data_cols):
-        data = [None]*len(data_cols)
+        data = [None]*len(data_cols) 
         for i, col in enumerate(data_cols):
             for cfg in cfgs:
                 cfg_data = ccatkidlib.utils.dict_get(cfg, col)
