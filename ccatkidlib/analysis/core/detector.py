@@ -488,7 +488,7 @@ class Detector:
                 timestream_col_name = f'{pre}_{col_name[-1]}_angle'
                 if recalc or not timestream_col_name in self.properties.schema:
                     timestream_df = self.stream.data.select([(np.mod(np.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").median(),
-                                                                                pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").median()), 2*np.pi)).alias(f'{tone:04d}') for tone in self.stream.tones])
+                                                                                pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").median()), 2*np.pi)).alias(f'{tone:04d}') if tone in include else pl.lit(0).alias(f'{tone:04d}') for tone in self.stream.tones])
                     
                     self.add_data_to_properties(timestream_df, timestream_col_name)
                 

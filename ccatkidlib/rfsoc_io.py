@@ -16,6 +16,7 @@ import yaml
 import logging
 import subprocess
 import numpy as np
+import traceback
 
 from pathlib import Path
 from tqdm import tqdm
@@ -46,7 +47,6 @@ def create_tree(com_to: list[str], curr_date: str, sess_id: int, data_dir: str) 
     Returns:
         tuple[list[str], list[str], list[str], list[str]]: Config directories, target directories, timestream directories, and VNA sweep directories in that order.
     '''
-
     # Create tmp directory
     data_dir = Path(data_dir)
 
@@ -156,7 +156,6 @@ def save_config(cfg_path, cfg_dic, save = True):
     Returns:
         cfg_dic (dict) : Returns dictionary that was saved to config file
     '''
-
     if save:
         # Save config file
         with open(cfg_path, 'w') as config:
@@ -183,7 +182,6 @@ def edit_config(cfg, key, value, append = False):
     Returns:
         done   (bool) : True if key was successfully created or updated.
     '''
-
     # Edit config file dictionary
     # ---------------------------
     done = utils.dict_set(cfg, key, value)
