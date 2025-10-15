@@ -7,7 +7,7 @@ from numba import guvectorize, njit, prange, float64, int64
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
-import ccatkidlib.analysis.pair as pair
+import ccatkidlib.analysis.utils.pair as pair
 
 from ccatkidlib.utils import method_timer
 from ccatkidlib.analysis.core.sweep import Sweep

@@ -1,7 +1,20 @@
-#=================================#
-# rfsoc_daq.py               2025 #
-# Darshan Patel dp649@cornell.edu #
-#=================================#
+""" Module used for data acquisition with a radio frequency system on a chip (RFSoC)
+
+This module defines the Class used for controlling and taking data with a 
+Xilinx ZCU111 radio frequency system on a chip (RFSoC). The data acquisition 
+methods are tailored for frequency-division multiplexed readout of microwave 
+resonators: kinetic inductance detectors (KIDs) in particular.
+
+Authors:
+    - Darshan Patel <dp649@cornell.edu>
+
+Example:
+    The RFSoC control object is initialized as:
+        $ RC = R()
+
+.. _Xilinx ZCU111 RFSoC:
+   https://www.amd.com/en/products/adaptive-socs-and-fpgas/evaluation-boards/zcu111.html
+"""
 
 # Import Python modules
 import sys
@@ -31,19 +44,70 @@ import ccatkidlib.rfsoc.arg_utils as autils
 if mp.get_start_method(allow_none=True) is None: mp.set_start_method('fork')
 
 class R:
-    @utils.method_timer
-    def __init__(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml", init_boards = None, init_drones = None, **kwargs):
-        '''
-        Constructor for R. Creates directories for data storage, configures logger, and starts RFSoC PCS agent.
+    ''' Class for controlling and taking data with a radio frequency system on a chip (RFSoC)
+    
+    Attributes:
+        curr_date (str): Date of measurement
+        timestamp (str): UNIX timestamp corresponding to most recently run DAQ method. 
+        measurement_name (str): Name of measurement
+        measurement_desc (str): Description of measurement
+        sess_id (str): Unique ID of measurement
 
-        Parameters:
-            cfg_path (str) : Path to system configuration file (default: system_config.yaml in ccatkidlib/rfsoc directory)
-            init_boards (bool) : Whether to initialize RFSoC boards (default: False)
-            init_drones (bool) : Whether to initialize RFSoC drones (default: False)
+        io_cfg (dict): Loaded IO configuration file
+        ext_cfg (dict): Loaded external configuration file
+        drone_cfg (list[dict]): List of loaded drone configuration files
+
+        drone_list (list[str]): List of drones used for DAQ
+        board_list (list[str]): List of boards used for DAQ
+        drone_num (int): Number of drones used for DAQ
+        board_num (int): Number of boards used for DAQ
+        all_boards (list[str]): List of all RFSoC boards specified in IO configuration file
+
+        parallel_boards (int): Number of boards to run in parallel. Positive integer or -1 to specify all boards
+        parallel_drones (int): Number of drones to run in parallel. One of {1, 2, 3, 4} 
+
+        save_cfg (bool): Whether to save configuration files
+        save_data (bool): Whether to save data files
+
+        data_dir (str): Path to *ccatkidlib* data directory
+        drone_dir (str): Path to *primecam_readout* drone directory on RFSoC board
+        tmp_data_dir (str): Path to *primecam_readout* data directory: *primecam_readout/src/tmp* as of version ...
+        tmp_dir (str): Path to *ccatkidlib* tmp data directory
+        g3_dir (str): Path to *rfsoc-streamer* timestream g3 data directory 
+        
+        config_dirs (list[str]): List of directories where *ccatkidlib* configuration files are saved for each drone
+        targ_dirs (list[str]): List of directories where *ccatkidlib* target sweep data files are saved for each drone
+        vna_dirs (list[str]): List of directories where *ccatkidlib* VNA sweep data files are saved for each drone
+        timestream_dirs (list[str]): List of directories where *ccatkidlib* timestream data files are saved for each drone
+        log_dir (str): Directory with *ccatkidlib* master log files
+
+        rfsoc (ocs.OCSClient): OCS client for controlling RFSoC OCS agent
+        streamer (ccatkidlib.Streamer): Streamer object used for collecting NumPy timestreams
+
+        NCLOs (dict): Current NCLOs of each drone. Used by rfsoc-controller OCS agent
+        drive_attens (dict): Current drive attenuations of each drone. Used by rfsoc-controller OCS agent
+        sense_attens (dict): Current sense attenuations of each drone. Used by rfsoc-controller OCS agent
+    '''
+
+    @utils.method_timer
+    def __init__(self, cfg_path: str = f"{Path(__file__).parent}/system_config.yaml", init_boards: bool | None = None, init_drones: bool | None = None, **kwargs) -> None:
         '''
+        Constructor for R. Creates directories for data storage, configures logger, initializes RFSoC boards/drones, and starts RFSoC OCS agent.
+
+        Args:
+            cfg_path (str, optional): Path to system configuration file. Defaults to *system_config.yaml* in *ccatkidlib/rfsoc* directory
+            init_boards (bool | None, optional): Whether to (re)initialize RFSoC boards. Defaults to None - Pulls from IO configuration file
+            init_drones (bool | None, optional): Whether to (re)initialize RFSoC drones. Defaults to None - Pulls from IO configuration file
+
+            kwargs: Key word arguments for passing system state information between control objects. Used by the rfsoc-controller OCS agent. See below:
+            sess_id (str): Session ID of measurement
+            measurement_name (str): Name of measurement
+            measurement_desc (str): Description of measurement
+            curr_date (str): Date of measurement
+        '''
+
         # Load config files and setup logging
         # -----------------------------------
-
         # Current date in yyyy/mm/dd
         self.curr_date = time.strftime('%Y%m%d', time.gmtime())
 
@@ -51,7 +115,7 @@ class R:
         self.timestamp = str(time.time()).split('.')[0]
 
         # Load config files
-        self.load_system_config(cfg_path)
+        self._load_system_config(cfg_path)
 
         # Mainly for use with the rfsoc-controller PCS agent
         # Can use measurement information (sess_id, name, desc) from previous control object
@@ -148,22 +212,24 @@ class R:
         for rfsoc_dir, cfg in zip(self.config_dirs, self.drone_cfg):
             rfsoc_io.save_config(rfsoc_dir / f'init_config_drone_{self.timestamp}.yaml', cfg, self.save_cfg)
 
-
     #################
     # Setup Methods #
     #################
     @header
     def _update_measurement(self, name: str | None = None, desc: str = '', influx_output: bool | None = None) -> tuple[str, str] | None:
         '''
-        _summary_
+        Update measurement name and description
+
+        Note:
+            Only used when saving measurement name and description to an InfluxDB database. 
 
         Args:
-            name (str | None, optional): _description_. Defaults to None.
-            desc (str, optional): _description_. Defaults to ''.
-            influx_output (bool | None, optional): _description_. Defaults to None.
+            name (str | None, optional): New name of measurement. Defaults to None.
+            desc (str, optional): New description of measurement. Defaults to ''.
+            influx_output (bool | None, optional): Whether to save measurement name and description to InfluxDB database. Defaults to None.
 
         Returns:
-            tuple[str, str] | None: _description_
+            return (tuple[str, str] | None): New name and description if update successful else None
         '''
 
         influx_output = influx_output if influx_output is not None else self.io_cfg['io']['influx_output']
@@ -175,15 +241,89 @@ class R:
         else:
             return None 
 
+    def _load_system_config(self, cfg_path: str) -> None:
+        '''
+        Load the system (IO & external) and drone configuration files and setup file directory structure for saving data.
+
+        Args:
+            cfg_path (str): Path to system configuration file.
+        '''
+
+        # Load system configuration file
+        # ------------------------------
+
+        cfg = rfsoc_io.load_config(cfg_path)
+        try:
+            self.ext_cfg, self.io_cfg = cfg # Split config into external and IO config
+        except ValueError:
+            print("System config must contain two config files (an external config and an IO config)! Please reference the example system config file.")
+            sys.exit()
+
+        # Load drone list and drone configs
+        # ---------------------------------
+        self.drone_list = self.io_cfg['drone_list']
+        self.board_list = None
+
+        self.drone_list, bids = autils.get_com_to(self, com_to = self.drone_list, setup = False)
+        self.board_list = bids
+
+        self.drone_num = len(self.drone_list)
+        self.board_num = len(self.board_list)
+
+        self.all_boards = [board[1:] for board in self.io_cfg['boards']]
+
+        # Load drone configuration files
+        self.drone_cfg = []
+
+        # Iterate over all board configs specified in system config
+        board_cfgs = self.io_cfg['boards']
+        for board in board_cfgs:
+            # Check if board config corresponds to a board specified in drone list
+            if board[1:] in self.board_list:
+                # Load all drone configuration files for board
+                self.drone_cfg.append(rfsoc_io.load_config(board_cfgs[board]['drone_cfg']))
+
+                # Keep only the configuration files corresponding to drones in drone list
+                # -----------------------------------------------------------------------
+                drone_cfgs = self.drone_cfg[-1]
+                num_drones = len(drone_cfgs)
+                # Iterate through list of drone_cfs backwords (since elements are removed during the loop)
+                for i, cfg in enumerate(drone_cfgs[::-1]):
+                    # Remove drone config if drone not specified in drone list
+                    if not (cfg['com_to'] in self.drone_list):
+                        drone_cfgs.pop(num_drones - i - 1)
+
+        # Flatten list of drone configs to match drone_list shape
+        self.drone_cfg = [cfg for board in self.drone_cfg for cfg in board]
+
+        # Assign commonly used parameters as class attributes
+        # ---------------------------------------------------
+        # Whether to run commands in parallel
+        self.parallel_boards = self.io_cfg['runtime']['parallel_boards']
+        self.parallel_drones = self.io_cfg['runtime']['parallel_drones']
+
+        # IO parameters for saving and printing data
+        self.save_cfg = self.io_cfg['io']['save_config_copy']
+        self.save_data = self.io_cfg['io']['save_data']
+
+        # Commonly used file paths
+        self.data_dir = Path(self.io_cfg['file_paths']['data_dir'])
+        self.drone_dir = Path(self.io_cfg['file_paths']['drone_dir'])
+        self.tmp_data_dir = Path(self.io_cfg['file_paths']['primecam_readout']) / 'tmp'
+        self.tmp_dir = Path(__file__).parent / '..' / '..' / 'tmp'
+        self.g3_dir = Path(self.io_cfg['file_paths']['g3_dir'])
+
     @header
     @utils.method_timer
-    def setup_boards(self, **kwargs):
+    def setup_boards(self, **kwargs) -> None:
         '''
-        (Re)initialize RFSoC boards one at time without setting up tone comb.
+        (Re)initialize RFSoC boards one at time
 
-        Parameters:
-            com_to (list[str]) : List of boards to initialize (default: all boards in system config)
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Drones are used to determine which boards to initialize. Defaults to drone list in IO configuration file
         '''
+        #TODO: Initialize boards in parallel?
 
         # Get which boards to initialize (only initialize boards with at least on running drone)
         # --------------------------------------------------------------------------------------
@@ -213,13 +353,14 @@ class R:
                 # ------------------
                 self.setup_drones(com_to=[f'{board}.1', f'{board}.2', f'{board}.3', f'{board}.4'], restart = True)
 
-    def setup_drones(self, **kwargs):
+    def setup_drones(self, **kwargs) -> None:
         '''
-        Setup (start, stop, or restart) drones specified by com_to.
+        (Re)initialize drones
 
-        Parameters:
-            com_to (list of str): List of drones to setup
-            restart      (bool) : Whether to restart already running drones
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones to setup. Defaults to drone list in IO configuration file
+            restart (bool, optional): Whether to restart already running drones. Defaults to value in IO configuration file
         '''
 
         # Parse key word arguments
@@ -306,83 +447,35 @@ class R:
 
         # Log the currently running drones at INFO level if a change was made otherwise log to DEBUG
         rfsoc_io.send_msg('INFO' if wait else 'DEBUG' , f"Drones {sorted(running_drones)} are currently running!")
-
-    def load_system_config(self, cfg_path = f"{Path(__file__).parent}/system_config.yaml"):
-        '''
-        Load the system and drone config files and setup file directory structure for saving data.
-
-        Parametrs:
-            cfg_path (str): File path of system configuration file
-        '''
-
-        # Load system configuration file
-        # ------------------------------
-
-        cfg = rfsoc_io.load_config(cfg_path)
-        try:
-            self.ext_cfg, self.io_cfg = cfg # Split config into external and IO config
-        except ValueError:
-            print("System config must contain two config files (an external config and an IO config)! Please reference the example system config file.")
-            sys.exit()
-
-        # Load drone list and drone configs
-        # ---------------------------------
-        self.drone_list = self.io_cfg['drone_list']
-        self.board_list = None
-
-        self.drone_list, bids = autils.get_com_to(self, com_to = self.drone_list, setup = False)
-        self.board_list = bids
-
-        self.drone_num = len(self.drone_list)
-        self.board_num = len(self.board_list)
-
-
-        self.all_boards = [board[1:] for board in self.io_cfg['boards']]
-
-        # Load drone configuration files
-        self.drone_cfg = []
-
-        # Iterate over all board configs specified in system config
-        board_cfgs = self.io_cfg['boards']
-        for board in board_cfgs:
-            # Check if board config corresponds to a board specified in drone list
-            if board[1:] in self.board_list:
-                # Load all drone configuration files for board
-                self.drone_cfg.append(rfsoc_io.load_config(board_cfgs[board]['drone_cfg']))
-
-                # Keep only the configuration files corresponding to drones in drone list
-                # -----------------------------------------------------------------------
-                drone_cfgs = self.drone_cfg[-1]
-                num_drones = len(drone_cfgs)
-                # Iterate through list of drone_cfs backwords (since elements are removed during the loop)
-                for i, cfg in enumerate(drone_cfgs[::-1]):
-                    # Remove drone config if drone not specified in drone list
-                    if not (cfg['com_to'] in self.drone_list):
-                        drone_cfgs.pop(num_drones - i - 1)
-
-        # Flatten list of drone configs to match drone_list shape
-        self.drone_cfg = [cfg for board in self.drone_cfg for cfg in board]
-
-        # Assign commonly used parameters as class attributes
-        # ---------------------------------------------------
-        # Whether to run commands in parallel
-        self.parallel_boards = self.io_cfg['runtime']['parallel_boards']
-        self.parallel_drones = self.io_cfg['runtime']['parallel_drones']
-
-        # IO parameters for saving and printing data
-        self.save_cfg = self.io_cfg['io']['save_config_copy']
-        self.save_data = self.io_cfg['io']['save_data']
-
-        # Commonly used file paths
-        self.data_dir = Path(self.io_cfg['file_paths']['data_dir'])
-        self.drone_dir = Path(self.io_cfg['file_paths']['drone_dir'])
-        self.tmp_data_dir = Path(self.io_cfg['file_paths']['primecam_readout']) / 'tmp'
-        self.tmp_dir = Path(__file__).parent / '..' / '..' / 'tmp'
-        self.g3_dir = Path(self.io_cfg['file_paths']['g3_dir'])
     
     @utils.method_timer
-    def set_NCLO(self, NCLO = None, **kwargs):
-        def _set_NCLO(com, *args, **kwargs):
+    def set_NCLO(self, NCLO: int | list[int] | None = None, **kwargs) -> list[float]:
+        '''
+        Set the numerically controlled local oscillator (NCLO) frequencies for each drone
+
+        Note:
+            If a single NCLO value is specified, it will be used for all drones.
+
+        Args:
+            NCLO (int | list[int] | None, optional): NCLO frequencies for each drone in MHz. Defaults to NCLOs in drone configuration files
+            
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+        Returns:
+            return (list[float]): Set NCLOs
+        '''
+
+        def _set_NCLO(com: str, *args, **kwargs):
+            '''
+            Internal function for setting NCLO frequencies in parallel
+
+            Args:
+                com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
+                *args: NCLO frequency passed as a positional argument
+
+            Returns:
+                (ocs.OCSReply): OCS Reply object for RFSoC OCS agent setNCLO command
+            '''
             NCLO = args[0]
             rtn = self.rfsoc.setNCLO(com_to = com, f_lo = NCLO, silent=True) # Set NCLO frequency
             rfsoc_io.send_msg('PCS', f'{rtn.session}')
@@ -431,28 +524,47 @@ class R:
 
     @header
     @utils.method_timer
-    def set_atten(self, drive = None, sense = None, **kwargs):
+    def set_atten(self, drive: float | list[float] | None = None, sense: float | list[float] | None = None, **kwargs) -> tuple[list[float], list[float]]:
         '''
-        Set drive/sense attenuations of frontend attenuators connected to RFSoC board.
+        Set drive/sense attenuations of frontend attenuators connected to RFSoC board
 
-        Keyword Arguments:
-            com_to     (str | List[str]) : List of drones for which to set attenuation
-            drive  (float | List[float]) : Values of drive (DAC) attenuations in dB (must be between 0 and 31.75)
-            sense  (float | List[float]) : Values of sense (ADC) attenuations in dB (must be between 0 and 31.75)
+        Note:
+            - Drive attenuations refer to attenuators on the digital-to-analog (DAC) side and sense attenuations refer to attenuators on the analog-to-digital (ADC) side
+            - If a single drive/sense attenuation value is specified, it will be used for all drones.
+
+        Args:
+            drive (float | list[float] | None, optional): Drive attenuations for each drone in dB. Must be between 0 and 31.75. Defaults to drive attenuations in drone configuration files
+            sense (float | list[float] | None, optional): Sense attenuations for each drone in dB. Must be between 0 and 31.75. Defaults to sense attenuations in drone configuration files
+
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+        Returns:
+            return (tuple[list[float], list[float]]): Current drive and sense attenuations
         '''
 
-        def _set_direction(com_to, direction, atten = None):
+        def _set_direction(com_to: list[str], direction: str, atten: list[float] = None) -> list[float] | None:
             '''
-            Internal function for setting drone attenuations.
+            Internal function for setting drone attenuations of a specific direction ('drive' or 'sense')
 
             Parameters:
-                com_to    (str | List[str]) : List of drone com_to for which attenuations should be set
-                direction             (str) : Which attenuator to set. Options are 'drive' for DAC and 'sense' for ADC
-                atten (float | List[float]) : List of attenuations. Attenuation must be a float between 0 and 31.75
+                com_to (str | list[str]) : List of drones
+                direction (str): Which attenuators to set. Must be one of {'drive', 'sense'}.
+                atten (float | list[float] | None) : List of attenuation values. Attenuation must be between 0 and 31.75. Defaults to attenuation in drone configuration files
             Returns:
-                attens: The set drone attenuations. None if invalid attenuations were used
+                return (list[float] | None) : The set attenuations. None if invalid attenuations were used
             '''
-            def _set_atten(com, *args, **kwargs):
+
+            def _set_atten(com: str, *args, **kwargs):
+                '''
+                Internal function for setting drone attenuations in parallel
+
+                Args:
+                    com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
+                    *args: Attenuator direction and attenuation value passed as positional arguments
+
+                Returns:
+                    return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent setAtten2025 command
+                '''
                 direction, att = args[0], args[1]
                 rtn = self.rfsoc.setAtten2025(com_to = com, direction = direction, atten = att, silent=True)
                 rfsoc_io.send_msg('PCS', f'{rtn.session}')
@@ -507,7 +619,17 @@ class R:
 
             return attens
 
-        def _check_direction(com_to, direction, set_attens, new_attens):
+        def _check_direction(com_to: list[str], direction: str, set_attens: list[float], new_attens: list[float]) -> None:
+            '''
+            Check if drive/sense attenuations were set successfully by comparing desired attenuations to current attenuations
+
+            Args:
+                com_to (list[str]): List of drones
+                direction (str): Which attenuators to check. Must be one of {'drive', 'sense'}.
+                set_attens (list[float]): Attenuation values attenuators should be set to
+                new_attens (list[float]): Attenuation values attenuators are currently set to
+            '''
+            
             new_dict = getattr(self, f'{direction}_attens')
             for com, set_atten, new_atten in zip(com_to, set_attens, new_attens):
                 if new_atten != set_atten:
@@ -541,14 +663,20 @@ class R:
     
     @header
     @utils.method_timer
-    def get_stats(self, space = True, temps = True, ADC_rms = True, **kwargs) -> None:
+    def get_stats(self, space: bool = True, temps: bool = True, ADC_rms: bool = True, **kwargs) -> tuple[list[float], tuple[list[float], list[float]], list[float]]:
         '''
-        Get RFSoC storage space, temperatures, and RMS power at drone ADCs.
+        Get RFSoC storage space, temperatures, and RMS power at drone analog-to-digital converters (ADCs).
 
-        Parameters:
-            space (bool): Whether to get RFSoC storage space
-            temps (bool): Whether to get RFSoC temperatures
-            ADC_rms (bool): Whether to get RMS power at ADCs
+        Args:
+            space (bool, optional): Whether to get RFSoC storage space. Defaults to True
+            temps (bool, optional): Whether to get RFSoC fabric and processor temperatures. Defaults to True
+            ADC_rms (bool, optional): Whether to get root mean squared (RMS) power at ADCs. Defaults to True
+
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+        Returns:
+            return tuple[list[float], tuple[list[float], list[float]], list[float]]: Stoarge space, temperatures, and RMS power at ADCs
+        
         '''
 
         if kwargs['setup']: self.setup_drones(**kwargs) # Setup drones 
@@ -561,28 +689,31 @@ class R:
 
         kwargs['setup'] = False # Do not set up drones again
         if space: avail_spaces = self.get_avail_space(**kwargs) # Get storage space
-        if temps: ps_temps, pl_temps = self.get_temps(**kwargs) # Get temperatures
+        if temps: temp_lists = self.get_temps(**kwargs) # Get temperatures
         if ADC_rms: rms_list = self.get_ADC_rms(**kwargs) # Get RMS power at ADCs
 
-    def get_ADC_rms(self, **kwargs):
-        '''
-        Get the root mean squared (RMS) power at the analog to digital converter (ADC) for
-        drones specified by com_to.
+        return avail_spaces, temp_lists, rms_list
 
-        Parameters:
-            com_to     (list of str) : List of drones
+    def get_ADC_rms(self, **kwargs) -> list[float]:
+        '''
+        Get root mean squared (RMS) power at the analog-to-digital converters (ADCs)
+
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
         Returns:
-            rms_list (list of float) : List of ADC rms values, sorted by bid.drid
+            return (list[float]) : ADC RMS values (sorted by drone)
         '''
 
-        def _getSnapData(com, *args, **kwargs):
+        def _getSnapData(com: str, *args, **kwargs) -> dict:
             '''
-            Get Snap data at the analog to digital converter of the specified drone.
+            Internal function for getting power at ADC in parallel
 
-            Parameters:
-                com (str) : Drone for which to get Snap data
+            Args:
+                com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
+
             Returns:
-                data (dict) : Data dictionary returned by getSnapData primecam_readout function (pickled)
+                return (dict): Data dictionary returned by RFSoC OCS Agent ``getSnapData`` method
             '''
             rtn = self.rfsoc.getSnapData(com_to = com, mux_sel = 0, silent = False).session
             rfsoc_io.send_msg('PCS', f'{rtn}')
@@ -621,17 +752,32 @@ class R:
         rfsoc_io.send_msg('INFO', f'RMS power at the ADC is {rms_list} for drones {com_to}!')
         return rms_list
 
-    def get_avail_space(self, **kwargs):
+    def get_avail_space(self, **kwargs) -> list[float]:
         '''
-        Check the available storage space on RFSoC board and clean the board drone directories if storage space is below specified threshold.
+        Check available storage space and clean drone directories on RFSoCs
 
-        Parameters:
-            com (str): Bid of board to check available space
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+            threshold (float): Storage space threshold after which to automatically clean directories on RFSoCs
+            olderThanDaysAgo (int | str): Number of days old a file must be in order to be deleted by automatic cleaning
+            ftype (str): Type of file to be deleted by automatic cleaning
+        Returns:
+            return (list[float]): Available space left on each board (sorted by board)
         '''
         # Import clean_io from primecam_readout
         import clean_io
 
-        def _get_space(bids):
+        def _get_space(bids) -> list[float]:
+            '''
+            Internal function for getting available storage space left on RFSoC boards
+
+            Args:
+                bids (list[str]): List of boards
+
+            Returns:
+                return (list[float]): Available storage space left on boards
+            '''
             avail_spaces = []
             session_data = self.rfsoc.feedMonitor.status().session['data']
             for bid in bids:
@@ -677,11 +823,26 @@ class R:
                     clean_io._cleanDir(str(Path(self.tmp_dir).resolve()), testing=False, ftype=str(ftype), olderThanDaysAgo=str(olderThanDaysAgo))
         return avail_spaces
 
-    def get_temps(self, **kwargs):
+    def get_temps(self, **kwargs) -> tuple[list[float], list[float]]:
         '''
-        Get RFSoC ps processor and pl fabric temperatures.
+        Get fabric and processor temperatures of RFSoCs
+
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+        Returns:
+            return (tuple[list[float], list[float]]): Processor and fabric temperatures of RFSoCs  
         '''
-        def _get_temps(bids, loc):
+        def _get_temps(bids: list[str], loc: str) -> list[float]:
+            '''
+            Internal function for getting RFSoC temperatures using specified thermometer
+
+            Args:
+                bids (list[str]): List of boards
+                loc (str): Location of thermometer. Must be one of {'ps', 'pl'}
+            Returns:
+                return (list[float]): List of temperatures
+            '''
             temps = []
             for bid in bids:
                 temp_dict = session_data[f'drone_temperatures_C_board_{bid}']['data']
@@ -689,6 +850,7 @@ class R:
                 temps.append(temp)
                 rfsoc_io.edit_config(self.ext_cfg, ['boards', f'b{bid}', f'{loc}_temp'], temp, append = True)
             rfsoc_io.send_msg('INFO', f'{loc} temperatures are {temps} \xb0C for boards {bids}!')
+            return temps
 
         com_to, bids = autils.get_com_to(self, **kwargs)
         kwargs['setup'] = False
@@ -698,25 +860,42 @@ class R:
 
         return ps_temps, pl_temps
 
-    def get_atten(self, **kwargs):
+    def get_atten(self, **kwargs) -> tuple[list[float], list[float]]:
         '''
-        Set drive/sense attenuations of frontend attenuators connected to RFSoC board.
+        Get drive/sense attenuations of frontend attenuators connected to RFSoC board
 
-        Keyword Arguments:
-            com_to     (str | List[str]) : List of drones for which to get attenuation
+        Note:
+            - Drive attenuations refer to attenuators on the digital-to-analog (DAC) side and sense attenuations refer to attenuators on the analog-to-digital (ADC) side
+
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+        Returns:
+            return (tuple[list[float], list[float]]): Current drive and sense attenuations
         '''
 
-        def _get_direction(com_to, direction):
+        def _get_direction(com_to: str | list[str], direction: str) -> list[float]:
             '''
-            Internal function for getting drone attenuations.
+            Internal function for getting drone attenuations of a specific direction ('drive' or 'sense')
 
             Parameters:
-                com_to    (str | List[str]) : List of drone com_to for which attenuations should be gotten
-                direction             (str) : Which attenuator to get. Options are 'drive' for DAC and 'sense' for ADC
+                com_to (str | list[str]) : List of drones
+                direction (str): Which attenuator values to get. Must be one of {'drive', 'sense'}.
             Returns:
-                attens: The drone attenuations
+                return (list[float] | None) : The current attenuations
             '''
-            def _get_atten(com, *args, **kwargs):
+            def _get_atten(com: str, *args, **kwargs):
+                '''
+                Internal function for getting drone attenuations in parallel
+
+                Args:
+                    com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
+                    *args: Attenuator direction passed as a positional argument
+
+                Returns:
+                    return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent getAtten command
+                '''
+
                 direction = args[0]
                 rtn = self.rfsoc.getAtten(com_to = com, direction = direction, silent=False).session
                 rfsoc_io.send_msg('PCS', f'{rtn}')
@@ -772,23 +951,50 @@ class R:
     ############################
     @header
     @utils.method_timer
-    def take_vna_sweep(self, **kwargs):
+    def take_vna_sweep(self, **kwargs) -> list[str]:
         '''
-        Take a vector network analyzer (VNA) sweep using RFSoC.
+        Take a vector network analyzer (VNA) style sweep covering the full 512 MHz available bandwidth 
 
-        Parameters:
-            NCLO (int): Numerically controlled local oscillator frequency in MHz. Center frequency of VNA sweep.
+        Note:
+            - The **ccatkidlib** data file paths are returned if save_data is True otherwise the **primecam_readout** data file paths are returned
+            - If a single sweep_steps value is specified, it will be used for all drones.
+
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+            write_comb (bool, optional): Whether to write a new VNA comb. Defaults to True
+            sweep_steps (int | list[int], optional): Number of steps each tone should take during sweep. Defaults to value in drone configuration files
+            
         Returns:
-            output (str): VNA sweep file path
+            return (list[str]): List of VNA sweep file paths
         '''
         @utils.function_timer
-        def _write_vna_comb(com, *args, **kwargs):
+        def _write_vna_comb(com: str, *args, **kwargs):
+            '''
+            Internal function for writing new VNA combs in parallel
+
+            Args:
+                com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
+
+            Returns:
+                return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent writeNewVnaComb command
+            '''
             rtn = self.rfsoc.writeNewVnaComb(com_to = com, silent = False)
             rfsoc_io.send_msg('PCS', f'{rtn.session}')
             return rtn
 
         @utils.function_timer
-        def _take_vna_sweep(com, *args, **kwargs):
+        def _take_vna_sweep(com: str, *args, **kwargs):
+            '''
+            Internal function for taking VNA sweeps in parallel
+
+            Args:
+                com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
+                args: sweep_steps passed as a positional argument
+
+            Returns:
+                return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent vnaSweep command
+            '''
             sweep_steps = args[0]
             rtn = self.rfsoc.vnaSweep(com_to = com, sweep_steps = sweep_steps, silent = False)
             rfsoc_io.send_msg('PCS', f'{rtn.session}')
@@ -798,6 +1004,7 @@ class R:
         com_to, boards = autils.get_com_to(self, **kwargs)
         kwargs['setup'] = False # Do not set up drones again
 
+        # TODO: Seperate sweep steps for VNA and target sweeps?
         # Parse key word arguments
         write_comb = True
         sweep_steps = autils.get_drone_args(self, com_to, ['tones', 'sweep_steps'])
@@ -842,22 +1049,40 @@ class R:
 
     @header
     @utils.method_timer
-    def take_target_sweep(self, **kwargs):
+    def take_target_sweep(self, **kwargs) -> list[str]:
         '''
-        Take a target sweep around the specified tones.
+        Take a vector network analyzer (VNA) style sweep with a specified set of tones.
 
-        Parameters:
-            chan_bw (float): Bandwidth of sweep around each tone in MHz.
-            sweep_steps (int): Number of points per tone
-            write_comb (bool): Whether to write new comb or use current comb
-            tone_freqs: Frequencies at which to place tones
-            tone_powers: Readout power of tones
-            tone_phis: Phase of tones
+        Note:
+            - The **ccatkidlib** data file paths are returned if save_data is True otherwise the **primecam_readout** data file paths are returned
+            - If a single sweep_steps or chan_bw value is specified, it will be used for all drones.
+
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+            chan_bw (float | list[float], optional): Bandwidth of sweep around each tone in MHz. Defaults to value in drone configuration files
+            sweep_steps (int | list[int], optional): Number of steps each tone should take during sweep. Defaults to value in drone configuration files
+
+            tone_freqs (list[list[float]]: optional): Frequencies at which to place tones in Hz
+            tone_powers (str | list[str] | float | list[float] | list[list[float]], optional): Tone powers in digital-to-analog (DAC) units (proportional to voltage). Use 'gen' to generate powers
+            tone_phis (str | list[str] | float | list[float] | list[list[float]], optional): Tone phases in radians. Use 'gen' to generate phases
+            write_comb (bool, optional): Whether to write a new target sweep comb. Defaults to True if any of ``tone_freqs``, ``tone_powers``, or ``tone_phis`` is specified
+
         Returns:
-            output (str): File path of target sweep
+            return (list[str]): List of target sweep file paths
         '''
 
-        def _take_targ_sweep(com, *args, **kwargs):
+        def _take_targ_sweep(com: str, *args, **kwargs):
+            '''
+            Internal function for taking target sweeps in parallel
+
+            Args:
+                com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
+                args: sweep_steps and chan_bw passed as positional arguments
+
+            Returns:
+                return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent targetSweep command
+            '''
             sweep_steps, chan_bw = args
             rtn = self.rfsoc.targetSweep(com_to = com, sweep_steps = sweep_steps, chan_bw = chan_bw, silent = False)
             rfsoc_io.send_msg('PCS', f'{rtn.session}')
@@ -912,28 +1137,45 @@ class R:
 
     @header
     @utils.method_timer
-    def take_timestream(self, t_sec, **kwargs):
+    def take_timestream(self, t_sec: float, **kwargs) -> list[str]:
         '''
-        Take timestream data using RFSoC.
+        Take timestream data with a specified set of tones
 
-        Parameters:
-            time (int): Length of timestream in seconds
-            write_comb (bool): Whether to re-write comb
-            tone_freqs: Frequencies at which to place tones
-            tone_powers: Readout power of tones
-            tone_phis: Phase of tones
-        Return:
-            output (list of str): Timestream file paths if save_data = True
+        Note:
+            - Saving timestream data as g3 files requires integration with the *rfsoc-streamer* software
+            - Use of the *rfsoc-streamer* software is recommended when streaming with large numbers of drones
+
+        Args:
+            t_sec (float): Length of timestream in seconds
+
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+            g3 (bool, optional): Whether to save timestream data as g3 files. Defaults to value in IO configuration file
+            save_data (bool, optional): Whether to save data to ``ccatkidlib`` data directory. Defaults to value in IO configuration file
+            
+            tone_freqs (list[list[float]]: optional): Frequencies at which to place tones in Hz
+            tone_powers (str | list[str] | float | list[float] | list[list[float]], optional): Tone powers in digital-to-analog (DAC) units (proportional to voltage). Use 'gen' to generate powers
+            tone_phis (str | list[str] | float | list[float] | list[list[float]], optional): Tone phases in radians. Use 'gen' to generate phases
+            write_comb (bool, optional): Whether to write a new target sweep comb. Defaults to True if any of ``tone_freqs``, ``tone_powers``, or ``tone_phis`` is specified
         Returns:
-            output: Return complex S21 timestream data in array
+            return (list[str] | None): List of timestream file paths or None if ``save_data`` is False
         '''
 
-        def _take_timestream_python(com, *args, **kwargs):
+        def _take_timestream_numpy(com: list[str], *args, **kwargs) -> list[str]:
+            '''
+            Internal function for capturing timestream data and saving as NumPy files
+
+            Args:
+                com (list[str]): List of drones
+
+            Returns:
+                list[str]: List of timestream NumPy file paths
+            '''
             import gc
             from multiprocessing import Process, Queue, Manager, Value
 
 
-            def _save_timestream_python(com_to, start_time, time_diff, packet_data, tstream_seg, tstream_outs):
+            def _save_timestream_numpy(com_to, start_time, time_diff, packet_data, tstream_seg, tstream_outs):
                 packs, addrs = zip(*packet_data)
                 packs = [bytearray(pack) for pack in packs]
                 ips = np.array([list(addr) for addr in addrs])[:,0]
@@ -1031,7 +1273,7 @@ class R:
                     curr_time = time.time()
                     if (curr_time - last_save > save_interval) or not timer.is_alive():
                         last_save = curr_time
-                        saves.append(Process(target=_save_timestream_python, args=(com_arr, start_time, time_diff, packet_data, tstream_seg, tstream_outs,)))
+                        saves.append(Process(target=_save_timestream_numpy, args=(com_arr, start_time, time_diff, packet_data, tstream_seg, tstream_outs,)))
                         saves[-1].start()
                         tstream_seg += 1
                         packet_data.clear()
@@ -1060,7 +1302,17 @@ class R:
 
                 return list(tstream_outs)
 
-        def _take_timestream_g3(com, *args, **kwargs):
+        def _take_timestream_g3(com: list[str], *args, **kwargs):
+            '''
+            Internal function for taking timestreams when using the *rfsoc-streamer* to capture and save data
+
+            Args:
+                com (list[str]): List of drones
+                *args: Length of timestream in seconds passed as a positional argument
+
+            Returns:
+                return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent getAtten command
+            '''
             t_sec = args[0]
             rtn = self.rfsoc.timestreamOn(com_to = com, on = True, silent=True)
             rfsoc_io.wait(t_sec, desc = f'Taking {t_sec} second timestream for {com}')
@@ -1068,7 +1320,16 @@ class R:
             rfsoc_io.send_msg('INFO', f"Finished taking {t_sec} seconds of timestream data with timestamp {self.timestamp}!")
             return rtn
 
-        def _save_timestream_g3(com_to):
+        def _save_timestream_g3(com_to: list[str]) -> list[str]:
+            '''
+            Internal function for saving txt files with file paths of g3 timestream data
+
+            Args:
+                com_to (list[str]): List of drones
+
+            Returns:
+                return (list[str]): List of file paths of timestream txt files
+            '''
             date = self.timestamp[0:5]
 
             fname = self.io_cfg["save_file_names"]["timestream"]
@@ -1137,14 +1398,14 @@ class R:
         args=[t_sec]
         if g3:
             self._run_parallel(_take_timestream_g3, *args, **kwargs)
-            if self.save_data:
+            if save_data:
                 time.sleep(1) 
                 stream_out = _save_timestream_g3(com_to)
         else:
             if self.streamer is None:
                 self.streamer = Streamer(self.io_cfg['timestream']['udp_ip'], self.io_cfg['timestream']['udp_port'])
                 rfsoc_io.send_msg('INFO', f"Successfully initialized timestream object using address {self.io_cfg['timestream']['udp_ip']} and port {self.io_cfg['timestream']['udp_port']}!")
-            stream_out = self._run_parallel(_take_timestream_python, *args, **kwargs)
+            stream_out = self._run_parallel(_take_timestream_numpy, *args, **kwargs)
             stream_out = [drone for parallel in stream_out for drone in parallel]
 
         # Get RMS power at the ADC
@@ -1169,25 +1430,30 @@ class R:
     @utils.method_timer
     def write_config_comb(self, **kwargs):
         '''
-        Write custom comb using comb parameters from config file. Config file parameters are
-        superseceded by key word argument parameters. If no parameters are passed through the config file
-        or as key word arguments, the most recent comb is used instead.
+        Write a custom set of radio frequency tones (comb) 
 
-        Parameters:
-            tone_freqs  (float | list | str) : Custom tone frequencies (Hz)
-            tone_powers (float | list | str) : Custom tone powers
-            tone_phis   (float | list | str) : Custom tone phases
+        Args:
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+            
+            tone_freqs (list[list[float]]: optional): Frequencies at which to place tones in Hz
+            tone_powers (str | list[str] | float | list[float] | list[list[float]], optional): Tone powers in digital-to-analog (DAC) units (proportional to voltage). Use 'gen' to generate powers
+            tone_phis (str | list[str] | float | list[float] | list[list[float]], optional): Tone phases in radians. Use 'gen' to generate phases
+
+            rescale_power (bool | list[bool]): Whether to rescale tone powers if DAC maximum power is exceeded. Defaults to value in drone configuration files
+            gen_attempts (int | list[int]): Number of attempts to randomize phases so that the resulting comb does not exceed DAC maximum power. Defaults to value in drone configuration files
+        Returns:
+            return (list[ocs.OCSReply]): List of OCSReply objects for RFSoC OCS agent writeTargCombFromCustomList command
         '''
 
         def _write_targ_comb(com, *args, **kwargs):
             '''
-            Internal function for writing target comb using custom list.
+            Internal function for writing target comb using custom list in parallel
 
-            Parameters:
-                com (str) : Drone for which custom comb should be written
+            Args:
+                com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
             Returns:
-                rtn : OCS reply object
-
+                return (ocs.OCSReply): OCSReply object of RFSoC OCS agent for writeTargCombFromCustomList command
             '''
             rtn = self.rfsoc.writeTargCombFromCustomList(com_to = com, silent=False)
             rfsoc_io.send_msg('PCS', f'{rtn.session}')
@@ -1232,24 +1498,34 @@ class R:
 
     @header
     @utils.method_timer
-    def find_detectors(self, new_sweep = True, filter_freqs = True, **kwargs):
+    def find_detectors(self, new_sweep: bool = True, filter_freqs: bool = True, **kwargs):
         '''
-        Find detectors and place tones at their minima. Length of bins is 500,000 Hz / N_steps.
-        Default parameters work well for N_steps = 500 and should be scaled appropriately if N_steps is changed.
+        Find detectors using a VNA sweep 
 
-        Parameters:
-            new_sweep (bool): Whether or not to take a new VNA sweep
-            peak_prom_std (float): Peak height from surroundings, in noise std multiples. Uses larger of peak_prom_db or peak_prom_std.
-            peak_prom_db (float): Peak height from surroundings, in db. Uses larger of peak_prom_db or peak_prom_std.
-            peak_dis (int): Min distance between peaks [bins].
-            width_min (int): Min peak width [bins]
-            width_max (int): Max peak width [bins]
-            stitch (bool): Whether to stitch (comb discontinuities).
-            stitch_sw (int): Amount of bins on each end to use for stitching [bins]
-            remove_cont (bool): Whether to subtract the continuum.
-            continuum_wn (int): Continuum filter cutoff frequency [Hz].
-            remove_noise (bool): Whether to subtract noise.
-            noise_wn (int): Noise filter cutoff frequency [Hz].
+        Note:
+            - The larger of peak_prom_db or peak_prom_std is used if both are specified
+
+        Args:
+            new_sweep (bool, optional): Whether to take a new VNA sweep. Defaults to True
+            filter_freqs (bool, optional): Whether to perform phase filtering on found detectors. Defaults to True
+
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+            sweep_steps (int | list[int], optional): Number of steps each tone should take during sweep. Defaults to value in drone configuration files
+            write_targ_comb (bool, optional): Whether to write target comb using found detector frequencies. Defaults to True
+            filter_wn (int | list[int], optional): Number of points around tone to use for phase filtering. Defaults to value in drone configuration files
+            
+            peak_prom_std (float | list[float], optional): Peak height from surroundings, in noise std multiples. Defaults to value in drone configuration files
+            peak_prom_db (float | list[float], optional): Peak height from surroundings, in dB. Defaults to value in drone configuration files
+            peak_dis (int | list[int], optional): Min distance between peaks. Defaults to value in drone configuration files
+            width_min (int | list[int], optional): Min peak width. Defaults to value in drone configuration files
+            width_max (int | list[int], optional): Max peak width. Defaults to value in drone configuration files
+            stitch (bool | list[bool], optional): Whether to stitch comb discontinuities. Defaults to value in drone configuration files
+            stitch_sw (int | list[int], optional): Amount of points on each end to use for stitching. Defaults to value in drone configuration files
+            remove_cont (bool | list[bool], optional): Whether to subtract the continuum. Defaults to value in drone configuration files
+            continuum_wn (int | list[int], optional): Continuum filter cutoff frequency in Hz. Defaults to value in drone configuration files
+            remove_noise (bool | list[bool], optional): Whether to subtract noise. Defaults to value in drone configuration files
+            noise_wn (int | list[int], optional): Noise filter cutoff frequency in Hz. Defaults to value in drone configuration files
         '''
 
         def _write_targ_comb(com, *args, **kwargs):
@@ -1313,7 +1589,7 @@ class R:
         # ---------------
         com_to, boards = autils.get_com_to(self, **kwargs)
         kwargs['setup'] = False # Do not set up drones again
-        write_targ_comb = True
+        write_targ_comb = True # TODO: Does this need to be a kwarg? 
 
         # Get parameters from drone config files
         # -------------------------------------
@@ -1437,13 +1713,24 @@ class R:
 
     @header
     @utils.method_timer
-    def find_detectors_fine(self, new_sweep = True, **kwargs):
+    def find_detectors_fine(self, new_sweep: bool = True, **kwargs):
         '''
-        Find detectors and place tones at their minima. Length of bins is 500,000 Hz / N_steps.
+        Find detectors using a target sweep
 
-        Parameters:
-            new_sweep (bool): Whether or not to take a new target sweep
-            stitch_bw (int): Number of bins to use on when stitching tones
+        Args:
+            new_sweep (bool, optional): Whether to take a new target sweep. Defaults to True
+
+            kwargs. See below:
+            com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
+            chan_bw (float | list[float], optional): Bandwidth of sweep around each tone in MHz. Defaults to value in drone configuration files
+            sweep_steps (int | list[int], optional): Number of steps each tone should take during sweep. Defaults to value in drone configuration files
+            write_targ_comb (bool, optional): Whether to write target comb using found detector frequencies. Defaults to True
+
+            tone_freqs (list[list[float]]: optional): Frequencies at which to place tones in Hz
+            tone_powers (str | list[str] | float | list[float] | list[list[float]], optional): Tone powers in digital-to-analog (DAC) units (proportional to voltage). Use 'gen' to generate powers
+            tone_phis (str | list[str] | float | list[float] | list[list[float]], optional): Tone phases in radians. Use 'gen' to generate phases
+            write_comb (bool, optional): Whether to write a new target sweep comb. Defaults to True if any of ``tone_freqs``, ``tone_powers``, or ``tone_phis`` is specified
+
         Returns:
             output (arr of floats): Returns an array of the found detector frequencies
         '''
@@ -1669,7 +1956,7 @@ class R:
             tone_freqs  (float | list of float | str) : Custom tone frequencies
             tone_powers (float | list of float | str) : Custom tone powers
             tone_phis   (float | list of float | str) : Custom tone phases
-        Returns:s
+        Returns:
             tone_freqs  (list of float) : Comb frequencies used in written comb
             tone_powers (list of float) : Comb tone powers used in written comb
             tone_phis   (list of float) : Comb phases used in written comb
@@ -2032,38 +2319,34 @@ class R:
         rfsoc_io.send_msg('PCS', f'{sess}')
         return sess['success'], sess['data']
 
-    def _run_parallel(self, func: Callable, *args, **kwargs) -> list[any]:
-        '''
-        Run the specified function (func) with drones specified by com_to in parallel.
-        Which drones the function is run in parallel with is determined by parallel_boards and parallel_drones.          
+    def _run_parallel(self, func: Callable, *args, parallel_boards: int | None = None, parallel_drones: int | None = None, **kwargs) -> list[any]:
+        ''' Run the specified function ``func`` with drones specified by ``com_to`` in parallel.
 
         Args:
-            com_to (str | list[str]): Drone/list of drones to run func with
-            parallel_boards (int): Number of boards to run func in parallel with
-            parallel_drones (int): Number of drones to run func in parallel with (must be between 1 and 4 inclusive)
             func (Callable): Function to run in parallel
+            parallel_boards (int | None, optional): Number of boards to run in parallel. Must be a positive integer or -1 to specify all boards. Defaults to value in IO configuration file
+            parallel_drones (int | None, optional): Number of drones to run in parallel. Must be one of {1, 2, 3, 4}. Defaults to value in IO configuration file
 
+            args: Positional arguments of ``func``
+            kwargs. Key word arguments of `func``. Also, see below:
+            com_to (str | list[str]): List drones to run ``func`` with
+    
         Returns:
-            list[any]: List of return values from func 
+            return (list[any]): List of return values from ``func`` 
         '''
 
         # Parse key word arguments
         # ------------------------
         com_to, boards = autils.get_com_to(self, **kwargs)
+        name = func.__name__
 
-        parallel_boards = self.parallel_boards
-        parallel_drones = self.parallel_drones
-        for key, value in kwargs.items():
-            if key == 'parallel_boards':
-                parallel_boards = value
-            elif key == 'parallel_drones':
-                parallel_drones = value
+        if parallel_boards is None: parallel_boards = self.parallel_boards
+        if parallel_drones is None: parallel_drones = self.parallel_drones
 
         if parallel_boards == -1: parallel_boards = len(boards)
 
         # Run func in parallel or series
         # ------------------------------
-
         # Calculate max number of arrays needed to accommodate drones
         # Need 4 arrays for 1 drone in parallel, 2 arrays for 2 & 3 drones in parallel, and 1 array for 4 drones in parallel
         num_drone_arr = 4 // parallel_drones
@@ -2112,8 +2395,6 @@ class R:
         com_arrs = [com_arr for com_arr in com_arrs if com_arr] # Remove empty com_to arrays
 
         s = Style()
-        name = func.__name__
-
         rtn_list = [None] * len(com_arrs)
         for i, com_arr in enumerate(com_arrs):
             rfsoc_io.send_msg('DEBUG', f'Running {s.func_name(name)} for drones {com_to}!')
