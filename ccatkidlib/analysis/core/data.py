@@ -146,7 +146,6 @@ class Data:
         # ------------------------------------------------------------------
         self._configs = pair.get_config(self.data_path[0], all_cfg=False)
 
-
     #=====================#
     # Data Getter Methods #
     #=====================#
@@ -184,9 +183,7 @@ class Data:
             col_name = args[0]
             return [pl.col([f"^{'' if strict else '.*'}{name}_\d+.*$" for name in col_name])]
 
-        data = self.data
-
-        if isinstance(col_name, str): col_name = [col_name]
+        col_name = [col_name] if isinstance(col_name, str) else col_name.copy()
         if self.tones is not None:
             exprs=[]
             # Timestreams never have self.tones = None but do have columns (the time columns in particular) without tones so need to handle those seperately (may be a way to add to expr pattern matching instead)
@@ -320,7 +317,6 @@ class Data:
 
         args = [[a, self.tones] for a in angle]
         self.transform([Data.calc_IQ_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
-
         return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
     
     def IQ_scale(self, prefix: str | list[str] = '', scale: float = 1, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
@@ -364,24 +360,40 @@ class Data:
         # Handle negative indicing
         for i, low in enumerate(lower_bound): 
             if isinstance(low, Iterable): 
-                lower_bound[i] = [int(self.data.height + l) for l in low if l < 0]
+                lower_bound[i] = [int(self.data.height + l) if l < 0 else l for l in low]
             elif low < 0:
                 lower_bound[i] = int(self.data.height + low)
 
         for i, up in enumerate(upper_bound): 
             if isinstance(up, Iterable):
-                upper_bound[i] = [int(self.data.height + u) for u in up if u < 0]
+                upper_bound[i] = [int(self.data.height + u) if u < 0 else u for u in up]
             elif up < 0:
                 upper_bound[i] = int(self.data.height + up)
             
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [col_name[0]] + [f"{pre}{'_' if pre else ''}{name}" for name in col_name[1:-1]] + [col_name[-1]]
-
         args = [[low, up, self.tones] for low, up in zip(lower_bound, upper_bound)]
         self.transform([Data.calc_IQ_trim]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
-        return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+        return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] + 
+                                      [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
     
+    def gradient(self, col_name: str, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        ''' Calculate the gradient of a specified data column
+        
+        Args:
+            col_name (str): Name of data column
+        '''
+        col_name = [col_name, 'gradient']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
+        self.transform([Data.calc_gradient]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names], include=include, exclude=exclude)
+
     #==================#
     # Analysis Methods #
     #==================#
@@ -513,7 +525,7 @@ class Data:
         I_col, Q_col, phase_col = col_name
 
         if recalc or not (phase_col in schema):
-            return np.arctan2(pl.col(Q_col), pl.col(I_col)).alias(phase_col)
+            return pl.arctan2(pl.col(Q_col), pl.col(I_col)).alias(phase_col)
         else:
             return pl.col(phase_col)
 
@@ -532,13 +544,13 @@ class Data:
 
         if recalc or not (mag_col in schema):
             mag_expr = (pl.col(I_col)**2 + pl.col(Q_col)**2).sqrt()
-            if dB: mag_expr = 20*np.log10(mag_expr)
+            if dB: mag_expr = pl.lit(20)*mag_expr.log10()
             return mag_expr.alias(mag_col)            
         else:
             return pl.col(mag_col)
 
     @staticmethod
-    def calc_IQ_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate']) -> pl.expr.expr.Expr:
+    def calc_IQ_rotate(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate']) -> pl.expr.expr.Expr:        
         if tones is not None:
             tone = tones[0]
             col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
@@ -558,8 +570,10 @@ class Data:
             rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
 
         if recalc or not (f'{rotate_col}_{I_col}' in schema):
-            return [(pl.col(I_col)*np.cos(angle) - pl.col(Q_col)*np.sin(angle)).alias(f'{rotate_col}_{I_col}'),
-                    (pl.col(I_col)*np.sin(angle) + pl.col(Q_col)*np.cos(angle)).alias(f'{rotate_col}_{Q_col}')]
+            sin = np.sin(angle)
+            cos = (1 - sin**2)
+            return [(pl.col(I_col)*cos - pl.col(Q_col)*sin).alias(f'{rotate_col}_{I_col}'),
+                    (pl.col(I_col)*sin + pl.col(Q_col)*cos).alias(f'{rotate_col}_{Q_col}')]
         else:
             return pl.col(f'{rotate_col}_{I_col}')    
 
@@ -618,7 +632,7 @@ class Data:
             rfsoc_io.send_msg('ERROR', 'scale is a required argument.')
 
         if recalc or not (f'{scale_col}_{I_col}' in schema):
-            return (pl.col([I_col, Q_col]) * scale).name.prefix(scale_col + '_')
+            return (pl.col([I_col, Q_col]) * scale).name.prefix(f'{scale_col}_')
         else:
             return pl.col(f'{scale_col}_{I_col}')
 
@@ -629,7 +643,6 @@ class Data:
             col_name = [col_name[0]] + [f'{name}_{tone:04d}' for name in col_name[1:-1]] + [col_name[-1]]
 
         sample_col, I_col, Q_col, trim_col = col_name
-
         if len(args) == 3:
             lower_bound, upper_bound, tone_list = args
             if isinstance(lower_bound, Iterable):
@@ -651,11 +664,23 @@ class Data:
 
         if recalc or not (f'{trim_col}_{I_col}' in schema):
             return [pl.when((pl.col(sample_col) < lower_bound) | (pl.col(sample_col) > upper_bound))
-                      .then(None)
+                      .then(pl.lit(None))
                       .otherwise(pl.col(col))
                       .alias(f'{trim_col}_{col}') for col in [I_col, Q_col]]  
         else:
             return pl.col(f'{trim_col}_{I_col}')
+
+    @staticmethod
+    def calc_gradient(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['', 'gradient']) -> pl.expr.expr.Expr:
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{col_name[0]}_{tone:04d}', col_name[-1]]
+        
+        data_col, diff_col = col_name
+        if recalc or not (f'{diff_col}_{data_col}' in schema):
+            return (pl.col(data_col).map_batches(np.gradient, return_dtype=pl.Float64).name.prefix(f'{diff_col}_'))
+        else:
+            return pl.col(f'{diff_col}_{data_col}')
 
     #==========================#
     # Lazily Loaded Attributes #

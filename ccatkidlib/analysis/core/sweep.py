@@ -130,6 +130,15 @@ class Sweep(Data):
         xlabel = r'$I\ [arb]$'
         ylabel = r'$Q\ [arb]$'
 
+    
+        I_min, I_max = df.select(pl.col('I').min().alias('min'), pl.col('I').max().alias('max'))[0].to_numpy()[0]
+        Q_min, Q_max = df.select(pl.col('Q').min().alias('min'), pl.col('Q').max().alias('max'))[0].to_numpy()[0]
+
+        I_diff = I_max - I_min
+        Q_diff = Q_max - Q_min
+        I_avg = (I_min + I_max)/2
+        Q_avg = (Q_min + Q_max)/2
+
         curve_opts = opts.Curve(xlabel=xlabel,
                                 ylabel=ylabel,
                                 aspect=1)

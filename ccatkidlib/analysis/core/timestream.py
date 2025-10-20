@@ -1,3 +1,14 @@
+''' Module for analyzing kinetic inductance detector (KID) time ordered (timestream) data
+
+Authors:
+    - Darshan Patel <dp649@cornell.edu>
+
+TODO:
+    - Multiprocess FFT & PSD calcultions
+    
+'''
+
+
 import so3g
 import numpy as np
 import polars as pl
