@@ -9,6 +9,7 @@ TODO:
 
 import os
 import sys
+import time
 
 import numpy as np
 import polars as pl
@@ -16,7 +17,9 @@ import pathlib
 import concurrent.futures
 import lmfit
 
+
 from collections.abc import Iterable
+from typing import Any, TypeAlias
 from pathlib import Path
 from functools import cached_property
 
@@ -25,8 +28,11 @@ import ccatkidlib
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.fit.fit as ccat_fit
-import ccatkidlib.analysis.utils.mp as ccat_mp
+import ccatkidlib.analysis.utils.multiprocess as ccat_mp
+import ccatkidlib.analysis.utils.dataframe as ccat_df
 
+from ccatkidlib.rfsoc_io import header
+from ccatkidlib.analysis.core.data import Data
 from ccatkidlib.analysis.core.timestream import Timestream
 from ccatkidlib.analysis.core.vna import VNA
 from ccatkidlib.analysis.core.target import Target
@@ -52,7 +58,7 @@ class Detector:
         viz_cfg (dict): Config file with paramateres used for data visualization
 
         cable_delay (float | None): Cable delay of the network (in nanoseconds)
-        properties  (polars.DataFrame): Polars dataframe with detector properties
+        properties  (pl.DataFrame): Polars dataframe with detector properties
     '''
 
     def __init__(self, 
@@ -62,8 +68,8 @@ class Detector:
                  noise_tones: int | list[int] | None = None,
                  cable_delay: float | None = None,
                  stream: Timestream | None = None, stream_path: str | pathlib.PosixPath | list[str] | list[pathlib.PosixPath] | None = None, stream_timestamp: int | str | None = None,
-                 targ: Target = None, targ_path: str | pathlib.PosixPath | None = None, targ_timestamp: int | str | None = None,
-                 vna: VNA = None, vna_path: str | pathlib.PosixPath | None = None, vna_timestamp: int | str | None = None,
+                 targ: Target | None = None, targ_path: str | pathlib.PosixPath | None = None, targ_timestamp: int | str | None = None,
+                 vna: VNA | None = None, vna_path: str | pathlib.PosixPath | None = None, vna_timestamp: int | str | None = None,
                  **kwargs):
         '''
         Constructor for Detector. Creates *ccatkidlib* data objects (``VNA``, ``Target``, ``Timsetream``)
@@ -73,6 +79,29 @@ class Detector:
             - If only the information to load a timestream is provided, an attempt will be made to find the target sweep file corresponding to the timestream
         
         Args:
+            com_to (str): Drone that took the data. In form *'\<board>.\<drone>'*
+            analysis_cfg (str, optional): Path to analysis configuration file. Defaults to analysis configuration file in *ccatkidlib/ccatkidlib/analysis*
+            dets (int | list[int], optional): Which detectors to load; -1 to load all detectors. Defaults to -1 
+            noise_tones (int | list[int] | None, optional): Indicies of noise tones (tones not placed on detectors). Defaults to *None*
+            cable_delay (float | None, optional): Cable delay of full network. Defaults to *None*
+
+            stream (Timestream | None, optional): Detector ``Timestream`` object. Defaults to *None*
+            stream_path (str | pathlib.PosixPath | list[str] | list[pathlib.PosixPath] | None, optional): Data path to detector timestream files. Defaults to *None*
+            stream_timestamp (int | str | None, optional): Timestamp of detector timestream files. Defaults to *None*
+
+            targ (Target | None, optional): Detector ``Target`` object. Defaults to *None*
+            targ_path (str | pathlib.PosixPath | None, optional): Data path to detector target sweep file. Defaults to *None*
+            targ_timestamp (int | str | None, optional): Timestamp of detector target sweep file. Defaults to *None*
+
+            vna (VNA | None, optional): Detector ``VNA`` object. Defaults to *None*
+            vna_path (str | pathlib.PosixPath | None, optional): Data path to detector VNA sweep file. Defaults to *None*
+            vna_timestamp (int | str | None, optional): Timestamp of detector VNA sweep file. Defaults to *None*
+
+            **kwargs: Key word arguments for finding data files. See below:
+            root_data_dir (str, optional): Root directory where data is stored. Defaults to that specified in analysis config
+            data_dir (str, optional): Directory where data is stored
+            date (str, optional): Date data was taken
+            sess_id (str, optional): ccatkidlib session ID of data
         
         '''
 
@@ -125,14 +154,19 @@ class Detector:
     #==========================#
 
     @property
-    def properties(self):
+    def properties(self) -> pl.DataFrame:
         '''
         
         '''
-        def _merge_properties(new_properties_df):
+        def _merge_properties(new_properties_df: pl.DataFrame) -> None:
+            '''
+            Merge two ``properties`` Polars DataFrames
+            
+            Args:
+                new_properties_df (pl.DataFrame):
+            '''
             shared_cols = (set(self._properties_df.columns) & set(new_properties_df.columns)) - {'det'}
-            self._properties_df = self._properties_df.drop(list(shared_cols))
-            self._properties_df = self._properties_df.join(new_properties_df, on='det', how='full', coalesce=True)
+            self._properties_df = ccat_df.coalesce_join(self._properties_df, new_properties_df, 'det', shared_cols)
         
         if self.targ._properties_df is not None: _merge_properties(self.targ.properties)
         if self.stream is not None and self.stream._properties_df is not None: _merge_properties(self.stream.properties)
@@ -169,37 +203,98 @@ class Detector:
     # Data Getter Methods #
     #=====================#
 
-    def nonlinear_fit(self, 
-                      nonlinear: bool = False, 
-                      asymm: bool = False, 
-                      fix_cable: bool = False, 
-                      fix_thetaQ: bool = False,
-                      save_model_result: bool = False,
-                      include: int | list[int] | None = None, 
-                      exclude: int | list[int] | None = None, 
-                      recalc: bool = False, 
-                      max_workers: int = 1) -> pl.DataFrame:
-        '''
-        Fit target sweep using complex data (*I + iQ*)
+    def get_properties(self,
+                       col_name: str | list[str] = '.*',
+                       include: int | list[int] | None = None,
+                       exclude: int | list[int] | None = None, 
+                       strict: bool = False):
+        ''' Get the specified data columns and rows from the ``properties`` Polars DataFrame
 
+        Args:
+            col_name (str | list[str], optional): Defaults to all columns
+            include (int | list[int] | None, optional): Defaults to *None*
+            exclude (int | list[int] | None, optional): Defaults to *None*
+            strict (bool, optional): Defaults to *False*
+        
+        '''
+
+        def _get_expr(tones):
+            expr = [pl.col('det').is_in(tones)]
+            return expr
+        
+        def _include(include: list[int]):
+            ''' Internal function for getting data rows when ``include`` is specified
+
+            Args:
+                include (list[int]): List of tones to get data for
+            '''
+            return _get_expr(include)
+
+        def _exclude(exclude: list[int]):
+            ''' Internal function for getting data rows when ``exclude`` is specified
+
+            Args:
+                exclude (list[int]): List of tones to **not** get data for
+            '''
+            tones = set(self.targ.tones) - set(exclude)
+            return _get_expr(tones)
+
+        def _all():
+            ''' Internal function for getting all data rows (neither ``include`` or ``exclude`` specified)
+
+            '''
+            
+            return _get_expr(self.targ.tones)
+
+        if isinstance(col_name, str): col_name = [col_name] 
+    
+        exprs = ccat_df.parse_tones(_include, _exclude, _all, include, exclude)
+        return (self.properties.lazy()
+                               .select(['det'] + [f'^{'' if strict else '.*'}{name}{'' if strict else '.*'}$' for name in col_name])
+                               .filter(*exprs)
+                               .collect())
+    
+    def complex_fit(self, 
+                    nonlinear: bool = False, 
+                    asymm: bool = False, 
+                    fix_cable: bool = False, 
+                    fix_thetaQ: bool = False,
+                    save_model_result: bool = False,
+                    include: int | list[int] | None = None, 
+                    exclude: int | list[int] | None = None, 
+                    recalc: bool = False, 
+                    max_workers: int = 1) -> pl.DataFrame:
+        '''
+        Fit target sweep using complex forward transmission data (*z = I + iQ*)
+
+        Args:
+            nonlinear (bool, optional): Whether to perform a nonlinear fit. Defaults to *False*
+            asymm (bool, optional): Whether to perform a asymmetric fit. Defaults to *False*
+            fix_cable (bool, optional): Whether to vary cable parameters for fit. Defaults to *False*: parameters are varied
+            fix_thetaQ (bool, optional): Whether to vary impedance mismatch angle and coupling quality factor for fit. Defaults to *False*: parameters are varied
+            save_model_result (bool, optional): Whether to save fit ``ModelResult`` object to ``properties`` Polars DataFrame. Defaults to *False*
+        Returns:
+            return (pl.DataFrame): Polars DataFrame with fit I and Q data
         '''
         
         if not self.fit_dir in sys.path: sys.path.append(self.fit_dir)
         import resonator_model_v3
         globals()['resonator_model_v3'] = resonator_model_v3
         
-        col_name = ['f', 'I', 'Q', 'nonlinear_fit']
+        col_name = ['f', 'I', 'Q', 'complex_fit']
         
         args = [[self, nonlinear, asymm, fix_cable, fix_thetaQ, ccat_mp.check_max_workers(max_workers), save_model_result]]
-        self.targ.transform(Detector.calc_nonlinear_fit, *args, include=include, exclude=exclude, recalc = recalc, col_name = col_name, batch_size=len(self.targ.tones))
+        self.targ.transform(Detector.calc_complex_fit, *args, include=include, exclude=exclude, recalc = recalc, col_name = col_name, batch_size=len(self.targ.tones))
         self.targ.data = self.targ._unnest('struct_' + col_name[-1])
 
-        # Calculate Q_c and Q_i
-        self.properties = (self.properties.lazy().with_columns([((pl.col(f'{col_name[-1]}_Q_e_real')/(pl.col(f'{col_name[-1]}_Q_e_real')**2 + pl.col(f'{col_name[-1]}_Q_e_imag')**2))**-1).alias(f'{col_name[-1]}_Q_c')])
-                                                 .with_columns(((1/pl.col(f'{col_name[-1]}_Q') - 1/pl.col(f'{col_name[-1]}_Q_c'))**-1).alias(f'{col_name[-1]}_Q_i'))
-                                                 .with_columns((-1e9*pl.col(f'{col_name[-1]}_delay')).alias(f'{col_name[-1]}_delay_ns')).collect()) # Convert cable delay to nanoseconds
+        # Calculate Q_c and Q_i. Convert cable delay into nanaseconds
+        self.properties = (self.properties.lazy()
+                                          .with_columns(((pl.col(f'{col_name[-1]}_Q_e_real')/(pl.col(f'{col_name[-1]}_Q_e_real')**2 + pl.col(f'{col_name[-1]}_Q_e_imag')**2))**-1).alias(f'{col_name[-1]}_Q_c')) # Calculate Q_c
+                                          .with_columns([((1/pl.col(f'{col_name[-1]}_Q') - 1/pl.col(f'{col_name[-1]}_Q_c'))**-1).alias(f'{col_name[-1]}_Q_i'), # Calculate Q_i
+                                                         (-1e9*pl.col(f'{col_name[-1]}_delay')).alias(f'{col_name[-1]}_delay_ns')]) # Convert cable delay to nanoseconds
+                                          .collect()) 
 
-        return self.targ.get_data(col_name=col_name[-1], include=include, exclude=exclude)
+        return self.targ.get_data(col_name=[f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}'], include=include, exclude=exclude, strict=True)
 
     def phase_fit(self, 
                   prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 
@@ -239,19 +334,21 @@ class Detector:
 
         # Calculate Q_c, Q_i, and nonlinearity parameter 'a'
         for pre, circle in zip(prefix, circle_fit_col):
-            self.properties = (self.properties.lazy().with_columns([(1e-8*(pl.col(f'{col_name[-1]}_{pre}_beta')*(2*pl.col(f'{col_name[-1]}_{pre}_R'))**2)/(pl.col(f'{col_name[-1]}_{pre}_f_0')/pl.col(f'{col_name[-1]}_{pre}_Qr'))).alias(f'{col_name[-1]}_{pre}_a'),
-                                                                    (pl.col(f'{col_name[-1]}_{pre}_Qr')*(pl.col(f'{circle}_center_mag') + pl.col(f'{col_name[-1]}_{pre}_R'))/(2*pl.col(f'{col_name[-1]}_{pre}_R'))).alias(f'{col_name[-1]}_{pre}_Q_c')])
-                                                    .with_columns(((1/pl.col(f'{col_name[-1]}_{pre}_Qr') - 1/pl.col(f'{col_name[-1]}_{pre}_Q_c'))**-1).alias(f'{col_name[-1]}_{pre}_Q_i')).collect())
+            self.properties = (self.properties.lazy()
+                                              .with_columns([(1e-8*(pl.col(f'{col_name[-1]}_{pre}_beta')*(2*pl.col(f'{col_name[-1]}_{pre}_R'))**2)/(pl.col(f'{col_name[-1]}_{pre}_f_0')/pl.col(f'{col_name[-1]}_{pre}_Qr'))).alias(f'{col_name[-1]}_{pre}_a'),
+                                                             (pl.col(f'{col_name[-1]}_{pre}_Qr')*(pl.col(f'{circle}_center_mag') + pl.col(f'{col_name[-1]}_{pre}_R'))/(2*pl.col(f'{col_name[-1]}_{pre}_R'))).alias(f'{col_name[-1]}_{pre}_Q_c')])
+                                              .with_columns(((1/pl.col(f'{col_name[-1]}_{pre}_Qr') - 1/pl.col(f'{col_name[-1]}_{pre}_Q_c'))**-1).alias(f'{col_name[-1]}_{pre}_Q_i'))
+                                              .collect())
         
         return self.targ.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
     def IQ_unwind(self, 
                   prefix: str | list[str] = '',
                   data: str = 'both',
-                  delay_col: str = 'cable_delay', 
+                  delay_col: str = 'network_cable_delay', 
                   include: int | list[int] | None = None, 
                   exclude: int | list[int] | None = None, 
-                  recalc: bool = False) -> pl.DataFrame:
+                  recalc: bool = False) -> list[pl.DataFrame]:
         '''
         Remove cable delay from target sweep and/or timestream I & Q data
 
@@ -264,76 +361,83 @@ class Detector:
             recalc (bool): Whether to recalculate if data is already in ``data`` DataFrame. Defaults to False
 
         Returns:
-            polars.Dataframe: Polars DataFrame with unwound I & Q data
+            pl.Dataframe: Polars DataFrame with unwound I & Q data
         '''
         col_name = ['f', 'I', 'Q', 'unwind']
         if isinstance(prefix, str): prefix = [prefix]
-        num_prefix = len(prefix)
 
-        data_objs, fs = self._get_data_obj(data)
+        data_objs, data_types = self._get_data_obj(data)
         if not data_objs:
             error = f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)
 
         # Ensure that the cable delay has been calculated
-        if delay_col == 'cable_delay': self.cable_delay
-        
-        coeff = -2*np.pi*1e-9
+        if delay_col == 'network_cable_delay': self.cable_delay
+        delays = self.get_properties(delay_col, include=include, exclude=exclude, strict=True).to_numpy().T[1]
+
+        delays = -2*np.pi*1e-9*delays
         unwind_dfs = []
-        for data_obj, f in zip(data_objs, fs):
-            angle = ([coeff*delay*tone_freq for tone_freq, delay in zip(self.targ.get_data('f', strict=True).to_numpy().T, self.properties[delay_col].to_numpy().T)] if f is None 
-                     else [coeff*delay*tone_freq for tone_freq, delay in zip(f, self.properties[delay_col].to_numpy().T)])
-            for pre in prefix:
-                data_obj.IQ_rotate(prefix=pre, angle=angle, name=col_name[-1], include = include, exclude=exclude, recalc=recalc)
+        for data_obj, data_type in zip(data_objs, data_types):
+            angle = ([delay*tone_freq for tone_freq, delay in zip(self.targ.get_data('f', include=include, exclude=exclude, strict=True).to_numpy().T, delays)] if data_type == 'targ' else
+                     [delay*tone_freq for tone_freq, delay in zip(self.stream.comb['tone_freqs'].to_numpy().T, delays)])
+            data_obj.IQ_rotate(prefix=prefix, angle=angle, name=col_name[-1], include=include, exclude=exclude, recalc=recalc)
             unwind_dfs.append(data_obj.get_data(col_name=([f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix] +
-                                                          [f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[2]}" for pre in prefix]), include=include, exclude=exclude))
+                                                          [f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[2]}" for pre in prefix]), include=include, exclude=exclude, strict=True))
         return unwind_dfs
 
     def IQ_norm(self, 
                 prefix: str | list[str] = '', 
                 data: str = 'both', 
-                norm_col: str = 'cable_nonlinear_fit', 
+                norm_col: str = 'cable_complex_fit_mag', 
                 include: int | list[int] | None = None, 
                 exclude: int | list[int] | None = None, 
-                recalc: bool = False) -> pl.DataFrame:
+                recalc: bool = False) -> list[pl.DataFrame]:
         '''
         Divide out cable baseline from target sweep and/or timestream I & Q data
         
         '''
         
-        
-        col_name = ['f', 'I', 'Q', 'mag', 'norm']
+        col_name = ['f', 'I', 'Q', 'norm']
         if isinstance(prefix, str): prefix = [prefix]
-        num_prefix = len(prefix)
         
-        data_objs, fs = self._get_data_obj(data)
+        data_objs, data_types = self._get_data_obj(data)
         if not data_objs:
             error = f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)
 
-        self.targ.mag(prefix=norm_col, include=include, exclude=exclude, recalc=recalc)
+        tone_freqs = self.get_properties('tone_freqs', include=include, exclude=exclude, strict=True)
         norm_dfs = []
-        for data_obj, f in zip(data_objs, fs):
-            cable_mags = [1/norm for norm in self.targ.get_data(f'{norm_col}_{col_name[-2]}', strict=True)] 
-            scale = cable_mags if f is None else [self.targ.data.select(pl.col(f'{col_name[0]}_{tone:04d}').alias('f'), cable_mag.alias('cable'))
-                                                                .sort((pl.col('f') - tone_freq).abs())
-                                                                .select(pl.col('cable'))
-                                                                .item(0, 0) for cable_mag, tone_freq, tone in zip(cable_mags, f, self.dets)]
+        for data_obj, data_type in zip(data_objs, data_types):
+            cable_mags = self.targ.get_data(norm_col, include=include, exclude=exclude, strict=True)
+            if data_type == 'targ':
+                scale = 1/cable_mags.to_numpy().T
+            else:
+                f_df = (self.targ.get_data(col_name[0], include=include, exclude=exclude, strict=True)
+                                 .unpivot(variable_name='det', value_name=col_name[0])
+                                 .with_columns(pl.col('det').str.strip_prefix(f'{col_name[0]}_').cast(int)))
+                cable_df = cable_mags.unpivot(variable_name='temp', value_name='cable').drop('temp')
+                f_cable_df = pl.concat([f_df, cable_df], how='horizontal')
+                f_cable_df = f_cable_df.join(tone_freqs, on='det', how='left', coalesce=True)
+                scale = 1/(f_cable_df.lazy()
+                                     .sort((pl.col(col_name[0]) - pl.col('tone_freqs')).abs())
+                                     .select(pl.col('cable').first().over('det'))
+                                     .collect()).to_numpy().T
             for pre in prefix:
                 data_obj.IQ_scale(prefix=pre, scale=scale, name=col_name[-1], include = include, exclude=exclude, recalc=recalc)
             norm_dfs.append(data_obj.get_data(col_name=([f"{col_name[-1]}_scale_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix] +
-                                                          [f"{col_name[-1]}_scale_{pre}{'_' if pre else ''}{col_name[2]}" for pre in prefix]), include=include, exclude=exclude))
+                                                        [f"{col_name[-1]}_scale_{pre}{'_' if pre else ''}{col_name[2]}" for pre in prefix]), include=include, exclude=exclude))
         return norm_dfs
 
     def IQ_trim(self, 
                 prefix: str | list[str] = '', 
                 window: float | list[float] = 1.5, 
                 use_fit: bool = False,
-                f_0_col: str = 'nonlinear_fit_f_0',
-                Q_col: str = 'nonlinear_fit_Q',  
+                f_0_col: str = 'complex_fit_f_0',
+                Q_col: str = 'complex_fit_Q',  
                 mean_points: int = 10,
+                mag_prefix: str = '',
                 include: int | list[int] | None = None, 
                 exclude: int | list[int] | None = None, 
                 recalc: bool = False) -> pl.DataFrame:
@@ -350,61 +454,73 @@ class Detector:
         Returns:
             return (pl.DataFrame): Polars DataFrame with trimmed I & Q data
         '''
-        
         col_name = ['I', 'Q', 'tail']
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
         if isinstance(window, (int, float)): window = [window]*num_prefix
 
-        if f_0_col in self.properties.schema and use_fit:
-            pass
+        if use_fit:
+            if f_0_col in self.properties.schema:
+                pass
         else:
-            fwhm_col_name = ['sample', 'mag'] # Data columns used for estimating the FWHM
+            fwhm_col_name = ['sample', f'{mag_prefix}{'_' if mag_prefix else ''}mag'] # Data columns used for estimating the FWHM
 
-            if recalc or not ('HM_low' in self.properties.schema):
+            include_subset = self._check_properties('HM_low', include=include, exclude=exclude, recalc=recalc)
+            if not len(include_subset) == 0:
                 # Get detector magnitudes and sample numbers and unpivot DataFrame from wide to long format
-                mag_df = self.targ.get_data(col_name=fwhm_col_name, strict=True, include=include, exclude=exclude)
-                mag_df = (mag_df.unpivot(on=list(set(mag_df.columns) - {fwhm_col_name[0]}),
-                                        index=fwhm_col_name[0],
-                                        variable_name='det',
-                                        value_name=fwhm_col_name[1])
+                mag_df = self.targ.get_data(col_name=fwhm_col_name, strict=True, include=include_subset)
+                mag_df = (mag_df.unpivot(index=fwhm_col_name[0],
+                                         variable_name='det',
+                                         value_name=fwhm_col_name[1])
+                                .lazy()
                                 .with_columns(pl.col('det').str.strip_prefix(f'{fwhm_col_name[1]}_').cast(pl.Int32))
                                 .sort(fwhm_col_name[1], descending=True))
 
                 # Get minimum magnitude values for each detector and corresponding sample numbers
                 min_df = (mag_df.filter((pl.col(fwhm_col_name[1]) == pl.col(fwhm_col_name[1]).min()).over('det'))
-                                .rename({fwhm_col_name[0]: f'min_{fwhm_col_name[0]}', fwhm_col_name[1]: f'min_{fwhm_col_name[1]}'}))
-                if 'HM_mid' in self._properties_df.schema: self._properties_df = self._properties_df.drop('HM_mid')
-                self._properties_df = self._properties_df.join(min_df.select('det', pl.col(f'min_{fwhm_col_name[0]}').alias('HM_mid')), on='det', how='full', coalesce=True)
-                mag_min_df = (mag_df.join(min_df, on='det', how='left', coalesce=True)
+                                .rename({fwhm_col_name[0]: f'min_{fwhm_col_name[0]}', fwhm_col_name[1]: f'min_{fwhm_col_name[1]}'})
+                                .collect())
+                shared_cols = 'HM_mid' if 'HM_mid' in self._properties_df.schema else []
+                self._properties_df = ccat_df.coalesce_join(self._properties_df, min_df.select(['det', pl.col(f'min_{fwhm_col_name[0]}').alias('HM_mid')]), 'det', shared_cols)
+
+                mag_min_df = (mag_df.collect()
+                                    .join(min_df, on='det', how='left', coalesce=True)
+                                    .lazy()
                                     .with_columns((pl.col(fwhm_col_name[0]) < pl.col(f'min_{fwhm_col_name[0]}')).alias('low')))
                 # Get mean maximum magnitude values for both the low and high frequency sides of each detector
                 max_df = (mag_min_df.group_by(['low', 'det'], maintain_order=True)
                                     .agg(pl.col(fwhm_col_name[1]).head(mean_points).mean())
+                                    .collect()
                                     .pivot(on='low',
-                                            index='det',
-                                            values=fwhm_col_name[1])
+                                           index='det',
+                                           values=fwhm_col_name[1])
+                                    .lazy()
                                     .sort('det')
-                                    .rename({'true': f'max_{fwhm_col_name[1]}_low', 'false': f'max_{fwhm_col_name[1]}_high'}))
-                min_max_df = (mag_min_df.join(max_df, on='det', how='left', coalesce=True)
-                            .with_columns([(pl.col(fwhm_col_name[1]) - ((pl.col(f'min_{fwhm_col_name[1]}').abs() + pl.col(f'max_{fwhm_col_name[1]}_{side}'))/2)).alias(f'HM_{side}') for side in ['low', 'high']]))
+                                    .rename({'true': f'max_{fwhm_col_name[1]}_low', 'false': f'max_{fwhm_col_name[1]}_high'})
+                                    .collect())
+                min_max_df = (mag_min_df.collect()
+                                        .join(max_df, on='det', how='left', coalesce=True)
+                                        .lazy()
+                                        .with_columns([(pl.col(fwhm_col_name[1]) - ((pl.col(f'min_{fwhm_col_name[1]}') + pl.col(f'max_{fwhm_col_name[1]}_{side}'))/2)).abs().alias(f'HM_{side}') for side in ['low', 'high']]))
                 # Get the samples corresponding to the half max on the low and high frequency sides of each detector
                 for side in ('low', 'high'):
-                    HM_df = (min_max_df.lazy()
-                                       .filter(pl.col('low') == ('low' == side))
+                    HM_df = (min_max_df.filter(pl.col('low') == ('low' == pl.lit(side)))
                                        .sort(f'HM_{side}')
                                        .select('det', pl.col(fwhm_col_name[0]).first().over('det'))
-                                       .unique().sort('det').rename({fwhm_col_name[0]: f'HM_{side}'}).collect())
-                    if f'HM_{side}' in self._properties_df.schema: self._properties_df = self._properties_df.drop(f'HM_{side}')
-                    self._properties_df = self._properties_df.join(HM_df, on='det', how='full', coalesce=True)
-            HM_low, HM_mid, HM_high = self.properties.select('HM_low', 'HM_mid', 'HM_high').to_numpy().T
-
+                                       .unique()
+                                       .sort('det')
+                                       .rename({fwhm_col_name[0]: f'HM_{side}'})
+                                       .collect())
+                    shared_cols = f'HM_{side}' if f'HM_{side}' in self._properties_df.schema else []
+                    self._properties_df = ccat_df.coalesce_join(self._properties_df, HM_df, 'det', shared_cols)
+            HM_low, HM_mid, HM_high = self.get_properties(['HM_low', 'HM_mid', 'HM_high'], include=include, exclude=exclude, strict=True).to_numpy().T[1:4]
         for pre, win in zip(prefix, window):
             lower_bound = (HM_mid - (HM_mid - HM_low)*win).astype(int)
             upper_bound = (HM_mid + (HM_high - HM_mid)*win).astype(int)
             self.targ.IQ_trim(prefix=pre, lower_bound = lower_bound, upper_bound=upper_bound, name=col_name[-1], include = include, exclude=exclude, recalc=recalc)
-        return self.targ.get_data(col_name=([f"{col_name[-1]}_trim_{pre}" for pre in prefix]), include=include, exclude=exclude)
+        return self.targ.get_data(col_name=([f"{col_name[-1]}_trim_{pre}{'_' if pre else ''}{col_name[0]}" for pre in prefix] +
+                                            [f"{col_name[-1]}_trim_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix]), include=include, exclude=exclude, strict=True)
 
     def IQ_circle_fit(self, 
                       prefix: str | list[str] = 'unwind_rotate', 
@@ -420,6 +536,7 @@ class Detector:
         Fit the target sweep circle in the IQ plane
         
         '''
+
         col_name = ['I', 'Q', 'circle_fit']
 
         if isinstance(prefix, str): prefix = [prefix]
@@ -441,41 +558,52 @@ class Detector:
                        use_fit=True, 
                        include: int | list[int] | None = None, 
                        exclude: int | list[int] | None = None, 
-                       recalc: bool = False) -> pl.DataFrame:
+                       recalc: bool = False) -> list[pl.DataFrame]:
         '''
         Rotate and center the target sweep circle in the IQ plane onto the real axis
-
-
         '''
+        if isinstance(prefix, str): prefix = [prefix]
 
         dest_I = None
         if loc == 'origin':
             dest_I = 0
 
-        col_names = ['I', 'Q']
-        fit_names = [f'{circle_fit_col}_center_I', f'{circle_fit_col}_center_Q', f'{circle_fit_col}_center_angle', f'{circle_fit_col}_center_mag']
+        col_name = ['I', 'Q', f'{loc}{'_' if loc else ''}shift{'_' if loc else ''}{loc}_rotate']
 
-        center_angle = []
-        center_mag = []
         if dest_I is None: # Do not transform the circle if no destination provided
             shift = np.zeros(len(self.dets))
             center_angle = np.zeros(len(self.dets))
         else:
-            use_mean = True
-            if fit_names[0] in self.properties.schema and use_fit:
-                #TODO: Use pl.when to avoid recalculating every time
-                self._properties_df = self._properties_df.with_columns((pl.arctan2(pl.col(fit_names[1]), pl.col(fit_names[0]))).alias(fit_names[2]),
-                                                                       ((pl.col(fit_names[0])**2 + pl.col(fit_names[1])**2).sqrt()).alias(fit_names[3]))
-                center_angle, center_mag = self._properties_df.select(pl.col(fit_names[2:])).to_numpy().T
-                if not center_angle is None and not center_mag is None: use_mean = False
+            if not use_fit: # Use median I & Q values of target sweep IQ circle if not using center from circle fit
+                property_names = [f'targ_median_{prefix}{'_' if prefix else ''}{col_name[0]}',
+                                  f'targ_median_{prefix}{'_' if prefix else ''}{col_name[0]}',
+                                  f'targ_median_{prefix}{'_' if prefix else ''}angle',
+                                  f'targ_median_{prefix}{'_' if prefix else ''}mag']
+                
+                # Calculate target sweep median I & Q values if not in ``properties`` DataFrame already
+                include_subset = self._check_properties(property_names[0], include=include, exclude=exclude, recalc=recalc)
+                if not len(include_subset) == 0:
+                    median_I_df = self.targ.get_data(f'{prefix}{'_' if prefix else ''}{col_name[0]}', include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
+                    median_Q_df = self.targ.get_data(f'{prefix}{'_' if prefix else ''}{col_name[0]}', include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
 
-            if use_mean:
-                # TODO: Use add_data_to_properties here
-                center_I = np.array([self.targ.data.select(pl.col(f"{prefix}{'_' if prefix else ''}{col_names[0]}_{tone:04d}").mean()).item() for tone in self.targ.tones]) 
-                center_Q = np.array([self.targ.data.select(pl.col(f"{prefix}{'_' if prefix else ''}{col_names[1]}_{tone:04d}").mean()).item() for tone in self.targ.tones])
-                center_angle = np.arctan2(center_Q, center_I)
-                center_mag = np.sqrt(center_I**2 + center_Q**2)
+                    self.add_data_to_properties(median_I_df, property_names[0])
+                    self.add_data_to_properties(median_Q_df, property_names[1])
+            else:
+                property_names = [f'{circle_fit_col}_center_I',
+                                  f'{circle_fit_col}_center_Q',
+                                  f'{circle_fit_col}_center_angle',
+                                  f'{circle_fit_col}_center_mag']
+            
+            include_subset = self._check_properties(property_names[2], include=include, exclude=exclude, recalc=recalc)
+            if not len(include_subset) == 0:
+                circle_fit_df = (self.get_properties(property_names[0:2] , include=include_subset, strict=True)
+                                     .select(['det',
+                                             (pl.arctan2(pl.col(property_names[1]), pl.col(property_names[0]))).alias(property_names[2]), # Calculate angle
+                                            ((pl.col(property_names[0])**2 + pl.col(property_names[1])**2).sqrt()).alias(property_names[3])])) # Calculate magnitude
+                shared_cols = property_names[2:4] if property_names[2] in self._properties_df.schema else []
+                self._properties_df = ccat_df.coalesce_join(self._properties_df, circle_fit_df, on = 'det', shared_cols = shared_cols)
 
+            center_angle, center_mag = self.get_properties(property_names[2:4], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
             center_angle = np.pi - center_angle        
             shift = center_mag + dest_I
 
@@ -488,50 +616,66 @@ class Detector:
         shift_dfs = []
         for data_obj in data_objs:
             data_obj.IQ_rotate(prefix=prefix, angle=center_angle, name=loc, include = include, exclude=exclude, recalc=recalc)
-            data_obj.IQ_shift(prefix=f"{loc}{'_' if loc else ''}rotate_" + prefix, shift_I = shift, name=loc, include=include, exclude=exclude, recalc=recalc)
-            shift_dfs.append(data_obj.get_data(col_name=f"{loc}{'_' if loc else ''}shift{'_' if loc else ''}{loc}_rotate", include=include, exclude=exclude))
+            data_obj.IQ_shift(prefix=[f"{loc}{'_' if loc else ''}rotate_{pre}" for pre in prefix], shift_I = shift, name=loc, include=include, exclude=exclude, recalc=recalc)
+            shift_dfs.append(data_obj.get_data(col_name=[f"{col_name[-1]}_{pre}{'_' if pre else ''}{col_name[0]}" for pre in prefix] +
+                                                        [f"{col_name[-1]}_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix], include=include, exclude=exclude, strict=True))
         return shift_dfs
 
     def IQ_circle_rotate(self, 
                          prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', 
                          data: str = 'both', 
                          rotation: str ='mismatch', 
+                         mean_points: int = 10,
                          include: int | list[int] | None = None, 
                          exclude: int | list[int] | None = None, 
                          recalc: bool = False, 
-                         **kwargs) -> pl.DataFrame:
+                         **kwargs) -> list[pl.DataFrame]:
         '''
         Rotate the target sweep circle in the IQ plane around its center
-        
         '''
         
         col_name = ['I', 'Q', rotation]
         if isinstance(prefix, str): prefix = [prefix]
+        num_prefix=len(prefix)
 
-        angles = []
-        for pre in prefix:
+        angles = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
             if rotation == 'mismatch':
                 mismatch_col_name = f'{pre}_{col_name[-1]}_angle'
-                if recalc or not mismatch_col_name in self.properties.schema:
-                    # TODO: Optimize to get first and last values before doing evaluation
+                include_subset = self._check_properties(mismatch_col_name, include=include, exclude=exclude, recalc=recalc)
+                if not len(include_subset) == 0:
                     pi = pl.lit(np.pi)
-                    mismatch_df = self.targ.data.lazy().select([(pi - pl.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").first(), pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").first() % 2*pi +
-                                                                      pl.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").last(), pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").last()) % 2*pi)/2).alias(f'{tone:04d}') for tone in self.targ.tones]).collect()
-
+                    I_df = self.targ.get_data(f"{pre}{'_' if pre else ''}{col_name[0]}", include=include_subset, strict=True)
+                    Q_df = self.targ.get_data(f"{pre}{'_' if pre else ''}{col_name[1]}", include=include_subset, strict=True)
+                    I_cols, Q_cols = I_df.columns, Q_df.columns
+                    IQ_df = pl.concat([I_df, Q_df], how='horizontal')
+                          
+                    mismatch_df = (IQ_df.lazy()
+                                        .select(pl.all().head(mean_points).mean().name.prefix('first_'), pl.all().tail(mean_points).mean().name.prefix('last_'))
+                                        .select([(pi - (pl.arctan2(pl.col(f"first_{Q_col}"), pl.col(f"first_{I_col}")) % (2*pi) +
+                                                        pl.arctan2(pl.col(f"last_{Q_col}"),  pl.col(f"last_{I_col}")) % (2*pi))/2).alias(I_col.split('_')[-1]) for I_col, Q_col in zip(I_cols, Q_cols)])
+                                        .collect())
                     self.add_data_to_properties(mismatch_df, mismatch_col_name)
-                mismatch_angle = self._properties_df[mismatch_col_name].to_numpy()
-                angles.append(mismatch_angle)
+                mismatch_angle = self.get_properties(mismatch_col_name, include=include, exclude=exclude, strict=True).to_numpy().T[1]
+                angles[i] = mismatch_angle
             elif rotation == 'timestream':
                 timestream_col_name = f'{pre}_{col_name[-1]}_angle'
-                if recalc or not timestream_col_name in self.properties.schema:
+
+                # Calculate angle of center of timestream (center determined using I and Q medians)
+                include_subset = self._check_properties(timestream_col_name, include=include, exclude=exclude, recalc=recalc)
+                if not len(include_subset) == 0:
                     pi = pl.lit(np.pi)
-                    timestream_df = self.stream.data.select([(pl.arctan2(pl.col(f"{pre}{'_' if pre else ''}{col_name[1]}_{tone:04d}").median(),
-                                                                         pl.col(f"{pre}{'_' if pre else ''}{col_name[0]}_{tone:04d}").median()) % 2*pi).alias(f'{tone:04d}') if tone in include else pl.lit(0).alias(f'{tone:04d}') for tone in self.stream.tones])
-                    
+                    I_df = self.stream.get_data(f"{pre}{'_' if pre else ''}{col_name[0]}", include=include_subset, strict=True)
+                    Q_df = self.stream.get_data(f"{pre}{'_' if pre else ''}{col_name[1]}", include=include_subset, strict=True)
+                    I_cols, Q_cols = I_df.columns, Q_df.columns
+                    IQ_df = pl.concat([I_df, Q_df], how='horizontal')
+                    timestream_df = (IQ_df.lazy()
+                                          .select(pl.all().median()) 
+                                          .select([(pl.arctan2(pl.col(Q_col), pl.col(I_col)) % (2*pi)).alias(I_col.split('_')[-1]) for I_col, Q_col in zip(I_cols, Q_cols)])
+                                          .collect())
                     self.add_data_to_properties(timestream_df, timestream_col_name)
-                
-                timestream_angle = self._properties_df[timestream_col_name].to_numpy().T
-                angles.append(timestream_angle)
+                timestream_angle = self.get_properties(timestream_col_name, include=include, exclude=exclude, strict=True).to_numpy().T[1]
+                angles[i] = timestream_angle
             else:
                 error = f"Invalid rotation '{rotation}' specified; Must be one of 'mismatch' or 'timestream'."
                 rfsoc_io.send_msg('ERROR', error)
@@ -546,7 +690,8 @@ class Detector:
         rotation_dfs = []
         for data_obj in data_objs:
             data_obj.IQ_rotate(prefix=prefix, angle=angles, name=f'{col_name[-1]}', include = include, exclude=exclude, recalc=recalc)
-            rotation_dfs.append(data_obj.get_data(col_name=f"{col_name[-1]}_rotate_", include=include, exclude=exclude))
+            rotation_dfs.append(data_obj.get_data(col_name=[f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[0]}" for pre in prefix] + 
+                                                           [f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix], include=include, exclude=exclude, strict=True))
         return rotation_dfs
 
     def IQ_noise(self,
@@ -564,16 +709,17 @@ class Detector:
             use_noise_tones (bool): Whether to use noise tones. Defaults to True
         '''
         def _get_medians(prefix):
-            # TODO: Figure out how to deal with include and exclude
-            if recalc or not (f'median_{prefix}{'_' if prefix else ''}{col_name[0]}' in self.properties.schema):
-                median_I_df = self.stream.data.select([pl.col(f'{prefix}{'_' if prefix else ''}{col_name[0]}_{tone:04d}').median().alias(f'{tone:04d}') for tone in self.stream.tones])
-                median_Q_df = self.stream.data.select([pl.col(f'{prefix}{'_' if prefix else ''}{col_name[1]}_{tone:04d}').median().alias(f'{tone:04d}') for tone in self.stream.tones])
+            med_col = ['stream_median']
 
-                self.add_data_to_properties(median_I_df, f'median_{prefix}{'_' if prefix else ''}{col_name[0]}')
-                self.add_data_to_properties(median_Q_df, f'median_{prefix}{'_' if prefix else ''}{col_name[1]}')
-            
-            median_I = self.properties[f'median_{prefix}{'_' if prefix else ''}{col_name[0]}'].to_numpy()
-            median_Q = self.properties[f'median_{prefix}{'_' if prefix else ''}{col_name[1]}'].to_numpy()
+            include_subset = self._check_properties(f'{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}', include=include, exclude=exclude, recalc=recalc)
+            if not len(include_subset) == 0:
+                median_I_df = self.stream.get_data(f'{prefix}{'_' if prefix else ''}{col_name[0]}', include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
+                median_Q_df = self.stream.get_data(f'{prefix}{'_' if prefix else ''}{col_name[0]}', include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
+
+                self.add_data_to_properties(median_I_df, f'{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}')
+                self.add_data_to_properties(median_Q_df, f'{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[1]}')
+            median_I, median_Q = self.get_properties([f'{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}',
+                                                      f'{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[1]}'], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
             return median_I, median_Q
 
         col_name = ['I', 'Q']
@@ -582,20 +728,26 @@ class Detector:
         num_prefix = len(prefix)
         noise_tones = self.stream.noise_tones
 
-        if use_noise_tones and not noise_tones is None: # Use noise tones
+        if use_noise_tones and not (noise_tones is None): # Use noise tones
             col_name += ['noise_shift']
-            if recalc or not ('closest_noise_tone' in self.properties.schema):
-                self._properties_df = self.properties.with_columns([((pl.col('tone_freqs') - pl.col('tone_freqs').abs().gather(tone))/pl.lit(1e6)).alias(f'noise_tone_dist_{tone:04d}') for tone in noise_tones])
-                unpivot_cols = set(self._properties_df.select('det', '^noise_tone_dist_\d.*$').columns) - {'det'}
-                closest_tones = (self._properties_df.unpivot(on=unpivot_cols,
-                                                            index='det',
-                                                            variable_name='closest_noise_tone',
-                                                            value_name='dist')
-                                                    .with_columns(pl.col('closest_noise_tone').str.split('_').list[-1].cast(pl.Int32))
-                                                    .filter(pl.col('dist') == pl.col('dist').min().over('det'))
-                                                    .sort('det'))['closest_noise_tone']
-                self._properties_df = self._properties_df.with_columns(closest_tones)
-            closest_tones = self.properties['closest_noise_tone'].to_numpy()
+
+            include_subset = self._check_properties(f'closest_noise_tone', include=include, exclude=exclude, recalc=recalc)
+            if not len(include_subset) == 0:
+                noise_freqs = self.get_properties('tone_freqs', include=noise_tones, strict=True).to_numpy().T[1]
+                closest_tones = (self.get_properties('tone_freqs', include=include_subset, strict=True)
+                                     .lazy()
+                                     .select(['det'] + [((pl.col('tone_freqs') - freq).abs()/pl.lit(1e6)).alias(f'{tone:04d}') for tone, freq in zip(noise_tones, noise_freqs)]) 
+                                     .collect()       
+                                     .unpivot(index='det', variable_name='closest_noise_tone', value_name='dist')
+                                     .lazy()
+                                     .with_columns(pl.col('closest_noise_tone').cast(pl.Int32))
+                                     .filter(pl.col('dist') == pl.col('dist').min().over('det'))
+                                     .sort('det')
+                                     .select(['det', 'closest_noise_tone'])
+                                     .collect())
+                shared_cols = 'closest_noise_tone' if 'closest_noise_tone' in self._properties_df.schema else []
+                self._properties_df = ccat_df.coalesce_join(self._properties_df, closest_tones, on='det', shared_cols = shared_cols)
+            closest_tones = self.get_properties('closest_noise_tone', include=include, exclude=exclude, strict=True).to_numpy().T[1]
             noise_median_I, noise_median_Q = _get_medians('')
 
             col_names = [[]]*num_prefix
@@ -603,19 +755,19 @@ class Detector:
             for i, pre in enumerate(prefix):
                 col_names[i] = col_name[:-1] + [f'{col_name[-1]}{'_' if pre else ''}{pre}']
                 median_Is[i], median_Qs[i] = _get_medians(pre)
-            args = [[median_I, median_Q, noise_median_I, noise_median_Q, self.stream.tones, closest_tones] for median_I, median_Q in zip(median_Is, median_Qs)]
+            args = [[median_I, median_Q, noise_median_I, noise_median_Q, closest_tones] for median_I, median_Q in zip(median_Is, median_Qs)]
             self.stream.transform([Detector.calc_noise_shift]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
-            return self.stream.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+            return self.stream.get_data(col_name=[f'{col_name[-1]}_{col_names[0]}' for col_name in col_names] +
+                                                 [f'{col_name[-1]}_{col_names[1]}' for col_name in col_names], include=include, exclude=exclude)
         else: 
-            # TODO: A bit slow, figure out why
             col_name += ['noise_rotate']
         
             for pre in prefix:
                 median_I, median_Q = _get_medians(pre)
 
-                self.stream.IQ_shift(prefix=pre, shift_I = -1*median_I, shift_Q = -1*median_Q, name='', recalc=recalc)
-                self.stream.IQ_rotate(prefix=f'shift_{pre}', angle=pl.lit(np.pi/2), name='noise', recalc=recalc)
-                self.stream.IQ_shift(prefix=f'noise_rotate_shift_{pre}', shift_I = median_I, shift_Q = median_Q, name='', recalc=recalc)
+                self.stream.IQ_shift(prefix=pre, shift_I = -1*median_I, shift_Q = -1*median_Q, name='', include=include, exclude=exclude, recalc=recalc)
+                self.stream.IQ_rotate(prefix=f'shift_{pre}', angle=pl.lit(np.pi/2), name='noise', include=include, exclude=exclude, recalc=recalc)
+                self.stream.IQ_shift(prefix=f'noise_rotate_shift_{pre}', shift_I = median_I, shift_Q = median_Q, name='', include=include, exclude=exclude, recalc=recalc)
 
                 self.stream.data = self.stream.data.with_columns([pl.col(col).alias(col.replace('shift_noise_rotate_shift', col_name[-1])) for col in self.stream.data.select(pl.col('^shift_noise_rotate_shift_.*$')).columns])
             return self.stream.get_data(col_name=[f'{col_name[-1]}{'_' if pre else ''}{pre}' for pre in prefix], include=include, exclude=exclude)
@@ -678,7 +830,6 @@ class Detector:
             max_workers (int): Number of processor cores to use for calculation. Defaults to 1.         
         '''
         
-        #TODO: Does not work when include is specified
         col_name = ['phase', 'f']
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -687,8 +838,15 @@ class Detector:
         for i, pre in enumerate(prefix):
             prefix_names = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
             col_names[i] = prefix_names
-            min_phases[i] = self.stream.data.select(pl.col(f'^{prefix_names[0]}_.*$').min().name.prefix('min_')).to_numpy()[0] - phase_bounds
-            max_phases[i] = self.stream.data.select(pl.col(f'^{prefix_names[0]}_.*$').max().name.prefix('max_')).to_numpy()[0] + phase_bounds
+
+            include_subset = self._check_properties(f'min_{prefix_names[0]}', include=include, exclude=exclude, recalc=recalc)
+            if not len(include_subset) == 0:
+                phase_df = self.stream.get_data(prefix_names[0], include=include_subset, strict=True)
+                min_df, max_df = phase_df.select([pl.all().min().name.map(lambda s: s.split('_')[-1])]), phase_df.select([pl.all().max().name.map(lambda s: s.split('_')[-1])])
+                self.add_data_to_properties(min_df, f'min_{prefix_names[0]}'), self.add_data_to_properties(max_df, f'max_{prefix_names[0]}')
+
+            min_phase, max_phase = self.get_properties([f'min_{prefix_names[0]}', f'max_{prefix_names[0]}'], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
+            min_phases[i], max_phases[i] = min_phase - phase_bounds, max_phase + phase_bounds
         self.phase_spline(prefix=spline_col, phase_low = min_phases, phase_up = max_phases, k = k, include=include, exclude=exclude, recalc=recalc, max_workers=max_workers, **kwargs)
 
         args = [[self, spline_col, ccat_mp.check_max_workers(max_workers)]]*num_prefix
@@ -698,7 +856,7 @@ class Detector:
     
     def frac_f(self, 
                prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 
-               f_0 = None, 
+               f_0: str | list[float] = 'tone_freqs', 
                name='', 
                include: int | list[int] | None = None, 
                exclude: int | list[int] | None = None, 
@@ -706,21 +864,20 @@ class Detector:
                **kwargs) -> pl.DataFrame:        
         '''
         Convert timestream frequency data to fractional frequency shift 
-
         '''
         
         col_name = ['f', f"{name}{'_' if name else ''}frac"]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
-        if f_0 is None: f_0 = self.properties.select(pl.col('tone_freqs')).to_numpy().T[0]
+        if isinstance(f_0, str): f_0 = self.get_properties(f_0, include=include, exclude=exclude, strict=True).to_numpy().T[1]
         if not isinstance(f_0, Iterable) or not len(f_0) == num_prefix: f_0 = [f_0]
 
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
 
-        args = [[f, self.dets] for f in f_0]
+        args = [[f] for f in f_0]
         self.stream.transform([Detector.calc_frac_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)        
         return self.stream.get_data(col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names], include=include, exclude=exclude)
 
@@ -729,11 +886,11 @@ class Detector:
     #==================#
 
     @staticmethod
-    def calc_nonlinear_fit(schema, *args, tones: list[int], recalc: bool = False, col_name = ['f', 'I', 'Q', 'nonlinear_fit']):
+    def calc_complex_fit(schema, *args, tones: list[int], recalc: bool = False, col_name = ['f', 'I', 'Q', 'complex_fit']):
         ''' Fit using resonator_model_v3
         '''
 
-        def _nonlinear_fit(df):
+        def _complex_fit(df):
             struct = df.struct
 
             self.properties
@@ -767,11 +924,12 @@ class Detector:
                     results_dict[f'cable_{col_name[-1]}_{I_col}'] = cable_fit.real
                     results_dict[f'cable_{col_name[-1]}_{Q_col}'] = cable_fit.imag
 
-            df = pl.DataFrame(results_dict)
+            df = pl.DataFrame(dict(sorted(results_dict.items())))
             return pl.Series(df.select(pl.struct(df.columns)))
             
         if len(args) == 7:
             self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, save_model_result = args
+            if tones is not None: self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, save_model_result = self[0], nonlinear[0], asymm[0], fix_cable[0], fix_thetaQ[0], max_workers[0], save_model_result[0]
         else:
             error = 'nonlinear, asymm, fix_cable, and fix_thetaQ are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
@@ -779,7 +937,7 @@ class Detector:
         
         return_col = [f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}', f'cable_{col_name[-1]}_{col_name[1]}', f'cable_{col_name[-1]}_{col_name[2]}']
         return_type = [pl.Float64, pl.Float64, pl.Float64, pl.Float64]
-        expr, to_calc, calc_col, batches = ccat_mp.batch_calc(_nonlinear_fit, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc)
+        expr, to_calc, calc_col, batches = ccat_mp.batch_calc(_complex_fit, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc)
         return expr
 
     @staticmethod
@@ -827,6 +985,7 @@ class Detector:
             
         if len(args) == 9:
             self, prefix, circle_col, nonlinear, method, params, window, max_workers, save_model_result = args
+            if tones is not None: self, prefix, circle_col, nonlinear, method, params, window, max_workers, save_model_result = self[0], prefix[0], circle_col[0], nonlinear[0], method[0], params[0], window[0], max_workers[0], save_model_result[0]
             if isinstance(params, lmfit.parameter.Parameters) or not isinstance(params, Iterable): params = len(tones)*[params]
             if isinstance(nonlinear, bool): nonlinear = len(tones)*[nonlinear]
             if isinstance(window, (int, float)): window = len(tones)*[window]
@@ -888,6 +1047,7 @@ class Detector:
             
         if len(args) == 7:
             self, prefix, bounds, loss, f_scale, method, max_workers = args
+            if tones is not None: self, prefix, bounds, loss, f_scale, method, max_workers = self[0], prefix[0], bounds[0], loss[0], f_scale[0], method[0], max_workers[0]
         else:
             error = 'self, prefix, bounds, loss, f_scale, method, and max_workers are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
@@ -902,13 +1062,10 @@ class Detector:
     def calc_noise_shift(schema, *args, tones: list[int], recalc: bool = False, col_name = ['I', 'Q', 'noise']):
         if tones is not None:
             tone = tones[0]
-        if len(args) == 6:
-            tone_med_I, tone_med_Q, noise_med_I, noise_med_Q, tone_list, noise_tone = args
+        if len(args) == 5:
+            tone_med_I, tone_med_Q, noise_med_I, noise_med_Q, noise_tone = args
+            if tones is not None: tone_med_I, tone_med_Q, noise_med_I, noise_med_Q, noise_tone = tone_med_I[0], tone_med_Q[0], noise_med_I[0], noise_med_Q[0], noise_tone[0]
 
-            noise_tone = noise_tone[tone_list.index(tone)]
-            tone_med_I, tone_med_Q = tone_med_I[tone_list.index(tone)], tone_med_Q[tone_list.index(tone)]
-            noise_med_I, noise_med_Q = noise_med_I[tone_list.index(noise_tone)], noise_med_Q[tone_list.index(noise_tone)]
-            
             I_shift, Q_shift = noise_med_I - tone_med_I, noise_med_Q - tone_med_Q
         else:
             rfsoc_io.send_msg('ERROR', 'I_shift, Q_shift, tone_list, and noise_tone are required arguments.')
@@ -969,6 +1126,7 @@ class Detector:
 
         if len(args) == 6:
             self, phase_low, phase_up, k, stream_timestamp, max_workers = args
+            if tones is not None: self, phase_low, phase_up, k, stream_timestamp, max_workers = self[0], phase_low[0], phase_up[0], k[0], stream_timestamp[0], max_workers[0]
 
             if isinstance(phase_low, float): phase_low = len(tones)*[phase_low]
             if isinstance(phase_up, float): phase_up = len(tones)*[phase_up]
@@ -1012,6 +1170,7 @@ class Detector:
         
         if len(args) == 3:
             self, spline_col, max_workers = args
+            if tones is not None: self, spline_col, max_workers = self[0], spline_col[0], max_workers[0]
         else:
             error = 'self, spline_col, and max_workers are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
@@ -1031,15 +1190,9 @@ class Detector:
 
         f_col, frac_f_col = col_name
 
-        if len(args) == 2:
-            f_0, tone_list = args
-            if isinstance(f_0, Iterable):
-                if tones is not None: 
-                    f_0 = f_0[tone_list.index(tone)]
-                else:
-                    error = 'Cannot use an array of f_0 when there are no tones.'
-                    rfsoc_io.send_msg('ERROR', error)
-                    raise ValueError(error)
+        if len(args) == 1:
+            f_0 = args
+            if tones is not None: f_0 = f_0[0]
         else:
             rfsoc_io.send_msg('ERROR', 'f_0 and tone_list are required arguments.')
 
@@ -1124,7 +1277,7 @@ class Detector:
     # Helper Methods #
     #================#
     
-    def add_data_to_properties(self, df, col_name) -> None:
+    def add_data_to_properties(self, df, col_name) -> pl.DataFrame:
         '''
         Add a quantity calculated with a data object's ``data`` DataFrame to the ``properties`` DataFrame
         
@@ -1139,31 +1292,44 @@ class Detector:
             col_name (str): Name of column to add to ``properties`` DataFrame 
         '''
 
-        unpivot_cols = df.select(pl.all()).columns
-        df = df.unpivot(on=unpivot_cols,
-                        variable_name='det',
-                        value_name=col_name).with_columns(pl.col('det').cast(int)).unique()
-        if col_name in self.properties.schema: self._properties_df = self._properties_df.drop(col_name)
-        self._properties_df = self._properties_df.join(df, on='det', how='full', coalesce=True)
-        
-    def _get_data_obj(self, data):
+        df = df.unpivot(variable_name='det', value_name=col_name).with_columns(pl.col('det').cast(int)).unique()
+        shared_cols = col_name if col_name in self.properties.schema else []
+        self._properties_df = ccat_df.coalesce_join(self._properties_df, df, 'det', shared_cols)
+        return self._properties_df
+
+    def _check_properties(self, col_name: str, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> list[int]:
+        ''' Check which subset of detectors do not have a value for the specified column
+
+        Args:
+            col_name (str): Name of data column
+            include ():
+            exclude ():
+            recalc (bool):
+        Returns:
+            return (list[int]): List of tones without a value for the specified column
+        '''
+
+        property_df = self.get_properties(col_name, include=include, exclude=exclude, strict=True)
+        if not recalc and not property_df.width == 1: property_df = property_df.filter(pl.col(col_name).is_null())
+        tones = property_df['det'].to_numpy().T
+        return tones
+
+    def _get_data_obj(self, data: str):
         '''
         Get data object (Target, Timestream, or both) corresponding to string 
 
         data (
-
         
         '''
         data_objs = []
-        f = []
+        data_types = []
         if data == 'targ' or data == 'both':
             data_objs.append(self.targ)
-            f.append(None)
+            data_types.append('targ')
         if data == 'timestream' or data == 'both':
-            data_obj = self.stream
-            data_objs.append(data_obj)
-            f.append(data_obj.comb.select('tone_freqs').to_numpy().T[0])
-        return data_objs, f
+            data_objs.append(self.stream)
+            data_types = 'stream'
+        return data_objs, data_types
     
     @staticmethod
     def _load_data(data_class, com_to, analysis_cfg, dets, noise_tones, timestamp, data_path, **kwargs):

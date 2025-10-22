@@ -17,6 +17,7 @@ from bokeh.plotting import curdoc
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.utils.pair as pair
+import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 from ccatkidlib.analysis.core.sweep import Sweep
 from ccatkidlib.analysis.fit.fit import linear_fit
@@ -141,8 +142,7 @@ class Target(Sweep):
 
         new_df = pl.DataFrame(new_dict)
         shared_cols = set(self._properties_df.columns) & set(new_df.columns) - {'det'}
-        self._properties_df = self._properties_df.drop(list(shared_cols))
-        self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
+        self._properties_df = ccat_df.coalesce_join(self._properties_df, new_df, 'det', shared_cols)
         return self._properties_df
     
     @properties.setter
@@ -176,7 +176,4 @@ class Target(Sweep):
                                                        returns_scalar=True, return_dtype=pl.Float64,)).item() for tone in tones}
         return cable_delay
     
-    #==================#
-    # Plotting Methods #
-    #==================#
 

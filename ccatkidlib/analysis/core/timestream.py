@@ -30,7 +30,8 @@ from holoviews.operation.datashader import rasterize, datashade, dynspread
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.utils.pair as pair
-import ccatkidlib.analysis.utils.mp as ccat_mp
+import ccatkidlib.analysis.utils.multiprocess as ccat_mp
+import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 from ccatkidlib.analysis.core.data import Data
 from ccatkidlib.utils import method_timer
@@ -365,8 +366,7 @@ class Timestream(Data):
 
         new_df = pl.DataFrame(new_dict)
         shared_cols = set(self._properties_df.columns) & set(new_df.columns) - {'det'}
-        self._properties_df = self._properties_df.drop(list(shared_cols))
-        self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
+        self._properties_df = ccat_df.coalesce_join(self._properties_df, new_df, 'det', shared_cols)
         return self._properties_df
     
     @properties.setter
@@ -469,6 +469,7 @@ class Timestream(Data):
         
         if len(args) == 6:
             sampling_freq, height, window, nperseg, detrend, average = args
+            if tones is not None: sampling_freq, height, window, nperseg, detrend, average = sampling_freq[0], height[0], window[0], nperseg[0], detrend[0], average[0]
         else:
             rfsoc_io.send_msg('ERROR', 'sampling_freq, window, nperseg, detrend, and average are required arguments')
 
