@@ -3,6 +3,8 @@ import sys
 import pathlib
 import numpy as np
 import polars as pl
+import concurrent.futures
+import multiprocessing as mp
 import time
 import pathlib
 import re
@@ -20,6 +22,7 @@ import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.utils.dataframe as ccat_df
+import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 
 from ccatkidlib.rfsoc_io import header
 from ccatkidlib.utils import method_timer
@@ -230,7 +233,7 @@ class Data:
             exprs += ccat_df.parse_tones(_include, _exclude, _all, include, exclude, *args)
             return self.data.select(*exprs)
         else:
-            return self.data.select([pl.col(f'^{'' if strict else '.*'}{name}$') for name in col_name])
+            return self.data.select([pl.col(f"^{'' if strict else '.*'}{name}$") for name in col_name])
 
     def tone(self,
              include: int | list[int] | None = None, 
@@ -453,7 +456,7 @@ class Data:
         return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] + 
                                       [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
     
-    def savgol(self, col_name: str, prefix: str | list[str] = '', window: int = 3, k: int = 1, deriv: int = 0, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+    def savgol(self, col_name: str, prefix: str | list[str] = '', window: int = 3, k: int = 1, deriv: int = 0, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1):
         ''' Calculate the difference between adjacent elements of a specified data column
         
         Args:
@@ -470,8 +473,9 @@ class Data:
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
-        args = [[win, order, der] for win, order, der in zip(window, k, deriv)]
-        self.transform([Data.calc_savgol]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        args = [[win, order, der, ccat_mp.check_max_workers(max_workers)] for win, order, der in zip(window, k, deriv)]
+        self.transform([Data.calc_savgol]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
+        self.data = self._unnest([f'struct_{col_name[-1]}{der:01d}' for col_name, der in zip(col_names, deriv)])
         return self.get_data(col_name=[f'{col_name[-1]}{der}_{col_name[0]}' for col_name, der in zip(col_names, deriv)], include=include, exclude=exclude)
 
     #==================#
@@ -728,23 +732,37 @@ class Data:
             return pl.col(f'{trim_col}_{I_col}')
 
     @staticmethod
-    def calc_savgol(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['', 'diff']) -> pl.Expr:
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{col_name[0]}_{tone:04d}', col_name[-1]]
-        
-        if len(args) == 3:
-            window, k, deriv = args
-            if tones is not None: window, k, deriv = window[0], k[0], deriv[0]
-        else:
-            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
+    def calc_savgol(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['', 'savgol']) -> pl.Expr:
+        def _calc_savgol(df):
+            struct = df.struct
 
-        data_col, savgol_col = col_name
-        savgol_col = f'{savgol_col}{deriv}'
-        if recalc or not (f'{savgol_col}_{data_col}' in schema):
-            return (pl.col(data_col).map_batches(lambda col: savgol_filter(col, window, k, deriv = deriv), return_dtype=pl.Float64).name.prefix(f'{savgol_col}_'))
+            results_dict = {}
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                future_to_batch = {executor.submit(savgol_filter, struct.field(col[0]).to_numpy(), window[ind], k[ind], deriv = deriv):  (tone, col) for tone, ind, (col) in zip(to_calc, calc_ind, batches)}
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tone, col = future_to_batch[future]
+                    try:
+                        filtered_col = future.result()
+                    except Exception as e:
+                        rfsoc_io.send_msg('WARNING', 'Savgol filter for tone %s failed with exception: %s', tone, e)
+                        filtered_col = np.zeros(df.len())
+                    results_dict[f'{col_name[-1]}_{col[0]}'] = filtered_col
+            
+            df = pl.DataFrame(dict(sorted(results_dict.items())))
+            return pl.Series(df.select(pl.struct(df.columns)))
+        col_name = col_name.copy()
+
+        if len(args) == 4:
+            window, k, deriv, max_workers = args
+            if tones is not None: deriv, max_workers = deriv[0], max_workers[0]
+            col_name[-1] = f'{col_name[-1]}{deriv}'
         else:
-            return pl.col(f'{savgol_col}_{data_col}')
+            rfsoc_io.send_msg('ERROR', 'window, k, deriv, and max_workers are required arguments.')
+
+        return_col = [f'{col_name[-1]}_{col_name[-2]}']
+        return_type = [pl.Float64]
+        expr, to_calc, calc_ind, calc_col, batches = ccat_mp.batch_calc(_calc_savgol, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc)
+        return expr
 
     #==========================#
     # Lazily Loaded Attributes #

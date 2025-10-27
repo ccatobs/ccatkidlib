@@ -31,7 +31,7 @@ class Sweep(Data):
     # Plotting Methods #
     #==================#
 
-    def plot(self, x_dim, y_dim, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None):
+    def plot(self, x_dim, y_dim, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, **kwargs):
         col_dict = {'sample': 'sample',
                     'x': x_dim,
                     'y': y_dim}
@@ -40,6 +40,7 @@ class Sweep(Data):
         col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns    
         df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
 
+        print(by)
         tone_sample = int((self.drone_cfg['tones']['sweep_steps']-1)/2)
         df = (df.with_columns(pl.when(pl.col(col_dict['sample']) == tone_sample)
                                .then(pl.lit('diamond_dot'))
@@ -49,14 +50,17 @@ class Sweep(Data):
                                .then(pl.lit(400))
                                .otherwise(pl.lit(20))
                                .alias('size')))
+        
+        if not 'width' in kwargs: kwargs['width'] = self.viz_cfg['plot']['width']
+        if not 'height' in kwargs: kwargs['height'] = self.viz_cfg['plot']['height']
+        if not 'aspect' in kwargs: kwargs['aspect'] = 1
 
         # Create HoloViews plot objects
         line = df.hvplot.line(x=col_dict['x'],
                               y=col_dict['y'],
                               by=by,
                               label='Curve',
-                              width=self.viz_cfg['plot']['width'],
-                              height=self.viz_cfg['plot']['height'])
+                              **kwargs)
 
         scatter = df.hvplot.scatter(x=col_dict['x'],
                                     y=col_dict['y'],
@@ -64,20 +68,15 @@ class Sweep(Data):
                                     s='size',
                                     scale=1,
                                     label='Scatter',
-                                    width=self.viz_cfg['plot']['width'],
-                                    height=self.viz_cfg['plot']['height'])
+                                    **kwargs)
         
         overlay = hv.Overlay([line, scatter])
 
         cfg = self.drone_cfg['det_config']
         title = rf"${cfg['detector_type']}\ {cfg['network']}$"
 
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(opts.Curve(title=title))
-            overlay.NdOverlay.Scatter.opts(opts.Scatter(title=title))
-        else:
-            overlay.Curve.Curve.opts(opts.Curve(title=title))
-            overlay.Scatter.Scatter.opts(opts.Scatter(title=title))
+        if not (include is None and exclude is None): overlay.opts(opts.NdOverlay(title=title, aspect=1))
+        overlay.opts(opts.Curve(title=title, aspect=1), opts.Scatter(title=title, aspect=1))
 
         return overlay, df
 
@@ -91,12 +90,7 @@ class Sweep(Data):
         scatter_opts = opts.Scatter(xlabel=xlabel,
                                     ylabel=ylabel)
 
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(curve_opts)
-            overlay.NdOverlay.Scatter.opts(scatter_opts)
-        else:
-            overlay.Curve.Curve.opts(curve_opts)
-            overlay.Scatter.Scatter.opts(scatter_opts)
+        overlay.opts(curve_opts, scatter_opts)
 
         if return_df:
             return overlay, df
@@ -113,12 +107,7 @@ class Sweep(Data):
         scatter_opts = opts.Scatter(xlabel=xlabel,
                                     ylabel=ylabel)
 
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(curve_opts)
-            overlay.NdOverlay.Scatter.opts(scatter_opts)
-        else:
-            overlay.Curve.Curve.opts(curve_opts)
-            overlay.Scatter.Scatter.opts(scatter_opts)
+        overlay.opts(curve_opts, scatter_opts)
 
         if return_df:
             return overlay, df
@@ -126,32 +115,30 @@ class Sweep(Data):
             return overlay
     
     def IQ_plot(self, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
-        overlay, df = self.plot('I', 'Q', x_prefix=prefix, y_prefix=prefix, include=include, exclude=exclude)
+        overlay, df = self.plot('I', 'Q', x_prefix=prefix, y_prefix=prefix, include=include, exclude=exclude, width = self.viz_cfg['plot']['height'], aspect=1)
         xlabel = r'$I\ [arb]$'
         ylabel = r'$Q\ [arb]$'
 
-    
         I_min, I_max = df.select(pl.col('I').min().alias('min'), pl.col('I').max().alias('max'))[0].to_numpy()[0]
         Q_min, Q_max = df.select(pl.col('Q').min().alias('min'), pl.col('Q').max().alias('max'))[0].to_numpy()[0]
 
-        I_diff = I_max - I_min
-        Q_diff = Q_max - Q_min
-        I_avg = (I_min + I_max)/2
-        Q_avg = (Q_min + Q_max)/2
+        max_diff = 1.1*max(I_max - I_min, Q_max - Q_min) / 2
+        I_avg, Q_avg = (I_min + I_max)/2, (Q_min + Q_max)/2
+
+        x_min, x_max = I_avg - max_diff, I_avg + max_diff
+        y_min, y_max = Q_avg - max_diff, Q_avg + max_diff
 
         curve_opts = opts.Curve(xlabel=xlabel,
                                 ylabel=ylabel,
-                                aspect=1)
+                                xlim = (x_min, x_max),
+                                ylim = (y_min, y_max))
+        
         scatter_opts = opts.Scatter(xlabel=xlabel,
                                     ylabel=ylabel,
-                                    aspect=1)
+                                    xlim = (x_min, x_max),
+                                    ylim = (y_min, y_max))
 
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(curve_opts)
-            overlay.NdOverlay.Scatter.opts(scatter_opts)
-        else:
-            overlay.Curve.Curve.opts(curve_opts)
-            overlay.Scatter.Scatter.opts(scatter_opts)
+        overlay.opts(curve_opts, scatter_opts)
 
         if return_df:
             return overlay, df
@@ -200,7 +187,7 @@ class Sweep(Data):
         else:
             try:
                 f_path = pair.replace_root(det_f, self.original_root, self.root_dir)
-                det_f = np.real(np.load(det_f))
+                det_f = np.real(np.load(f_path))
             except:
                 error = f'Failed to load detector frequencies file {det_f}.'
                 rfsoc_io.send_msg('ERROR', error)

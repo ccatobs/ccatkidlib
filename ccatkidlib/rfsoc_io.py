@@ -405,9 +405,11 @@ def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
     Log message and print message to terminal. 
 
     Args:
-        level   (str) : Level of message at which to log (One of: 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
-        msg     (str) : Message to log
-        name    (str) : Name of logger 
+        level (str) : Level of message at which to log (One of: 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
+        msg   (str) : Message to log
+        *args: Additional arguments to the ``logger.log`` method for message formatting
+
+        name  (str, optional) : Name of logger
     '''
     # Get logger
     logger = logging.getLogger(name)
@@ -424,12 +426,13 @@ def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
         # Log error message
         logger.log(logging.ERROR, 'Failed to log message %s with error %s!', msg, e)
 
-def wait(t_sec, desc = ""):
+def wait(t_sec: float, desc: str = "") -> None:
     '''
-    Wait for t_sec seconds with progress bar.
+    Wait for ``t_sec`` seconds with a progress bar
 
     Parameters:
-        t_sec   (int) : Number of seconds to wait
+        t_sec (int) : Number of seconds to wait
+        desc (str, optional): Description to add to progress bar. Defaults to ""
     '''    
 
     start_time = time.time()

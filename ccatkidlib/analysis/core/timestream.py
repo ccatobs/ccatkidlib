@@ -8,7 +8,6 @@ TODO:
     
 '''
 
-
 import so3g
 import numpy as np
 import polars as pl
@@ -141,16 +140,24 @@ class Timestream(Data):
         cfg = self.drone_cfg['det_config']
         title = rf"${cfg['detector_type']}\ {cfg['network']}$"
 
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(opts.Curve(title=title))
-            overlay.NdOverlay.Scatter.opts(opts.Scatter(title=title))
-        else:
-            overlay.Curve.Curve.opts(opts.Curve(title=title))
-            overlay.Scatter.Scatter.opts(opts.Scatter(title=title))
+        if not (include is None and exclude is None): overlay.opts(opts.NdOverlay(title=title))
+        overlay.opts(opts.Curve(title=title), opts.Scatter(title=title))
 
         return overlay, df
 
-    def stream_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+    def stream_plot(self, col_name: str, prefix: str = '', return_df = False, rasterize=True, include: int | list[int] | None = None, exclude: int | list[int] | None = None):
+        ''' Plot the specified data column as a function of time
+        
+        Args:
+            col_name (str): Name of data column (e.g., *I*, *Q*, *mag*, etc.)
+            prefix (str, optional): Defaults to ""
+            return_df (bool): Whether to return the Polars DataFrame that was used to create the plot. Defaults to *False*
+            include (int | list[int] | None, optional): Defaults to *None*
+            exclude (int | list[int] | None, optional): Defaults to *None*
+        Returns:
+            return (hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]): 
+        
+        '''
         overlay, df = self.plot('t', col_name, y_prefix=prefix, include=include, exclude=exclude, unpivot_x=False)
         xlabel = r'$Time [s]$'
         ylabel = f'{prefix}_{col_name}'

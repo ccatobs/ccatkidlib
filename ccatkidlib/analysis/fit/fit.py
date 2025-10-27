@@ -252,13 +252,14 @@ def phase_fit(f: np.ndarray,
 
     Args:
         f (np.ndarray): Array of frequencies (in Hz)
+        phase (np.ndarray): Array of phases (in rad)
         I (np.ndarray, optional): Array of in-phase components of complex transmission. Required for nonlinear fit
         Q (np.ndarray, optional): Array of quadrature components of complex transmission. Required for nonlinear fit
         params (lmfit.Parameters, optional): lmfit Parameters object to use as initial guess for fit
         R (float, optional): Radius of the IQ circle. Only required for nonlinear fit and if not passed as a lmfit.Parameter in params
         nonlinear (bool, optional): Whether to use nonlinear fit. Defaults to False
     '''
-    # TODO: Should switch out lmfit for curve_fit for faster fitting and don't really need lmfit features
+    # TODO: Should switch out lmfit for curve_fit for faster fitting and don't really need lmfit features, Also don't want data trimming in this function since can just use IQ_trim instead
 
     @njit(cache=True)
     def _guess_params(f, phase, R):
