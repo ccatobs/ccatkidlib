@@ -1,3 +1,13 @@
+''' Module for analyzing kinetic inductance detector (KID) time ordered (timestream) data
+
+Authors:
+    - Darshan Patel <dp649@cornell.edu>
+
+TODO:
+    - Multiprocess FFT & PSD calcultions
+    
+'''
+
 import so3g
 import numpy as np
 import polars as pl
@@ -19,7 +29,8 @@ from holoviews.operation.datashader import rasterize, datashade, dynspread
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.utils.pair as pair
-import ccatkidlib.analysis.utils.mp as ccat_mp
+import ccatkidlib.analysis.utils.multiprocess as ccat_mp
+import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 from ccatkidlib.analysis.core.data import Data
 from ccatkidlib.utils import method_timer
@@ -129,16 +140,24 @@ class Timestream(Data):
         cfg = self.drone_cfg['det_config']
         title = rf"${cfg['detector_type']}\ {cfg['network']}$"
 
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(opts.Curve(title=title))
-            overlay.NdOverlay.Scatter.opts(opts.Scatter(title=title))
-        else:
-            overlay.Curve.Curve.opts(opts.Curve(title=title))
-            overlay.Scatter.Scatter.opts(opts.Scatter(title=title))
+        if not (include is None and exclude is None): overlay.opts(opts.NdOverlay(title=title))
+        overlay.opts(opts.Curve(title=title), opts.Scatter(title=title))
 
         return overlay, df
 
-    def stream_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
+    def stream_plot(self, col_name: str, prefix: str = '', return_df = False, rasterize=True, include: int | list[int] | None = None, exclude: int | list[int] | None = None):
+        ''' Plot the specified data column as a function of time
+        
+        Args:
+            col_name (str): Name of data column (e.g., *I*, *Q*, *mag*, etc.)
+            prefix (str, optional): Defaults to ""
+            return_df (bool): Whether to return the Polars DataFrame that was used to create the plot. Defaults to *False*
+            include (int | list[int] | None, optional): Defaults to *None*
+            exclude (int | list[int] | None, optional): Defaults to *None*
+        Returns:
+            return (hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]): 
+        
+        '''
         overlay, df = self.plot('t', col_name, y_prefix=prefix, include=include, exclude=exclude, unpivot_x=False)
         xlabel = r'$Time [s]$'
         ylabel = f'{prefix}_{col_name}'
@@ -354,8 +373,7 @@ class Timestream(Data):
 
         new_df = pl.DataFrame(new_dict)
         shared_cols = set(self._properties_df.columns) & set(new_df.columns) - {'det'}
-        self._properties_df = self._properties_df.drop(list(shared_cols))
-        self._properties_df = self._properties_df.join(pl.DataFrame(new_dict), on='det', how='full', coalesce=True)
+        self._properties_df = ccat_df.coalesce_join(self._properties_df, new_df, 'det', shared_cols)
         return self._properties_df
     
     @properties.setter
@@ -458,6 +476,7 @@ class Timestream(Data):
         
         if len(args) == 6:
             sampling_freq, height, window, nperseg, detrend, average = args
+            if tones is not None: sampling_freq, height, window, nperseg, detrend, average = sampling_freq[0], height[0], window[0], nperseg[0], detrend[0], average[0]
         else:
             rfsoc_io.send_msg('ERROR', 'sampling_freq, window, nperseg, detrend, and average are required arguments')
 
