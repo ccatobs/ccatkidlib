@@ -1,6 +1,6 @@
 """ Module used for data acquisition with a radio frequency system on a chip (RFSoC)
 
-This module defines the Class used for controlling and taking data with a 
+This module defines the ``R`` Class used for controlling and taking data with a 
 Xilinx ZCU111 radio frequency system on a chip (RFSoC). The data acquisition 
 methods are tailored for frequency-division multiplexed readout of microwave 
 resonators: kinetic inductance detectors (KIDs) in particular.
@@ -33,12 +33,12 @@ from collections.abc import Callable
 from ccatkidlib.rfsoc.rfsoc_timestream import Streamer
 from ccatkidlib.rfsoc_io import header
 from ccatkidlib.style import Style
-from ccatkidlib.analysis.vna import VNA
-from ccatkidlib.analysis.target import Target
+from ccatkidlib.analysis.core.vna import VNA
+from ccatkidlib.analysis.core.target import Target
 
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
-import ccatkidlib.analysis.pair as pair
+import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.rfsoc.arg_utils as autils
 
 if mp.get_start_method(allow_none=True) is None: mp.set_start_method('fork')
@@ -145,12 +145,11 @@ class R:
         for cfg in self.drone_cfg:
             rfsoc_io.edit_config(cfg, 'sess_id', self.sess_id)
 
-        # Create file directory structure for saving data
-        # -----------------------------------------------
-        new_dir_paths = rfsoc_io.create_tree(self.drone_list, self.curr_date, self.sess_id, self.data_dir)
-
-        # Assign data directories as class attributes
+        # Create directories
+        # ------------------
+        new_dir_paths = rfsoc_io.create_tree(self.drone_list, self.curr_date, self.sess_id, self.data_dir) # Create file directory structure for saving data
         self.config_dirs, self.targ_dirs, self.timestream_dirs, self.vna_dirs = new_dir_paths
+        self.noise_files = rfsoc_io.create_tmp(self.drone_list, self.tmp_dir) # Create tmp directory and noise tone files
 
         # Setup logger
         self.log_dir = self.config_dirs[0].parent
@@ -185,6 +184,7 @@ class R:
         init_drones = init_drones if init_drones is not None else self.io_cfg['init']['initialize_drones']
         if init_drones: self.setup_drones()
         rfsoc_io.send_msg('INFO', f'Communicating with drones: {self.drone_list}!')
+        
         # Update Measurment Information 
         # -----------------------------
         self._update_measurement(name = self.io_cfg['name'], desc = self.io_cfg['desc'])
@@ -820,7 +820,8 @@ class R:
                     clean_io.cleanQueenTmpDir(testing=False, ftype='', olderThanDaysAgo=str(olderThanDaysAgo))
 
                     # Clean ccatkidlib tmp directory
-                    clean_io._cleanDir(str(Path(self.tmp_dir).resolve()), testing=False, ftype=str(ftype), olderThanDaysAgo=str(olderThanDaysAgo))
+                    ignore_list = [str(Path(self.tmp_dir).resolve() / 'noise_tones.npy')]
+                    clean_io._cleanDir(str(Path(self.tmp_dir).resolve()), testing=False, ignore_list=ignore_list, ftype=str(ftype), olderThanDaysAgo=str(olderThanDaysAgo))
         return avail_spaces
 
     def get_temps(self, **kwargs) -> tuple[list[float], list[float]]:
@@ -946,9 +947,9 @@ class R:
 
         return drive_attens, sense_attens
     
-    ############################
+    #==========================#
     # Data Acquisition Methods #
-    ############################
+    #==========================#
     @header
     @utils.method_timer
     def take_vna_sweep(self, **kwargs) -> list[str]:
@@ -1422,9 +1423,9 @@ class R:
 
         return stream_out
 
-    ##################
+    #================#
     # Tuning Methods #
-    ##################
+    #================#
 
     @header
     @utils.method_timer
@@ -1498,7 +1499,7 @@ class R:
 
     @header
     @utils.method_timer
-    def find_detectors(self, new_sweep: bool = True, filter_freqs: bool = True, **kwargs):
+    def find_detectors(self, new_sweep: bool = True, **kwargs):
         '''
         Find detectors using a VNA sweep 
 
@@ -1507,12 +1508,12 @@ class R:
 
         Args:
             new_sweep (bool, optional): Whether to take a new VNA sweep. Defaults to True
-            filter_freqs (bool, optional): Whether to perform phase filtering on found detectors. Defaults to True
 
             kwargs. See below:
             com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
             sweep_steps (int | list[int], optional): Number of steps each tone should take during sweep. Defaults to value in drone configuration files
             write_targ_comb (bool, optional): Whether to write target comb using found detector frequencies. Defaults to True
+            phase_filter (bool | list[bool], optional): Whether to perform phase filtering on found detectors. Defaults to value in drone configuration files
             filter_wn (int | list[int], optional): Number of points around tone to use for phase filtering. Defaults to value in drone configuration files
             
             peak_prom_std (float | list[float], optional): Peak height from surroundings, in noise std multiples. Defaults to value in drone configuration files
@@ -1544,7 +1545,7 @@ class R:
 
             return rtn1
 
-        def _write_filtered_comb(com_to, vna_files, save_files, found_freqs):
+        def _write_filtered_comb(com_to, vna_files, save_files):
             '''
             '''
             num_drones = len(com_to)
@@ -1561,15 +1562,15 @@ class R:
                 good_resonator = good_resonator.real
                 good_resonators[i] = good_resonator
 
-                # Save filter resonators to .npy file
-                # -----------------------------------
+                # Save filtered resonators to .npy file
+                # -------------------------------------
                 res_dir = self.config_dirs[ind] / 'res'
                 fname = f"{self.io_cfg['save_file_names'][f'vna_sweep']}_res_filtered_{self.timestamp}.npy"
                 save_path = res_dir / fname
                 np.save(save_path, good_resonator)
 
-                # Add filter resonators file path and number to config file
-                # ---------------------------------------------------------
+                # Add filtered resonators file path and number to config file
+                # -----------------------------------------------------------
                 drone_cfg = self.drone_cfg[ind]
                 found_num = len(good_resonator)
                 found_nums[i] = found_num
@@ -1605,6 +1606,7 @@ class R:
         continuum_wn  = autils.get_drone_args(self, com_to, ['det_find', 'continuum_wn'])
         remove_noise  = autils.get_drone_args(self, com_to, ['det_find', 'remove_noise'])
         noise_wn      = autils.get_drone_args(self, com_to, ['det_find', 'noise_wn'])
+        phase_filter  = autils.get_drone_args(self, com_to, ['det_find', 'phase_filter'])
         filter_wn     = autils.get_drone_args(self, com_to, ['det_find', 'filter_wn'])
 
         # Parse key word arguments
@@ -1646,6 +1648,9 @@ class R:
             elif key == 'noise_wn':
                 noise_wn = autils.parse_args(self, com_to, value)
                 autils.set_drone_args(self, com_to, "noise_wn", noise_wn)
+            elif key == 'phase_filter':
+                phase_filter = autils.parse_args(self, com_to, value)
+                autils.set_drone_args(self, com_to, "phase_filter", phase_filter)
             elif key == 'filter_wn':
                 filter_wn = autils.parse_args(self, com_to, value)
                 autils.set_drone_args(self, com_to, "filter_wn", filter_wn)
@@ -1665,9 +1670,9 @@ class R:
                 to_sweep.append(str(com))
             else:
                 vna = VNA(com_to=com, data_path=vna_file)
-                stitch_bw[ind] = utils.dict_get(vna.drone_cfg, 'sweep_steps')
-                vna_files[ind] = vna_file
-                timestamps[ind] = pair.get_timestamp(vna_file)
+                stitch_bw[i] = utils.dict_get(vna.drone_cfg, 'sweep_steps')
+                vna_files[i] = vna_file
+                timestamps[i] = pair.get_timestamp(vna_file)
 
         if len(to_sweep) != 0:
             # Take VNA sweep(s) without saving configs (saved later)
@@ -1698,13 +1703,21 @@ class R:
 
         if write_targ_comb:
             rfsoc_io.send_msg('INFO', f"Writing target combs using found resonators for drones {com_to}!")
-            if filter_freqs: # Write target comb without fake resonators
-                rfsoc_io.send_msg('INFO', f"Filtering resonators for drones {com_to}!")
-                rtn, found_nums = _write_filtered_comb(com_to, vna_files, save_files, found_freqs)
-            else: # Write target comb using all found resonators
+            filt_com_to, unfilt_com_to = np.array(com_to)[phase_filter], np.array(com_to)[np.logical_not(phase_filter)]
+
+            if not len(filt_com_to) == 0: # Write target comb with phase filtered resonators
+                rfsoc_io.send_msg('INFO', f"Filtering resonators for drones {filt_com_to}!")
+                rtn, found_nums = _write_filtered_comb(filt_com_to, np.array(vna_files)[phase_filter], np.array(save_files)[phase_filter])
+    
+            if not len(unfilt_com_to) == 0: # Write target comb using all found resonators
+                kwargs['com_to'] = unfilt_com_to
                 rtn = self._run_parallel(_write_targ_comb, **kwargs)
             rfsoc_io.send_msg('INFO', f'Finished writing target combs for drones {com_to}!')
 
+            # Saved target comb has no noise tones so overwrite noise tone files
+            for com in com_to: np.save(self.noise_files[self.drone_list.index(com)], [])
+
+            # Write current comb to drone config files without saving to disk
             self.save_cfg = False
             for com in com_to: self._save_curr_comb(com, None)
             self.save_cfg = True
@@ -1768,7 +1781,7 @@ class R:
         to_sweep = []
         targ_files = len(com_to)*[None]
         timestamps = len(com_to)*[-1]
-        for com in com_to:
+        for i, com in enumerate(com_to):
             ind = self.drone_list.index(com)
             # Check if a target sweep was taken in the last day
             targ_file = rfsoc_io.get_most_recent_file(self.targ_dirs[ind], f"{self.io_cfg['save_file_names']['targ_sweep'][0]}*", time_past=24*3600)
@@ -1776,9 +1789,10 @@ class R:
                 to_sweep.append(com)
             else:
                 target = Target(com_to=com, data_path=targ_file)
-                stitch_bw[ind] = utils.dict_get(target.drone_cfg, 'sweep_steps')
-                targ_files[ind] = targ_file
-                timestamps[ind] = pair.get_timestamp(targ_file)
+                stitch_bw[i] = utils.dict_get(target.drone_cfg, 'sweep_steps')
+                targ_files[i] = targ_file
+                timestamps[i] = pair.get_timestamp(targ_file)
+
         if len(to_sweep) != 0:
             # Take target sweep(s) without saving config (saved later)
             self.save_cfg = False
@@ -1806,10 +1820,13 @@ class R:
             self._run_parallel(_write_targ_comb, **kwargs)
             rfsoc_io.send_msg('INFO', f'Finished writing target combs for drones {com_to}!')
 
+            # Saved target comb has no noise tones so overwrite noise tone files
+            for com in com_to: np.save(self.noise_files[self.drone_list.index(com)], [])
+
+            # Write current comb to drone config files without saving to disk
             self.save_cfg = False
             for com in com_to: self._save_curr_comb(com, None)
             self.save_cfg = True
-
         return found_nums, targ_files
 
     ################
@@ -1964,7 +1981,7 @@ class R:
 
         import alcove_base
 
-        def _check_comb_type(key, value):
+        def _check_comb(key, value):
             # Check if the tone frequencies are within the bandwidth of the RFSoC
             if len(value) > 1024: value = value[:1024]
             if key == 'tone_freqs' and np.max(np.abs(np.array(value) - self.drone_cfg[ind]['tones']['NCLO']*1e6))  > self.drone_cfg[ind]['tones']['full_bandwidth']*1e6/2:
@@ -2076,7 +2093,7 @@ class R:
                             comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])
                             continue
 
-                value = _check_comb_type(key, value)
+                value = _check_comb(key, value)
                 if value is None:
                     comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_dict[key]['comb'])
                     continue
@@ -2113,7 +2130,7 @@ class R:
                         tone_num = 1
                         rfsoc_io.send_msg('WARNING', f"Only numbers were passed as custom comb; assuming a single tone should be written! To avoid unexpected errors, please pass numbers as a list to write a single tone in the future.")
                     comb_val = comb_val * np.ones(tone_num)
-                    comb_val = _check_comb_type(key, comb_val)
+                    comb_val = _check_comb(key, comb_val)
                     if comb_val is not None:
                         comb_dict = _write_new_comb(bip, ssh_key, comb_dict, key, comb_val)
                     else:
@@ -2123,7 +2140,6 @@ class R:
 
             # Generate phi comb - As done in primecam_readout
             # -----------------------------------------------
-
             # Define maximum RFSoC DAC power
             max_power = self.io_cfg['boards'][f'b{bid}']['max_power']
             tone_freqs = comb_dict['tone_freqs']['new_comb']

@@ -47,7 +47,6 @@ def create_tree(com_to: list[str], curr_date: str, sess_id: int, data_dir: str) 
     Returns:
         tuple[list[str], list[str], list[str], list[str]]: Config directories, target directories, timestream directories, and VNA sweep directories in that order.
     '''
-    # Create tmp directory
     data_dir = Path(data_dir)
 
     config_dirs = []
@@ -92,7 +91,28 @@ def create_tree(com_to: list[str], curr_date: str, sess_id: int, data_dir: str) 
 
     return config_dirs, targ_dirs, timestream_dirs, vna_dirs
 
-def create_dir(dir_path):
+def create_tmp(com_to: list[str], tmp_dir: str) -> list[str]:
+    '''
+    Create *ccatkidlib* tmp directory and files
+
+    Args:
+        com_to (list[str]): _description_
+        tmp_dir (str): _description_
+    '''
+    tmp_dir = Path(tmp_dir)
+    create_dir(tmp_dir) # Create tmp directory if it does not exist
+
+    noise_files = ['invalid/path']*len(com_to)
+    for i, com in enumerate(com_to):
+        board, drone = com.split('.')
+        com_str = f'{board}_{drone}'
+
+        noise_file = tmp_dir / f'noise_tones_{com_str}.npy'
+        if not (noise_file).exists(): np.save(noise_file, [])
+        noise_files[i] = str(noise_file)
+    return noise_files
+
+def create_dir(dir_path: str) -> None:
     '''
     Create directory at the specified path.
 
