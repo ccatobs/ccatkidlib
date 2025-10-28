@@ -7,7 +7,7 @@ file_paths:
   fit_dir: '/home/jovyan/fitting'
 
 io:
-  file_level: 'CRITICAL'    # * File logging level
+  file_level: 'CRITICAL' # * File logging level
   terminal_level: 'INFO' # * Terminal logging level 
   logging_dir: ""        # * Logging directory. Will create log in ccatkidlib/logs if ""
 

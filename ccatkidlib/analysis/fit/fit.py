@@ -108,6 +108,7 @@ def circle_fit(x: np.ndarray, y: np.ndarray, bounds: tuple[list[float], list[flo
         left, right = bounds
         bounds = (-1*np.array(right), -1*np.array(left))
 
+    # TODO: Improve fit implementation to not require two loops (or use a different method)
     for _ in range(2):
         x0 = [np.real(init_A), np.real(init_D), np.real(np.arctan(init_C/init_B))]
         result = least_squares(_residuals, x0 = x0, jac=_jacobian, args=(x, y), bounds = bounds, loss = loss, f_scale=f_scale, method=method)
@@ -251,13 +252,15 @@ def phase_fit(f: np.ndarray,
 
     Args:
         f (np.ndarray): Array of frequencies (in Hz)
+        phase (np.ndarray): Array of phases (in rad)
         I (np.ndarray, optional): Array of in-phase components of complex transmission. Required for nonlinear fit
         Q (np.ndarray, optional): Array of quadrature components of complex transmission. Required for nonlinear fit
         params (lmfit.Parameters, optional): lmfit Parameters object to use as initial guess for fit
         R (float, optional): Radius of the IQ circle. Only required for nonlinear fit and if not passed as a lmfit.Parameter in params
         nonlinear (bool, optional): Whether to use nonlinear fit. Defaults to False
     '''
-    
+    # TODO: Should switch out lmfit for curve_fit for faster fitting and don't really need lmfit features, Also don't want data trimming in this function since can just use IQ_trim instead
+
     @njit(cache=True)
     def _guess_params(f, phase, R):
         ninety_phase_ind = np.argmin(np.abs(np.abs(phase) - np.pi/2)) # Get the index at which the phase is closest to 90 degrees 
