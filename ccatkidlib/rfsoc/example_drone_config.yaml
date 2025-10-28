@@ -25,6 +25,7 @@ tones:
   tone_freqs: null         # - Tone frequencies of most recent comb 
   tone_powers: null        # - Tone powers of most recent comb
   tone_phis: null          # - Tone phases of most recent comb
+  noise_tones: []          # * Indicies of noise tones in most recent comb
   custom:
     tone_freqs: []         # * Custom tone frequencies as float, list of floats, or npy file path (in Hz)
     tone_powers: []        # * Custom tone powers as float, list of floats, or npy file path
@@ -32,6 +33,10 @@ tones:
     generation:
       gen_attempts: 5      # * Number of attempts to randomly generate phases for given frequency and amplitude comb to minimize crest factor
       rescale_power: False # * Whether to rescale amplitudes if power exceeds DAC limit
+  noise:
+    tone_freqs: []         # * Noise tone frequencies as float, list of floats, or npy file path (in Hz) 
+    tone_powers: []        # * Noise tone powers as float, list of floats, or npy file path
+    tone_phis: []          # * Noise tone phases as float, list of floats, or npy file path (in radians)
 
 # * Attenuator configuration (if using bulit in digital attenuators)
 atten:
@@ -62,7 +67,11 @@ det_find:
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+  phase_filter: True
   filter_wn: 3
+
+tune_placement:
+  method: 'min' # Method for tuning tone placement: Must be one of 'min', 'grad'
 
 
 ADC_RMS: null # * RMS power measured at the ADC
@@ -91,6 +100,10 @@ tones:
     generation:
       gen_attempts: 5      # * Number of attempts to randomly generate phases for given frequency and amplitude comb to minimize crest factor
       rescale_power: False # * Whether to rescale amplitudes if power exceeds DAC limit
+  noise:
+    tone_freqs: []         # * Noise tone frequencies as float, list of floats, or npy file path (in Hz) 
+    tone_powers: []        # * Noise tone powers as float, list of floats, or npy file path
+    tone_phis: []          # * Noise tone phases as float, list of floats, or npy file path (in radians)
 
 # * Attenuator configuration (if using bulit in digital attenuators)
 atten:
@@ -121,8 +134,11 @@ det_find:
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+  phase_filter: True
   filter_wn: 3
 
+tune_placement:
+  method: 'min' # Method for tuning tone placement: Must be one of 'min', 'grad'
 
 ADC_RMS: null # * RMS power measured at the ADC
 ---
@@ -150,7 +166,10 @@ tones:
     generation:
       gen_attempts: 5      # * Number of attempts to randomly generate phases for given frequency and amplitude comb to minimize crest factor
       rescale_power: False # * Whether to rescale amplitudes if power exceeds DAC limit
-
+  noise:
+    tone_freqs: []         # * Noise tone frequencies as float, list of floats, or npy file path (in Hz) 
+    tone_powers: []        # * Noise tone powers as float, list of floats, or npy file path
+    tone_phis: []          # * Noise tone phases as float, list of floats, or npy file path (in radians)
 # * Attenuator configuration (if using bulit in digital attenuators)
 atten:
   drive: 15 # * Drive (DAC) attenuation in dB (float between 0 and 31.75)
@@ -180,8 +199,11 @@ det_find:
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+  phase_filter: True
   filter_wn: 3
 
+tune_placement:
+  method: 'min' # Method for tuning tone placement: Must be one of 'min', 'grad'
 
 ADC_RMS: null # * RMS power measured at the ADC
 ---
@@ -209,6 +231,10 @@ tones:
     generation:
       gen_attempts: 5      # * Number of attempts to randomly generate phases for given frequency and amplitude comb to minimize crest factor
       rescale_power: False # * Whether to rescale amplitudes if power exceeds DAC limit
+  noise:
+    tone_freqs: []         # * Noise tone frequencies as float, list of floats, or npy file path (in Hz) 
+    tone_powers: []        # * Noise tone powers as float, list of floats, or npy file path
+    tone_phis: []          # * Noise tone phases as float, list of floats, or npy file path (in radians)
 
 # * Attenuator configuration (if using bulit in digital attenuators)
 atten:
@@ -239,8 +265,11 @@ det_find:
   remove_cont: True
   remove_noise: True
   noise_wn: 30000
+  phase_filter: True
   filter_wn: 3
 
+tune_placement:
+  method: 'min' # Method for tuning tone placement: Must be one of 'min', 'grad'
 
 ADC_RMS: null # * RMS power measured at the ADC
 ...
