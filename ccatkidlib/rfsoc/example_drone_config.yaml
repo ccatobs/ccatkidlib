@@ -72,7 +72,14 @@ det_find:
 
 tune_placement:
   method: 'min' # Method for tuning tone placement: Must be one of 'min', 'grad'
-
+  grad:
+    trim:
+      window: 2 # Number of FWHMs around minimum to keep
+      savgol_window: 9 # Window size to use for savgol filter on |S_21| data to estimate FWHM. Use a window of 1 to specify no filtering
+      savgol_order: 1 # Polynomial order to use for savgol filter
+    diff:
+      savgol_window: 21 # Window size to use for savgol filter on I & Q data for calculating derivatives. Use a window of 1 to specify no filtering
+      savgol_order: 1 # Polynomial order to use for savgol filter
 
 ADC_RMS: null # * RMS power measured at the ADC
 ---
@@ -139,7 +146,15 @@ det_find:
 
 tune_placement:
   method: 'min' # Method for tuning tone placement: Must be one of 'min', 'grad'
-
+  grad:
+    trim:
+      window: 2 # Number of FWHMs around minimum to keep
+      savgol_window: 9 # Window size to use for savgol filter on |S_21| data to estimate FWHM. Use a window of 1 to specify no filtering
+      savgol_order: 1 # Polynomial order to use for savgol filter
+    diff:
+      savgol_window: 21 # Window size to use for savgol filter on I & Q data for calculating derivatives. Use a window of 1 to specify no filtering
+      savgol_order: 1 # Polynomial order to use for savgol filter
+      
 ADC_RMS: null # * RMS power measured at the ADC
 ---
 sess_id: null
@@ -204,6 +219,14 @@ det_find:
 
 tune_placement:
   method: 'min' # Method for tuning tone placement: Must be one of 'min', 'grad'
+  grad:
+    trim:
+      window: 2 # Number of FWHMs around minimum to keep
+      savgol_window: 9 # Window size to use for savgol filter on |S_21| data to estimate FWHM. Use a window of 1 to specify no filtering
+      savgol_order: 1 # Polynomial order to use for savgol filter
+    diff:
+      savgol_window: 21 # Window size to use for savgol filter on I & Q data for calculating derivatives. Use a window of 1 to specify no filtering
+      savgol_order: 1 # Polynomial order to use for savgol filter
 
 ADC_RMS: null # * RMS power measured at the ADC
 ---
@@ -270,6 +293,14 @@ det_find:
 
 tune_placement:
   method: 'min' # Method for tuning tone placement: Must be one of 'min', 'grad'
+  grad:
+    trim:
+      window: 2 # Number of FWHMs around minimum to keep
+      savgol_window: 9 # Window size to use for savgol filter on |S_21| data to estimate FWHM. Use a window of 1 to specify no filtering
+      savgol_order: 1 # Polynomial order to use for savgol filter
+    diff:
+      savgol_window: 21 # Window size to use for savgol filter on I & Q data for calculating derivatives. Use a window of 1 to specify no filtering
+      savgol_order: 1 # Polynomial order to use for savgol filter
 
 ADC_RMS: null # * RMS power measured at the ADC
 ...

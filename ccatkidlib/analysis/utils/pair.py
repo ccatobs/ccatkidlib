@@ -74,7 +74,8 @@ def get_data_file(com_to: str, timestamp: str | int, data_type: str, data_dir: s
     bid, drid = com_to.split('.')
     com_str = f'B{bid}D{drid}'
 
-    file_trees = [Path(data_dir) / date / sess_id / data_type / com_str, Path(data_dir) / data_type / date / sess_id / com_str]
+    file_trees = [Path(data_dir) / date / sess_id / data_type / com_str,
+                  Path(data_dir) / data_type / date / sess_id / com_str]
 
     for tree in file_trees:
         tree = str(tree / f'*{timestamp}*')
@@ -178,6 +179,13 @@ def get_sweep(path: str | pathlib.PosixPath, **kwargs):
 
 def replace_root(path: str | pathlib.PosixPath, old_root: str, new_root: str):
     '''Replace the root directory of a file path with a new root
+
+    Args:
+        path (str | pathlib.PosixPath): Original file path
+        old_root (str): Old root directory of file path to be replaced
+        new_root (str): New root directory to replace the old root
+    Returns:
+        return (str): New file path with the root directory replaced. If the new file path does not exist, returns the original path.
     '''
     path = str(path).strip()
     new_path = path.replace(old_root, new_root)

@@ -456,6 +456,22 @@ class Data:
         return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] + 
                                       [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
     
+    def diff(self, col_name: str, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        ''' Calculate the difference between adjacent elements of a specified data column
+        
+        Args:
+            col_name (str): Name of data column
+        '''
+        col_name = [col_name, 'diff']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
+        self.transform([Data.calc_diff]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names], include=include, exclude=exclude)
+
     def savgol(self, col_name: str, prefix: str | list[str] = '', window: int = 3, k: int = 1, deriv: int = 0, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1):
         ''' Calculate the difference between adjacent elements of a specified data column
         
@@ -730,6 +746,23 @@ class Data:
                       .alias(f'{trim_col}_{col}') for col in [I_col, Q_col]]  
         else:
             return pl.col(f'{trim_col}_{I_col}')
+
+    @staticmethod
+    def calc_diff(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['', 'diff']) -> pl.Expr:
+        ''' Generates pl.Expr for calculating difference between adjacent data points for the specified column
+        Args:
+            schema (pl.Schema)
+        '''
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        data_col, diff_col = col_name
+        if recalc or not (f'{diff_col}_{data_col}' in schema):
+            return pl.col(data_col).diff().name.prefix(f'{diff_col}_')
+        else:
+            return pl.col(f'{diff_col}_{data_col}')
+
 
     @staticmethod
     def calc_savgol(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['', 'savgol']) -> pl.Expr:

@@ -445,7 +445,7 @@ class Detector:
         tone_freqs = self.get_properties('tone_freqs', include=include, exclude=exclude, strict=True)
         norm_dfs = []
         for data_obj, data_type in zip(data_objs, data_types):
-            cable_mags = self.targ.get_data(f'{norm_col}{'_' if norm_col else ''}mag', include=include, exclude=exclude, strict=True)
+            cable_mags = self.targ.get_data(f"{norm_col}{'_' if norm_col else ''}mag", include=include, exclude=exclude, strict=True)
             if data_type == 'targ':
                 scale = 1/cable_mags.to_numpy().T
             else:
