@@ -28,7 +28,7 @@ import polars as pl
 from math import floor
 from pathlib import Path
 from invoke import Responder
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 # Import local modules
 from ccatkidlib.rfsoc.rfsoc_timestream import Streamer
@@ -1758,61 +1758,37 @@ class R:
             rfsoc_io.send_msg('INFO', f"Finished finding resonators from target sweep for drones {com_to}!")
 
             found_nums, found_freqs, save_files = self._save_resonators(com_to, np.array(timestamps, dtype=int)[com_inds], 'targ')
-            return []
+            return [[]]*len(com_to)
 
         def _place_grad(com_to, com_inds):
             num_drones = len(com_to)
 
             found_freqs = num_drones*[[]]
             found_nums = num_drones*[None]
-            timestamps = np.array(timestamps, dtype=int)[com_inds]
-            for i, (com_ind, com, timestamp) in enumerate(zip(com_inds, com_to, timestamps)):
-                wn, trim_savgol_wn, diff_savgol_wn = window[ind], trim_savgol_window[ind], diff_savgol_window[ind]
-                trim_savgol_k, diff_savgol_k = trim_savgol_order[ind], diff_savgol_order[ind]
-                trim_savgol, diff_savgol = trim_savgol_wn > 1, diff_savgol_wn > 1
+            com_timestamps = np.array(timestamps, dtype=int)[com_inds]
+            for i, (com_ind, com, timestamp) in enumerate(zip(com_inds, com_to, com_timestamps)):
+                wn, trim_savgol_wn, diff_savgol_wn = window[com_ind], trim_savgol_window[com_ind], diff_savgol_window[com_ind]
+                trim_savgol_k, diff_savgol_k = trim_savgol_order[com_ind], diff_savgol_order[com_ind]
 
-                det = Detector(com_to = com, targ_path = targ_files[com_ind])
+                ind = self.drone_list.index(com)
+                drone_cfg = self.drone_cfg[ind]
+
+                # Need to create target object and set drone_cfg manually since it has not yet been saved to disk
+                num_tones = utils.dict_get(drone_cfg, 'num_tones')
+                targ = Target(com_to=com, data_path = targ_files[com_ind], tones = range(num_tones))
+                targ.drone_cfg = drone_cfg
+
+                det = Detector(com_to = com, targ=targ)
                 
-                # Calculate the geometric distance between points in IQ space
-                det.cable_delay
-                det.targ.mag()
-
-                if trim_savgol: det.targ.savgol(col_name='mag', prefix='', window=trim_savgol_wn, k=trim_savgol_k, deriv=0, max_workers=1, recalc=False)
-                det.IQ_unwind(prefix='', data='targ', delay_col = 'network_cable_delay', recalc=False)
-                det.IQ_trim(prefix='unwind_rotate',  window=wn, use_fit=False, mag_prefix=f"{'savgol0' if trim_savgol else ''}", recalc=False)
-
-                if diff_savgol:
-                    det.targ.savgol(col_name='I', prefix='tail_trim_unwind_rotate', window=diff_savgol_wn, k=diff_savgol_k, deriv=1, max_workers=1)
-                    det.targ.savgol(col_name='Q', prefix='tail_trim_unwind_rotate', window=diff_savgol_wn, k=diff_savgol_k, deriv=1, max_workers=1)
-                else:
-                    det.targ.diff(col_name='I', prefix='tail_trim_unwind_rotate')
-                    det.targ.diff(col_name='Q', prefix='tail_trim_unwind_rotate')
-                det.targ.mag(prefix=f"{'savgol1' if diff_savgol else 'diff'}_tail_trim_unwind_rotate")
-
-                # Get the frequencies corresponding to the max distance in IQ space (same as frequency with steepest phase gradient)
-                diff_IQ = (det.targ.get_data(f"{'savgol1' if diff_savgol else 'diff'}_tail_trim_unwind_rotate_mag", strict=True)
-                                   .unpivot(value_name='IQ', variable_name='temp')
-                                   .drop('temp'))
-                f = (det.targ.get_data(['f'], strict=True)
-                             .unpivot(value_name='f', variable_name='det')
-                             .with_columns((pl.col('det').str.strip_prefix('f_')).cast(pl.Int32)))
-                full_df = pl.concat([f, diff_IQ], how='horizontal')
-                max_IQ = (full_df.filter(~pl.col('IQ').is_nan())
-                                 .filter((pl.col('IQ') == pl.col('IQ').max()).over('det'))
-                                 .select([pl.col('det'), pl.col('f').alias('max_IQ_f')]))
-
-                # Use tone frequencies for detectors where finding the max distance frequency failed
-                tone_freq_df = det.get_properties('tone_freqs', strict=True)
-                max_IQ = (max_IQ.join(tone_freq_df, on='det', how='right', coalesce=True)
-                                .with_columns(pl.when(pl.col('max_IQ_f').is_null())
-                                                .then(pl.col('tone_freqs'))
-                                                .otherwise(pl.col('max_IQ_f')).alias('max_IQ_f')))
-                found_freq = max_IQ['max_IQ_f'].to_numpy().T
+                found_freq = det.IQ_max_dist(trim_window = wn,
+                                             trim_savgol_window=trim_savgol_wn,
+                                             diff_savgol_window=diff_savgol_wn,
+                                             trim_savgol_k=trim_savgol_k,
+                                             diff_savgol_k=diff_savgol_k,
+                                             max_workers=1).to_numpy().T[1]
                 found_freqs[i] = found_freq
-
                 # Save filtered resonators to .npy file
                 # -------------------------------------
-                ind = self.drone_list.index(com)
                 res_dir = self.config_dirs[ind] / 'res'
                 fname = f"{self.io_cfg['save_file_names'][f'targ_sweep']}_res_grad_{self.timestamp}.npy"
                 save_path = res_dir / fname
@@ -1820,7 +1796,6 @@ class R:
 
                 # Add filtered resonators file path and number to config file
                 # -----------------------------------------------------------
-                drone_cfg = self.drone_cfg[ind]
                 found_num = len(found_freq)
                 found_nums[i] = found_num
                 rfsoc_io.edit_config(drone_cfg, 'found_num_detectors', found_num)
@@ -1841,10 +1816,10 @@ class R:
                 rtn2 : OCS reply object from createCustomCombFilesFromCurrentComb function
             '''
             # Write target comb using found resonators
-            rtn1 = self.rfsoc.writeTargCombFromTargSweep(com_to = com, silent = False)
+            rtn = self.rfsoc.writeTargCombFromTargSweep(com_to = com, silent = False)
             rfsoc_io.send_msg('PCS', f'{rtn.session}')
 
-            return rtn1
+            return rtn
 
         com_to, boards = autils.get_com_to(self, **kwargs)
         kwargs['setup'] = False # Do not set up drones again
@@ -1923,7 +1898,6 @@ class R:
             if len(method_com_to) > 0:
                 tone_freq = method_func(method_com_to, method_inds)
                 for ind, freq in zip(method_inds, tone_freq): tone_freqs[ind] = freq
-
         if write_targ_comb:
             rfsoc_io.send_msg('INFO', "Writing target comb using tuned tone frequencies for drones %s!", com_to)
 
@@ -1944,9 +1918,9 @@ class R:
                 kwargs['com_to'] = primecam_readout_com_to
                 self._run_parallel(_write_targ_comb, **kwargs)
             if len(ccatkidlib_com_to) > 0:
-                kwargs['com_to'], kwargs['tone_freqs'] = ccatkidlib_com_to, np.array(tone_freqs)[ccatkidlib_inds].tolist()
+                kwargs['com_to'], kwargs['tone_freqs'] = ccatkidlib_com_to, [tone_freqs[ind] for ind in ccatkidlib_inds]
                 for k, v in kwargs.items():
-                    if len(v) == len(com_to): kwargs[k] = np.array(v)[ccatkidlib_inds].tolist()
+                    if isinstance(v, Iterable) and len(v) == len(com_to): kwargs[k] = [v[ind] for ind in ccatkidlib_inds]
                 rtn = self.write_config_comb(**kwargs)
 
             rfsoc_io.send_msg('INFO', 'Finished writing target combs for drones %s!', primecam_readout_com_to + ccatkidlib_com_to)
@@ -2115,9 +2089,21 @@ class R:
         def _check_comb(key, value):
             # Check if the tone frequencies are within the bandwidth of the RFSoC
             if len(value) > 1024: value = value[:1024]
-            if key == 'tone_freqs' and np.max(np.abs(np.array(value) - self.drone_cfg[ind]['tones']['NCLO']*1e6))  > self.drone_cfg[ind]['tones']['full_bandwidth']*1e6/2:
-                rfsoc_io.send_msg('WARNING', f"{value} contains frequencies outside of the RFSoC bandwidth. Not writing {key} custom comb!")
-                return None
+            if key == 'tone_freqs':
+                value = np.array(value)
+                if np.max(np.abs(value - self.drone_cfg[ind]['tones']['NCLO']*1e6))  > self.drone_cfg[ind]['tones']['full_bandwidth']*1e6/2:
+                    rfsoc_io.send_msg('WARNING', f"{value} contains frequencies outside of the RFSoC bandwidth. Not writing {key} custom comb!")
+                    return None
+
+                # Ensure that all tones are spaced at least 500 Hz apart to prevent dropping tones (using 500 Hz for margin, should be able to go down to ~244 Hz)
+                attempts = 0
+                diffs = np.abs(np.diff(value, prepend=False))
+                while any(diffs < 500):
+                    value[diffs < 500] += 500
+                    attempts += 1
+                    diffs = np.abs(np.diff(value, prepend=False))
+                    if attempts > 10:
+                        return None
             return value
 
         def _reset_comb(ip, ssh_key, comb_dict):

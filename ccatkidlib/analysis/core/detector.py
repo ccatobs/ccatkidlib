@@ -895,6 +895,70 @@ class Detector:
         self.stream.transform([Detector.calc_frac_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)        
         return self.stream.get_data(col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names], include=include, exclude=exclude)
 
+    # High Level Analysis
+    # -------------------
+
+    def IQ_max_dist(self,
+                    trim_window: int = 2,
+                    trim_savgol_window: int = 9,
+                    diff_savgol_window: int = 21,
+                    trim_savgol_k: int = 1,
+                    diff_savgol_k: int = 1,
+                    include=None,
+                    exclude=None,
+                    recalc=False, 
+                    max_workers=1):
+        '''
+        Get the frequency corresponding to the max geometric distance between adjacent points in IQ space
+        '''
+        trim_savgol, diff_savgol = trim_savgol_window > 1, diff_savgol_window > 1
+
+        # Calculate the geometric distance between adjacent points in IQ space
+        if self.cable_delay is None: 
+            error = 'Could not calculate cable delay. Ensure that a VNA sweep exists!'
+            rfsoc_io.send_msg('ERROR', error)
+            raise RuntimeError(error)
+        self.targ.mag(include=include, exclude=exclude, recalc=recalc)
+
+        if trim_savgol: self.targ.savgol(col_name='mag', prefix='', window=trim_savgol_window, k=trim_savgol_k, deriv=0, max_workers=max_workers, include=include, exclude=exclude, recalc=recalc)
+        self.IQ_unwind(prefix='', data='targ', delay_col = 'network_cable_delay', include=include, exclude=exclude, recalc=recalc)
+        self.IQ_trim(prefix='unwind_rotate',  window=trim_window, use_fit=False, mag_prefix=f"{'savgol0' if trim_savgol else ''}", include=include, exclude=exclude, recalc=recalc)
+
+        if diff_savgol:
+            self.targ.savgol(col_name='I', prefix='tail_trim_unwind_rotate', window=diff_savgol_window, k=diff_savgol_k, deriv=1, include=include, exclude=exclude, recalc=recalc, max_workers=max_workers)
+            self.targ.savgol(col_name='Q', prefix='tail_trim_unwind_rotate', window=diff_savgol_window, k=diff_savgol_k, deriv=1, include=include, exclude=exclude, recalc=recalc, max_workers=max_workers)
+        else:
+            self.targ.diff(col_name='I', prefix='tail_trim_unwind_rotate', include=include, exclude=exclude, recalc=recalc)
+            self.targ.diff(col_name='Q', prefix='tail_trim_unwind_rotate', include=include, exclude=exclude, recalc=recalc)
+        self.targ.mag(prefix=f"{'savgol1' if diff_savgol else 'diff'}_tail_trim_unwind_rotate", include=include, exclude=exclude, recalc=recalc)
+
+        # Get the frequencies corresponding to the max distance in IQ space (same as frequency with steepest phase gradient)
+        include_subset = self._check_properties('max_IQ_dist_f', include=include, exclude=exclude, recalc=recalc)
+        if not len(include_subset) == 0:
+            diff_IQ = (self.targ.get_data(f"{'savgol1' if diff_savgol else 'diff'}_tail_trim_unwind_rotate_mag", strict=True, include=include_subset)
+                                .unpivot(value_name='IQ', variable_name='temp')
+                                .drop('temp'))
+            f = (self.targ.get_data(['f'], strict=True, include=include_subset)
+                        .unpivot(value_name='f', variable_name='det')
+                        .with_columns((pl.col('det').str.strip_prefix('f_')).cast(pl.Int32)))
+            full_df = pl.concat([f, diff_IQ], how='horizontal')
+            max_IQ = (full_df.filter(~pl.col('IQ').is_nan())
+                            .filter((pl.col('IQ') == pl.col('IQ').max()).over('det'))
+                            .select([pl.col('det'), pl.col('f').alias('max_IQ_dist_f')])
+                            .group_by('det').agg(pl.col('max_IQ_dist_f').first()))
+
+            # Use tone frequencies for detectors where finding the max distance frequency failed
+            tone_freq_df = self.get_properties('tone_freqs', strict=True, include=include_subset)
+            max_IQ = (max_IQ.join(tone_freq_df, on='det', how='right', coalesce=True)
+                            .with_columns(pl.when(pl.col('max_IQ_dist_f').is_null())
+                                            .then(pl.col('tone_freqs'))
+                                            .otherwise(pl.col('max_IQ_dist_f')).alias('max_IQ_dist_f'))
+                            .drop('tone_freqs'))
+            shared_cols = 'max_IQ_dist_f' if 'max_IQ_dist_f' in self._properties_df.schema else []
+            self._properties_df = ccat_df.coalesce_join(self._properties_df, max_IQ, 'det', shared_cols)
+        max_IQ_f = self.get_properties('max_IQ_dist_f', include=include, exclude=exclude, strict=True)
+        return max_IQ_f
+
     #==================#
     # Analysis Methods #
     #==================#
@@ -1354,6 +1418,7 @@ class Detector:
             try:
                 data = data_class(com_to = com_to, analysis_cfg = analysis_cfg, tones = dets, noise_tones = noise_tones, timestamp = timestamp, data_path = data_path, **kwargs)
             except Exception as e:
+                print(e)
                 rfsoc_io.send_msg('ERROR', 'Failed to load %s with exception: %s.', data_class.__name__, e)
                 data = None
         return data
