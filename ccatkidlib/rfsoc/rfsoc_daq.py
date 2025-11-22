@@ -767,9 +767,10 @@ class R:
 
         return drive_attens, sense_attens
     
-    ############################
+    #==========================#
     # Data Acquisition Methods #
-    ############################
+    #==========================#
+
     @header
     @utils.method_timer
     def take_vna_sweep(self, **kwargs):
@@ -1161,9 +1162,9 @@ class R:
 
         return stream_out
 
-    ##################
+    #================#
     # Tuning Methods #
-    ##################
+    #================#
 
     @header
     @utils.method_timer
@@ -1437,13 +1438,16 @@ class R:
 
     @header
     @utils.method_timer
-    def find_detectors_fine(self, new_sweep = True, **kwargs):
+    def tune_tone_placement(self, new_sweep = True, **kwargs):
         '''
         Find detectors and place tones at their minima. Length of bins is 500,000 Hz / N_steps.
 
-        Parameters:
-            new_sweep (bool): Whether or not to take a new target sweep
+        Args:
+            new_sweep (bool, optional): Whether or not to take a new target sweep
+
+            kwargs. See below:
             stitch_bw (int): Number of bins to use on when stitching tones
+            method (str): 
         Returns:
             output (arr of floats): Returns an array of the found detector frequencies
         '''
@@ -1477,7 +1481,7 @@ class R:
             elif key == 'write_targ_comb':
                 write_targ_comb = value
 
-        # Take target sweep if new_sweep = True if one does not already exist
+        # Take target sweep if new_sweep = True or if one does not already exist
         to_sweep = []
         targ_files = len(com_to)*[None]
         timestamps = len(com_to)*[-1]
@@ -1499,7 +1503,7 @@ class R:
             kwargs['sweep_steps'] = stitch_bw
             new_files = self.take_target_sweep(**kwargs)
             for i in range(len(com_to)): 
-                if targ_files[i] is None: targ_files[i] = new_files.pop(0) # Add old vna files into list of new vna files sorted by drone com_to
+                if targ_files[i] is None: targ_files[i] = new_files.pop(0) # Add old target sweep files into list of new files sorted by drone com_to
                 if timestamps[i] == -1: timestamps[i] = self.timestamp
             self.save_cfg = True
             kwargs['com_to'] = com_to
@@ -1524,6 +1528,9 @@ class R:
             self.save_cfg = True
 
         return found_nums, targ_files
+
+    def tune_tone_power(self, **kwargs):
+        return None
 
     ################
     # Save Methods #

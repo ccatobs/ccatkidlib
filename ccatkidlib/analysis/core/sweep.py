@@ -40,7 +40,6 @@ class Sweep(Data):
         col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns    
         df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
 
-        print(by)
         tone_sample = int((self.drone_cfg['tones']['sweep_steps']-1)/2)
         df = (df.with_columns(pl.when(pl.col(col_dict['sample']) == tone_sample)
                                .then(pl.lit('diamond_dot'))
