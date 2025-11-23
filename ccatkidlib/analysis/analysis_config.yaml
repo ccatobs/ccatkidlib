@@ -1,4 +1,7 @@
 ---
+tones:
+  max_tones: 1000 # * Max number of tones per data file
+
 file_paths:
   original_root_data_dir: '/mnt/md0/cooldown_october'
   root_data_dir: '/mnt/md0/cooldown_october'

@@ -12,6 +12,7 @@ import so3g
 import numpy as np
 import polars as pl
 import time
+import concurrent.futures
 
 from scipy.signal import welch
 from functools import cached_property
@@ -104,7 +105,7 @@ class Timestream(Data):
         # -----------------------------
         self.packet_counts = []
 
-        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+        self._properties = {f'det_{tone:0{self.padding}d}': {} for tone in self.tones}
         self._properties_df = pl.DataFrame({'det': self.tones})
 
     #==================#
@@ -254,7 +255,7 @@ class Timestream(Data):
             return overlay
 
     def psd_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
-        overlay, df = self.plot('psd_f', col_name, x_prefix=f"psd_{prefix}{'_' if prefix else ''}{col_name}",  y_prefix=f"psd{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
+        overlay, df = self.plot(col_name, col_name, x_prefix=f"psd_f{'_' if prefix else ''}{prefix}",  y_prefix=f"psd{'_' if prefix else ''}{prefix}", include=include, exclude=exclude)
         xlabel = r'$PSD\ Frequency\ [Hz]$'
         ylabel = f'psd_{prefix}_{col_name}'
 
@@ -337,8 +338,8 @@ class Timestream(Data):
             data['sample'] = range(len(ts))
             data['t'], data['dt'] = ts, dt
             for t, I, Q in zip(self.tones, Is, Qs):
-                data[f'I_{t:04d}'] = I
-                data[f'Q_{t:04d}'] = Q
+                data[f'I_{t:0{self.padding}d}'] = I
+                data[f'Q_{t:0{self.padding}d}'] = Q
             self._data = pl.DataFrame(data)
             self._data = self._data.with_columns(pl.col('dt').cast(pl.Datetime(unit)))
         return self._data
@@ -356,7 +357,7 @@ class Timestream(Data):
         new_dict = {'det': []}
 
         props_dict = self._properties
-        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+        self._properties = {f'det_{tone:0{self.padding}d}': {} for tone in self.tones}
 
         all_props = set([prop for props in props_dict.values() for prop in props.keys()])
         if len(all_props) == 0: return self._properties_df
@@ -408,53 +409,49 @@ class Timestream(Data):
     def psd(self,
             prefix: str | list[str] = '',
             col_name: str = 'phase',
-            include: int | list[int] | None = None,
-            exclude: int | list[int] | None = None,
-            recalc: bool = False,
-            sampling_freq = None,
             window='hann',
             nperseg=None,
             detrend=False,
-            average='mean') -> pl.dataframe.frame.DataFrame:
+            average='mean',
+            include: int | list[int] | None = None,
+            exclude: int | list[int] | None = None,
+            recalc: bool = False,
+            max_workers: int = 1,
+            ex=None) -> pl.dataframe.frame.DataFrame:
         
-        col_name = [col_name, 'psd']
+        col_name = [col_name, 'psd_f', 'psd']
+        sampling_freq, height = self.sampling_freq, self.data.height
 
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
+        if isinstance(window, str) or not len(window) == num_prefix: window = [window]*num_prefix
+        if isinstance(average, str) or not len(average) == num_prefix: average = [average]*num_prefix
+        if not isinstance(nperseg, Iterable) or not len(nperseg) == num_prefix: nperseg = [nperseg]*num_prefix
+        if isinstance(detrend, str) or not isinstance(detrend, Iterable) or not len(detrend) == num_prefix: detrend = [detrend]*num_prefix        
+
         col_names = [[]]*num_prefix
-        f_cols = ['']*num_prefix
         for i, pre in enumerate(prefix):
-            data_name = f"{pre}{'_' if pre else ''}{col_name[0]}"
-            f_cols[i] = f'{col_name[-1]}_{data_name}_psd_f'
-            col_names[i] = ['t',  data_name, f'{col_name[-1]}_{data_name}']
+            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}"] + col_name[1:]
 
-        if sampling_freq is None: sampling_freq = self.sampling_freq
-        height = self.data.height
-
-        psd_f, _ = welch(np.array([0]*height), fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
-        psd_f = psd_f[1:-1]
-        psd_f = pl.Series(np.pad(psd_f, (0, height - len(psd_f)), constant_values=None))
-        for f_col in f_cols:
-            if recalc or not f_col in self.data.schema: self.data = self.data.with_columns(psd_f.alias(f_col))
-
-        args = [[sampling_freq, height, window, nperseg, detrend, average]]*num_prefix # Allow different psd args to be passed for each prefix?
-        self.transform([Timestream.calc_psd]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
-        self.data = self._unnest(col_name[-1])
-        return self.get_data(col_name =  [col_name[-1] for col_name in col_names], include=include, exclude=exclude)
+        args = [[sampling_freq, height, win, npseg, dtrend, avg, ccat_mp.check_max_workers(max_workers), ex] for win, npseg, dtrend, avg in zip(window, nperseg, detrend, average)]
+        self.transform([Timestream.calc_psd]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
+        self.data = self._unnest([f'struct_{col_name[-1]}' for col_name in col_names])
+        return self.get_data(col_name = [f'{col_name[-2]}_{col_name[0]}' for col_name in col_names] + 
+                                        [f'{col_name[-1]}_{col_name[0]}' for col_name in col_names], include=include, exclude=exclude)
    
     #==================#
     # Analysis Methods #
     #==================#
 
     @staticmethod
-    def calc_fft(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['t', 'phase', 'fft_phase']):
+    def calc_fft(schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['t', '', 'fft']):
         def _fft(data):
             return np.abs(np.fft.fftshift(np.fft.fft(data)))
         
         if tones is not None:
             tone = tones[0]
-            col_name = [col_name[0]] + [f'{name}_{tone:04d}' for name in col_name[1:]]
+            col_name = [col_name[0]] + [f'{name}_{tone:0{padding}d}' for name in col_name[1:]]
 
         t_col, data_col, fft_col = col_name
 
@@ -464,32 +461,45 @@ class Timestream(Data):
             return pl.col(fft_col)
 
     @staticmethod
-    def calc_psd(schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['t', 'phase', 'psd_phase']):
-        def _psd(data):
-            try:
-                _, psd = welch(data.to_numpy().T, fs=sampling_freq, window=window, nperseg=nperseg, detrend=detrend, average=average)
-                psd = np.sqrt(psd[1:-1])
-                psd = np.pad(psd, (0, height - len(psd)), constant_values=None)
-            except:
-                psd = np.zeros(height)
-            return psd
+    def calc_psd(schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'psd_f', 'psd']):
+        def _calc_psd(df):
+            data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
+
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {executor.submit(ccat_mp.process_batches,
+                                                   _psd, 
+                                                   data[i][0],
+                                                   height[inds],
+                                                   sampling_freq[inds], 
+                                                   window = window[inds], 
+                                                   nperseg = nperseg[inds], 
+                                                   detrend = detrend[inds], 
+                                                   average = average[inds]):  (tones, cols) for i, (tones, inds, (cols)) in enumerate(zip(to_calc, calc_ind, batches))}
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tones, cols = future_to_batch[future]
+                    psd_cols = future.result()
+
+                    for tone, col, psd_col in zip(tones, cols, psd_cols):
+                        if isinstance(psd_col, Exception):
+                            rfsoc_io.send_msg('WARNING', 'PSD calculation for tone %s failed with exception: %s', tone, psd_col)
+                            psd_f, psd = np.full(df.len(), np.nan), np.full(df.len(), np.nan)
+                        else:
+                            psd_f, psd = psd_col
+                        results_dict[f'{col_name[-2]}_{col[0]}'] = psd_f
+                        results_dict[f'{col_name[-1]}_{col[0]}'] = psd
+            return ccat_mp.package_results(results_dict)
         
-        if len(args) == 6:
-            sampling_freq, height, window, nperseg, detrend, average = args
-            if tones is not None: sampling_freq, height, window, nperseg, detrend, average = sampling_freq[0], height[0], window[0], nperseg[0], detrend[0], average[0]
+        if len(args) == 8:
+            sampling_freq, height, window, nperseg, detrend, average, max_workers, ex = np.array(args, dtype=object)
+            if tones is not None: max_workers, ex = max_workers[0], ex[0]
         else:
-            rfsoc_io.send_msg('ERROR', 'sampling_freq, window, nperseg, detrend, and average are required arguments')
+            rfsoc_io.send_msg('ERROR', 'sampling_freq, window, nperseg, detrend, average, and max_workers are required arguments')
 
-        if tones is not None:
-            tone = tones[0]
-            col_name = [col_name[0]] + [f'{name}_{tone:04d}' for name in col_name[1:]]
-
-        t_col, data_col, psd_col = col_name
-
-        if recalc or not (psd_col in schema):
-            return pl.col(data_col).map_batches(_psd, return_dtype=pl.Float64).alias(psd_col)
-        else:
-            return pl.col(psd_col)
+        calc_col = [f'{col_name[-1]}_{col_name[0]}_{tone:0{padding}d}' for tone in tones]
+        return_col, return_type = [f'{col_name[-2]}_{col_name[0]}', f'{col_name[-1]}_{col_name[0]}'], [pl.Float64, pl.Float64]
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_calc_psd, tones, [col_name[0], col_name[-1]], schema, padding=padding, return_col=return_col, return_type=return_type, calc_col = calc_col, max_workers=max_workers, recalc=recalc)
+        return expr
 
     #==========================#
     # Internal Loading Methods #
@@ -679,3 +689,25 @@ class Timestream(Data):
 
     def dt(self):
         return self.get_data(col_name = 'dt')
+
+    def join(self, other, in_place=False):        
+        new_data = super().join(other, in_place=in_place)
+        left_prop, right_prop = self.properties, other.properties
+        new_data._properties_df = pl.concat([left_prop, right_prop], how='diagonal').with_columns(pl.Series('det', new_data.tones))
+        return new_data
+
+#====================#
+# Analysis Functions #
+#====================#
+
+def _psd(data, height, fs, window='hann', nperseg=None, detrend=False, average='mean'):
+    try:
+        if nperseg is None: nperseg = 2 ** round(np.log2(height/5))
+        psd_f, psd = welch(data, fs=fs, window=window, nperseg=int(nperseg), detrend=detrend, average=average)
+        psd_f, psd = psd_f[1:-1], np.sqrt(psd[1:-1])
+
+        pad_len = height - len(psd_f)
+        psd_f, psd = np.pad(psd_f, (0, pad_len), constant_values=None), np.pad(psd, (0, pad_len), constant_values=None)
+    except Exception as e:
+        psd_f, psd = np.zeros(height), np.zeros(height)
+    return psd_f, psd

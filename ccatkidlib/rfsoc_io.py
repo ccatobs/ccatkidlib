@@ -593,16 +593,17 @@ def save_array_board(ip, ssh_key, path, saved_array, tmp_dir):
     return result
 
 #@function_timer
-def get_most_recent_file_board(c, dir, file_identifier = "*", time_past = 60*60):
+def get_most_recent_file_board(c: Connection, dir: str, file_identifier: str = "*", time_past: int = 60*60):
     '''
-    Get most recent file in directory on RFSoC board.
+    Get most recent file in specified directory on RFSoC board.
 
-    Parameters:
-        c        (Connection) : Fabric Connection object of RFSoC board
-        dir             (str) : Directory in which the file is located
-        file_identifier (str) : Substring included in the file name 
+    Args:
+        c (Connection): Fabric Connection object of RFSoC board. Can be created using ``get_connection`` function
+        dir (str): Directory in which the file is located
+        file_identifier (str, optional): Substring included in the file name. Defaults to wildcard: *"\*"*
+        time_past (int, optional): How old the file can be in seconds. Files older than ``time_past`` will be ignored. Defaults to 3600 seconds
     Returns:
-        file            (str) : File path of most recent file (returns "invalid/path" if no valid files found)
+        return (str): File path of most recent file. Returns *"invalid/path"* if no valid file found
     '''
 
     # Define command string for finding most recent file, use find to get most recent file
@@ -623,15 +624,15 @@ def get_most_recent_file_board(c, dir, file_identifier = "*", time_past = 60*60)
         send_msg('WARNING', f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}'")
         return "invalid/path"
 
-def path_exists(c, path) -> bool:
+def path_exists(c: Connection, path: str) -> bool:
     '''
-    Check if path exists on RFSoC board.
+    Check if specified path exists on RFSoC board.
 
-    Parameters:
-        c      (Connection) : Fabric Connection object of RFSoC board. Use get_connection to create object
-        path          (str) : File path to check existence of
+    Args:
+        c (Connection): Fabric Connection object of RFSoC board. Can be created using ``get_connection`` function
+        path (str | pathlib.PosixPath): File path to check existence of
     Returns:
-        exists       (bool) : Whether the file path exists
+        return (bool): Whether the file path exists
     '''
 
     path = str(path) # Convert path objects to str

@@ -64,8 +64,9 @@ class Target(Sweep):
             noise_tones = utils.dict_get(self.drone_cfg, ['tones', 'noise_tones'])
         self.noise_tones = noise_tones
         
-        self._properties = {f'det_{tone:04d}': {} for tone in self.tones} if tones is not None else {}
-        self._properties_df = pl.DataFrame({'det': self.tones})
+        self._properties = {f'det_{tone:0{self.padding}d}': {} for tone in self.tones} if tones is not None else {}
+        self._properties_df = pl.DataFrame({'det': self.tones}).with_columns(pl.lit(f'{self.bid}.{self.drid}').alias('com_to'),
+                                                                             pl.lit(self.timestamp).alias('timestamp'))
 
     #==========================#
     # Lazily Loaded Attributes #
@@ -101,9 +102,9 @@ class Target(Sweep):
 
                 data_dict = {'sample': range(sweep_steps)}
                 for t, f, I, Q in zip(tones, fs, Is, Qs):
-                    data_dict[(f'f_{t:04d}')] = f
-                    data_dict[(f'I_{t:04d}')] = I
-                    data_dict[(f'Q_{t:04d}')] = Q
+                    data_dict[(f'f_{t:0{self.padding}d}')] = f
+                    data_dict[(f'I_{t:0{self.padding}d}')] = I
+                    data_dict[(f'Q_{t:0{self.padding}d}')] = Q
                 df = pl.DataFrame(data_dict)
             else:
                 df = data
@@ -125,7 +126,7 @@ class Target(Sweep):
         new_dict = {'det': []}
 
         props_dict = self._properties
-        self._properties = {f'det_{tone:04d}': {} for tone in self.tones}
+        self._properties = {f'det_{tone:0{self.padding}d}': {} for tone in self.tones}
 
         all_props = set([prop for props in props_dict.values() for prop in props.keys()])
         if len(all_props) == 0: return self._properties_df
@@ -171,9 +172,13 @@ class Target(Sweep):
             cable_delay = None
         else:
             self.phase()
-            cable_delay = {f'det_{tone:04d}': self.data.select(pl.struct([f'f_{tone:04d}', f'phase_{tone:04d}'])
-                                                       .map_batches(lambda arrs: _calc_cable_delay(arrs.struct.field(f'f_{tone:04d}').to_numpy(), arrs.struct.field(f'phase_{tone:04d}').to_numpy()),
+            cable_delay = {f'det_{tone:0{self.padding}d}': self.data.select(pl.struct([f'f_{tone:0{self.padding}d}', f'phase_{tone:0{self.padding}d}'])
+                                                       .map_batches(lambda arrs: _calc_cable_delay(arrs.struct.field(f'f_{tone:0{self.padding}d}').to_numpy(), arrs.struct.field(f'phase_{tone:0{self.padding}d}').to_numpy()),
                                                        returns_scalar=True, return_dtype=pl.Float64,)).item() for tone in tones}
         return cable_delay
     
-
+    def join(self, other, in_place=False):
+        new_data = super().join(other, in_place=in_place)
+        left_prop, right_prop = self.properties, other.properties
+        new_data._properties_df = pl.concat([left_prop, right_prop], how='diagonal').with_columns(pl.Series('det', new_data.tones))
+        return new_data

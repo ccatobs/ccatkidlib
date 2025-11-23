@@ -10,6 +10,7 @@ from tqdm import tqdm
 import ccatkidlib
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.analysis.utils.pair as pair
+import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 
 from ccatkidlib.analysis.core.vna import VNA
 from ccatkidlib.analysis.core.target import Target
@@ -124,7 +125,7 @@ class Network:
 
         self.data = pl.DataFrame({'detector': detectors, 'type': detector_types, 'timestamp': detector_timestamps})
 
-    def add_columns(self, data_cols: str | list[str], max_workers: int = 1) -> pl.dataframe.frame.DataFrame:
+    def add_columns(self, data_cols: str | list[str], max_workers: int = 1, ex=None) -> pl.dataframe.frame.DataFrame:
         ''' Add columns to the Network.data DataFrame using fields from the ext_cfg or drone_cfg
 
         Args:
@@ -135,7 +136,7 @@ class Network:
         detector_cfgs = [[detector.stream.drone_cfg, detector.stream.ext_cfg] if detector_type == 'Timestream' else [detector.targ.drone_cfg, detector.targ.ext_cfg] for detector, detector_type in detectors]
         num_detectors = self.data.height
         data_dict = {data_col: [None]*num_detectors for data_col in data_cols}
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
             future_to_batch = {executor.submit(Network._extract_data,
                                                detector_cfg,
                                                data_cols): i for i, detector_cfg in enumerate(detector_cfgs)}
@@ -161,7 +162,10 @@ class Network:
         for i, (det, *cols) in enumerate(self.data.select(['detector'] + data_cols).iter_rows()):
             df = det.properties
             df = df.with_columns([pl.lit(data).alias(name) for name, data in zip(data_cols, cols)])
-            properties_df = df if properties_df is None else pl.concat([properties_df, df], how='vertical')
+            try:
+                properties_df = df if properties_df is None else pl.concat([properties_df, df], how='diagonal')
+            except Exception as e:
+                rfsoc_io.send_msg('WARNING', 'Failed to combine properties DataFrame with error %s', e)
         return properties_df
 
     #==================#

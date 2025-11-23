@@ -1860,7 +1860,7 @@ class R:
             elif key == 'write_targ_comb':
                 write_targ_comb = value
 
-        # Take target sweep if new_sweep = True if one does not already exist
+        # Take target sweep if new_sweep = True or if one does not already exist
         to_sweep = []
         targ_files = len(com_to)*[None]
         timestamps = len(com_to)*[-1]
@@ -1933,6 +1933,9 @@ class R:
             for com in com_to: self._save_curr_comb(com, None)
             self.save_cfg = True
         return targ_files
+
+    def tune_tone_power(self, **kwargs):
+        return None
 
     ################
     # Save Methods #
