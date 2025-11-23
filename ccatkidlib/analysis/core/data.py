@@ -93,7 +93,7 @@ class Data:
 
         log_dir = Path(__file__).parent / '..' / '..' / 'log'
         rfsoc_io.create_dir(log_dir) # Create log directory if it does not exist
-        rfsoc_io.setup_logging(log_dir / 'analysis.log', self.analysis_cfg['io']['file_level'], self.analysis_cfg['io']['terminal_level'])
+        #rfsoc_io.setup_logging(log_dir / 'analysis.log', self.analysis_cfg['io']['file_level'], self.analysis_cfg['io']['terminal_level'])
 
         # If full data path is None, [], or "", find data file based on timestamp and (optional) file path parts
         # ------------------------------------------------------------------------------------------------------

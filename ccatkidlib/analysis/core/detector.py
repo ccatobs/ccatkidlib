@@ -449,7 +449,7 @@ class Detector:
         tone_freqs = self.get_properties('tone_freqs', include=include, exclude=exclude, strict=True)
         norm_dfs = []
         for data_obj, data_type in zip(data_objs, data_types):
-            cable_mags = self.targ.get_data(f'{norm_col}{'_' if norm_col else ''}mag', include=include, exclude=exclude, strict=True)
+            cable_mags = self.targ.get_data(f"{norm_col}{'_' if norm_col else ''}mag", include=include, exclude=exclude, strict=True)
             if data_type == 'targ':
                 scale = 1/cable_mags.to_numpy().T
             else:
@@ -1424,6 +1424,7 @@ class Detector:
             try:
                 data = data_class(com_to = com_to, analysis_cfg = analysis_cfg, tones = dets, noise_tones = noise_tones, timestamp = timestamp, data_path = data_path, **kwargs)
             except Exception as e:
+                print(e)
                 rfsoc_io.send_msg('ERROR', 'Failed to load %s with exception: %s.', data_class.__name__, e)
                 data = None
         return data

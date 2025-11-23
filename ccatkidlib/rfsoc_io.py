@@ -370,12 +370,13 @@ def setup_logging(log_path, file_level, terminal_level, name = __name__):
         # Convert passed name to lowercase 
         method_name = name.lower()
 
-        logging.addLevelName(num, name) # Add new logging level to logger
-        setattr(logging, name, num)     # Add new attribute to the logging class corresponding to custom logging level
+        if not hasattr(logging, name):
+            logging.addLevelName(num, name) # Add new logging level to logger
+            setattr(logging, name, num)     # Add new attribute to the logging class corresponding to custom logging level
 
-        # Add new methods to relevant loggging classes
-        setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num)) 
-        setattr(logging, method_name, partial(logging.log, num))
+            # Add new methods to relevant loggging classes
+            setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num)) 
+            setattr(logging, method_name, partial(logging.log, num))
 
     # Get logger
     logger = logging.getLogger(name)
