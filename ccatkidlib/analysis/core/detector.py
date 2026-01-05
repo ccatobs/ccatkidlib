@@ -900,8 +900,8 @@ class Detector:
         self.stream.transform([Detector.calc_frac_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)        
         return self.stream.get_data(col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names], include=include, exclude=exclude)
 
-    # High Level Analysis
-    # -------------------
+    # High Level Analysis Methods
+    # ---------------------------
 
     def IQ_max_dist(self,
                 trim_window: int = 2,
@@ -971,6 +971,12 @@ class Detector:
 
         max_IQ_f = self.get_properties('max_IQ_dist_f', include=include, exclude=exclude, strict=True)
         return max_IQ_f
+
+    def IQ_circle_center(self):
+        '''
+        Remove cable delay from IQ circle and center at the origin
+        '''
+        return
 
     #==================#
     # Analysis Methods #
@@ -1073,7 +1079,10 @@ class Detector:
             return ccat_mp.package_results(results_dict)
             
         if len(args) == 10:
-            self, prefix, radius, nonlinear, method, params, window, max_workers, ex, save_model_result = np.array(args)
+            self, prefix, radius, nonlinear, method, params_list, window, max_workers, ex, save_model_result = args
+            params = np.empty(len(params_list), dtype=object)
+            for i in range(len(params_list)): params[i] = params_list[i]
+            radius, nonlinear, method, window = np.array(radius), np.array(nonlinear), np.array(method), np.array(window)
             if tones is not None: self, prefix, max_workers, ex, save_model_result = self[0], prefix[0], int(max_workers[0]), ex[0], save_model_result[0]
         else:
             error = 'nonlinear, prefix, params, window, max_workers, and save_model_result are required arguments.'

@@ -224,7 +224,6 @@ class Data:
                     exprs.append(pl.col(name))
                     col_name.remove(name)
                     
-            
             # Parse data columns that have tones
             exprs += ccat_df.parse_tones(_include, _exclude, _all, include, exclude)
             return (self.data.lazy()
@@ -822,8 +821,8 @@ class Data:
 
     @cached_property
     def num_tones(self) -> int:
-        return self.drone_cfg['tones']['num_tones']
-
+        return self.drone_cfg.get('tones', {'num_tones': -1})['num_tones']
+        
     @cached_property
     def original_root(self) -> str:
         try:
@@ -841,9 +840,9 @@ class Data:
         '''
         comb = {'tone_freqs': [], 'tone_powers': [], 'tone_phis': []}
         for key in comb.keys():
-            value = self.drone_cfg['tones'][key]
+            value = self.drone_cfg.get('tones', {f'{key}': []})[key]
             if isinstance(value, list):
-                value = value.real
+                value = np.array(value).real
             elif isinstance(value, str):
                 comb_path = pair.replace_root(value, self.original_root, self.root_dir)
                 value = np.load(comb_path).real if Path(comb_path).exists() else np.zeros(self.num_tones)
@@ -1026,7 +1025,7 @@ class Data:
         # ------------
         new_data.ext_cfg = _join_cfg(self.ext_cfg, other.ext_cfg)
         new_data.io_cfg = _join_cfg(self.io_cfg, other.io_cfg)
-        new_data.drone_cfg = _join_cfg(self.drone_cfg, other.io_cfg)
+        new_data.drone_cfg = _join_cfg(self.drone_cfg, other.drone_cfg)
 
         # Join constant attributes
         # ------------------------
