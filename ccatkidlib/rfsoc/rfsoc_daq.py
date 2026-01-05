@@ -2093,18 +2093,19 @@ class R:
             # Check if the tone frequencies are within the bandwidth of the RFSoC
             if len(value) > 1024: value = value[:1024]
             if key == 'tone_freqs':
-                value = np.array(value)
+                value = np.sort(np.array(value))
                 if np.max(np.abs(value - self.drone_cfg[ind]['tones']['NCLO']*1e6))  > self.drone_cfg[ind]['tones']['full_bandwidth']*1e6/2:
                     rfsoc_io.send_msg('WARNING', f"{value} contains frequencies outside of the RFSoC bandwidth. Not writing {key} custom comb!")
                     return None
-
+                
                 # Ensure that all tones are spaced at least 500 Hz apart to prevent dropping tones (using 500 Hz for margin, should be able to go down to ~244 Hz)
                 attempts = 0
-                diffs = np.abs(np.diff(value, prepend=False))
+                diffs = np.diff(value, prepend=False)
                 while any(diffs < 500):
                     value[diffs < 500] += 500
                     attempts += 1
-                    diffs = np.abs(np.diff(value, prepend=False))
+                    value = np.sort(value)
+                    diffs = np.diff(value, prepend=False)
                     if attempts > 10:
                         return None
             return value
@@ -2268,7 +2269,6 @@ class R:
             # Determine if tone powers need to be generated
             # ---------------------------------------------
             tone_powers = np.ones(tone_num)*max_power/np.sqrt(tone_num) if gen_amps else comb_dict['tone_powers']['new_comb']
-
             # Generate tone phis and tone powers
             # ----------------------------------
             # Generate phis (as done in primecam_readout tones.py genAmpsAndPhis)

@@ -262,7 +262,7 @@ def phase_fit(f: np.ndarray,
     # TODO: Should switch out lmfit for curve_fit for faster fitting and don't really need lmfit features, Also don't want data trimming in this function since can just use IQ_trim instead
 
     @njit(cache=True)
-    def _guess_params(f, phase, R):
+    def _guess_params(f, phase):
         ninety_phase_ind = np.argmin(np.abs(np.abs(phase) - np.pi/2)) # Get the index at which the phase is closest to 90 degrees 
         
         f_0_guess = (f[zero_phase_ind_up] + f[zero_phase_ind_low])/2  # Guess resonant frequency to be near zero phase
@@ -279,9 +279,8 @@ def phase_fit(f: np.ndarray,
         Qr_param =  ('Qr',  Qr_guess,  True, Qr_min,  Qr_max)
         theta_0_param = ('theta_0', 0, True, -np.pi, np.pi)
         beta_param = ('beta', 0, True, -1e4, 1e4)
-        R_param = ('R', R, False, 0.9*R, 1.1*R)
 
-        return f_0_param, Qr_param, theta_0_param, beta_param, R_param
+        return f_0_param, Qr_param, theta_0_param, beta_param
 
     @njit(cache=True)
     def _phase_fit(f, I, Q, f_0, Qr, theta_0, beta, R):
@@ -345,14 +344,14 @@ def phase_fit(f: np.ndarray,
         if Q is None: raise ValueError(f'Q is a required argument for nonlinear fits.')
         if (R is None) and (not 'R' in params): raise ValueError(f'R must be passed as an argument or through params for a nonlinear fit.')
     
-    in_params = [param in params for param in ['f_0', 'Qr', 'theta_0', 'beta', 'R']]
-
+    in_params = [param in params for param in ['f_0', 'Qr', 'theta_0', 'beta']]
     if not all(in_params):
-        guess_params = _guess_params(f, phase, R)
+        guess_params = _guess_params(f, phase)
 
         for incl, guess in zip(in_params, guess_params):
             if not incl: params.add(*guess)
-    
+    if R is not None: params.add(*('R', R, False))
+
     # Create lmfit model for phase fit
     # --------------------------------
     phase_model = Model(_phase_fit, independent_vars=['f', 'I', 'Q'])

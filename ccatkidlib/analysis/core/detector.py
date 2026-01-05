@@ -1073,7 +1073,10 @@ class Detector:
             return ccat_mp.package_results(results_dict)
             
         if len(args) == 10:
-            self, prefix, radius, nonlinear, method, params, window, max_workers, ex, save_model_result = np.array(args)
+            self, prefix, radius, nonlinear, method, params_list, window, max_workers, ex, save_model_result = args
+            params = np.empty(len(params_list), dtype=object)
+            for i in range(len(params_list)): params[i] = params_list[i]
+            radius, nonlinear, method, window = np.array(radius), np.array(nonlinear), np.array(method), np.array(window)
             if tones is not None: self, prefix, max_workers, ex, save_model_result = self[0], prefix[0], int(max_workers[0]), ex[0], save_model_result[0]
         else:
             error = 'nonlinear, prefix, params, window, max_workers, and save_model_result are required arguments.'
