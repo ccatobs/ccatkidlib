@@ -23,12 +23,12 @@ from spt3g import core
 import holoviews as hv
 import datashader as ds
 from holoviews import opts
-from holoviews.operation.datashader import rasterize, datashade, dynspread
-
+from holoviews.operation.datashader import datashade, dynspread
 
 # Local Imports
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.utils as utils
+import ccatkidlib.analysis.viz.viz_utils as viz_utils
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
@@ -63,6 +63,9 @@ class Timestream(Data):
         '''
         kwargs['data_type'] = 'timestream'
         super().__init__(com_to, analysis_cfg, **kwargs)
+
+        self.save_dir = Path(self.save_dir) / f'timestream_{self.timestamp}'
+        rfsoc_io.create_dir(self.save_dir)
 
         # Define list of tones
         # --------------------
@@ -111,8 +114,53 @@ class Timestream(Data):
     #==================#
     # Plotting Methods #
     #==================#
+    @staticmethod
+    def _plot(df, x_dim, y_dim, plot_opts, **kwargs):
+        datashade_plot = kwargs.pop('datashade')
 
-    def plot(self, x_dim, y_dim, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, unpivot_x=True):
+        if datashade_plot:
+            kwargs['s'] = kwargs.pop('ms')
+            stream_scatter = df.hvplot.scatter(x=x_dim,
+                                               y=y_dim,
+                                               label='DataScatter',
+                                               **kwargs).relabel(group='Stream')
+            plot = stream_scatter
+            if kwargs.pop('linewidth') > 0: 
+                stream_line = df.hvplot.line(x=x_dim,
+                                             y=y_dim,
+                                             label='DataLine',
+                                             **kwargs).relabel(group='Stream')
+                plot = plot*stream_line
+            plot = dynspread(datashade(plot))
+        else:
+            stream = df.hvplot.line(x=x_dim,
+                                    y=y_dim,
+                                    label='Data',
+                                    **kwargs).relabel(group='Stream')
+            plot = stream
+        
+        plot.opts(*plot_opts)
+        return plot
+
+    def plot(self, 
+             x_dim, 
+             y_dim, 
+             x_prefix: str = '', 
+             y_prefix: str = '', 
+             xlabel: str = '',
+             ylabel: str = '',
+             grouping: str = 'groupby',
+             include: int | list[int] | None = None, 
+             exclude: int | list[int] | None = None, 
+             unpivot_x=True,
+             return_df = False,
+             plot_opts = None,
+             save_fig: bool | None = None,
+             overwrite: bool | None = None,
+             save_name: str = None,
+             **kwargs):
+        # Get DataFrame with data to plot
+        # -------------------------------
         col_dict = {'sample': 'sample',
                     'x': x_dim,
                     'y': y_dim}
@@ -121,32 +169,58 @@ class Timestream(Data):
         col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns
         df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
 
-        # Create HoloViews plot objects
-        line = df.hvplot.line(x=col_dict['x'],
-                              y=col_dict['y'],
-                              by=by,
-                              label='Curve',
-                              width=self.viz_cfg['plot']['width'],
-                              height=self.viz_cfg['plot']['height'])
+        # Set default hvplot key word arguments
+        # -------------------------------------
+        if not 'aspect' in kwargs: kwargs['aspect'] = self.viz_cfg['static_plot']['stream']['aspect']
+        if not 'marker' in kwargs: kwargs['marker'] = self.viz_cfg['static_plot']['stream']['marker']
+        if not 'ms' in kwargs: kwargs['ms'] = self.viz_cfg['static_plot']['stream']['marker_size']
+        if not 'linewidth' in kwargs: kwargs['linewidth'] = self.viz_cfg['static_plot']['stream']['linewidth']
+        if not 'dynamic' in kwargs: kwargs['dynamic'] = True
+        fig_size = kwargs.pop('fig_size') if 'fig_size' in kwargs else self.viz_cfg['static_plot']['stream']['fig_size']
 
-        scatter = df.hvplot.scatter(x=col_dict['x'],
-                                    y=col_dict['y'],
-                                    by=by,
-                                    label='Scatter',
-                                    width=self.viz_cfg['plot']['width'],
-                                    height=self.viz_cfg['plot']['height'])
-        
-        overlay = hv.Overlay([line, scatter])
+        if grouping == 'by': 
+            kwargs['by'] = by
+        elif grouping == 'groupby':
+            kwargs['groupby'] = by
+        else:
+            error = 'Invalid string specified for argument "grouping"! Must be either "by" or "groupby".'
+            rfsoc_io.send_msg('CRITICAL', error)
+            raise ValueError(error)
 
+        # Create opts for plots
+        # ----------------------
         cfg = self.drone_cfg['det_config']
         title = rf"${cfg['detector_type']}\ {cfg['network']}$"
 
-        if not (include is None and exclude is None): overlay.opts(opts.NdOverlay(title=title))
-        overlay.opts(opts.Curve(title=title), opts.Scatter(title=title))
+        curve_opts = opts.Curve(show_legend=False,
+                                title=title,
+                                xlabel = xlabel if xlabel is not None else col_dict['x'],
+                                ylabel = ylabel if ylabel is not None else col_dict['y'],
+                                fig_size=fig_size)
+        RGB_opts = opts.RGB(show_legend=False,
+                            title=title,
+                            xlabel = xlabel if xlabel is not None else col_dict['x'],
+                            ylabel = ylabel if ylabel is not None else col_dict['y'], 
+                            fig_size = fig_size,
+                            aspect = kwargs['aspect'])
+        all_opts = [curve_opts,
+                    RGB_opts]
+        if plot_opts is not None: all_opts.append(plot_opts)
+        
+        # Create plot for immediate visualization
+        # ---------------------------------------
+        plot = Timestream._plot(df, col_dict['x'], col_dict['y'], all_opts, **kwargs)
 
-        return overlay, df
+        # Save plot in background
+        # -----------------------
+        viz_utils.save_fig(self, Timestream._plot, df, col_dict['x'], col_dict['y'], all_opts, save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
 
-    def stream_plot(self, col_name: str, prefix: str = '', return_df = False, rasterize=True, include: int | list[int] | None = None, exclude: int | list[int] | None = None):
+        if return_df:
+            return plot, df
+        else:
+            return plot
+
+    def stream_plot(self, col_name: str, prefix: str = '', time_col='t', grouping = 'groupby', datashade=None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
         ''' Plot the specified data column as a function of time
         
         Args:
@@ -159,150 +233,143 @@ class Timestream(Data):
             return (hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]): 
         
         '''
-        overlay, df = self.plot('t', col_name, y_prefix=prefix, include=include, exclude=exclude, unpivot_x=False)
-        xlabel = r'$Time [s]$'
-        ylabel = f'{prefix}_{col_name}'
+        xlabel, ylabel = r'$Time [s]$', f'{prefix}_{col_name}'
+        save_name = f'timestream_{prefix}{'_' if prefix else ''}{col_name}_stream'
 
-        curve_opts = opts.Curve(xlabel=xlabel,
-                                ylabel=ylabel)
+        kwargs['datashade'] = datashade if datashade is not None else self.viz_cfg['static_plot']['stream']['datashade']
+        rtn = self.plot(time_col, col_name, 
+                        y_prefix=prefix, 
+                        grouping=grouping,
+                        include=include, 
+                        exclude=exclude, 
+                        unpivot_x=False,
+                        xlabel=xlabel,
+                        ylabel=ylabel,
+                        return_df=return_df,
+                        save_fig=save_fig,
+                        save_name=save_name,
+                        overwrite=overwrite,
+                        **kwargs)
+        return rtn
 
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(curve_opts)
-            overlay = overlay.NdOverlay.Curve
-            aggregator = ds.by('det', ds.count())
-        else:
-            overlay.Curve.Curve.opts(curve_opts)
-            overlay = overlay.Curve.Curve
-            aggregator = ds.count()
+    def mag_plot(self, x_prefix: str = '', y_prefix: str = '', grouping = 'groupby', datashade=None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+        xlabel, ylabel = r'$Frequency\ [Hz]$', r'$|S_{21}|$'
+        save_name = f'timestream_{y_prefix}{'_' if y_prefix else ''}mag'
+
+        if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
+        kwargs['datashade'] = datashade if datashade is not None else self.viz_cfg['static_plot']['stream']['datashade']
+        rtn = self.plot('f', 'mag',
+                        x_prefix=x_prefix, 
+                        y_prefix=y_prefix,
+                        grouping=grouping,
+                        include=include, 
+                        exclude=exclude,
+                        xlabel=xlabel,
+                        ylabel=ylabel,
+                        return_df=return_df,
+                        save_fig=save_fig,
+                        save_name=save_name,
+                        overwrite=overwrite,
+                        **kwargs)
+        return rtn
         
-        if rasterize: overlay = datashade(overlay, aggregator=aggregator)
-        
-        if return_df:
-            return overlay, df
+    def phase_plot(self, x_prefix: str = '', y_prefix: str = '', grouping = 'groupby', datashade=None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+        xlabel, ylabel = r'$Frequency\ [Hz]$', r'$Phase\ [rad]$'
+        save_name = f'timestream_{y_prefix}{'_' if y_prefix else ''}phase'
+
+        if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
+        kwargs['datashade'] = datashade if datashade is not None else self.viz_cfg['static_plot']['stream']['datashade']
+        rtn = self.plot('f', 'phase',
+                        x_prefix=x_prefix, 
+                        y_prefix=y_prefix,
+                        grouping=grouping,
+                        include=include, 
+                        exclude=exclude,
+                        xlabel=xlabel,
+                        ylabel=ylabel,
+                        return_df=return_df,
+                        save_fig=save_fig,
+                        save_name=save_name,
+                        overwrite=overwrite,
+                        **kwargs)
+        return rtn
+
+    def IQ_plot(self, prefix: str = '', projection='polar', grouping = 'groupby', datashade = True, include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+        if projection == 'IQ' or datashade:
+            xlabel, ylabel = r'$I\ [arb]$', r'$Q\ [arb]$'
+            x_dim, y_dim = 'I', 'Q'
+            plot_opts = None
+        elif projection == 'polar':
+            xlabel, ylabel = r'$Phase\ [deg]$', r'$|S_{21}|$'
+            x_dim, y_dim = 'phase', 'mag'
+            plot_opts = opts.Curve(projection='polar', show_grid=True)
         else:
-            return overlay
+            error = 'Invalid projection specified, must be either "IQ" or "polar".'
+            rfsoc_io.send_msg('CRITICAL', error)
+            raise ValueError(error)
+        save_name = f'timestream_{prefix}{'_' if prefix else ''}{projection}'
+
+        if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
+        kwargs['datashade'] = datashade if datashade is not None else self.viz_cfg['static_plot']['stream']['datashade']
+        rtn = self.plot(x_dim, y_dim,
+                        x_prefix=prefix,
+                        y_prefix=prefix,
+                        grouping=grouping,
+                        include=include, 
+                        exclude=exclude,
+                        xlabel=xlabel,
+                        ylabel=ylabel,
+                        return_df=return_df,
+                        save_fig=save_fig,
+                        save_name=save_name,
+                        overwrite=overwrite,
+                        plot_opts=plot_opts,
+                        **kwargs)
+        return rtn
+
+    def psd_plot(self, col_name, prefix: str = '', grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+        xlabel, ylabel = r'$PSD\ Frequency\ [Hz]$', rf'psd_{prefix}_{col_name}'
+        save_name = f'timestream_{prefix}{'_' if prefix else ''}{col_name}_psd'
+
+        if not 'logx' in kwargs: kwargs['logx'] = True
+        if not 'logy' in kwargs: kwargs['logy'] = True
+        rtn = self.plot(col_name, col_name, 
+                        x_prefix=f"psd_f{'_' if prefix else ''}{prefix}",  
+                        y_prefix=f"psd{'_' if prefix else ''}{prefix}",
+                        grouping=grouping,
+                        include=include, 
+                        exclude=exclude, 
+                        unpivot_x=False,
+                        xlabel=xlabel,
+                        ylabel=ylabel,
+                        return_df=return_df,
+                        save_fig=save_fig,
+                        save_name=save_name,
+                        overwrite=overwrite,
+                        **kwargs)
+        return rtn
     
-    def mag_plot(self, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
-        overlay, df = self.plot('f', 'mag', x_prefix=x_prefix, y_prefix=y_prefix, include=include, exclude=exclude)
-        xlabel = r'$Frequency\ [Hz]$'
-        ylabel = r'$|S_{21}|$'
+    def fft_plot(self, col_name, prefix: str = '', grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+        xlabel, ylabel = r'$FFT\ Frequency\ [Hz]$', f'fft_{prefix}_{col_name}'
+        save_name = f'timestream_{prefix}{'_' if prefix else ''}{col_name}_fft'
 
-        scatter_opts = opts.Scatter(xlabel=xlabel,
-                                    ylabel=ylabel)
-
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Scatter.opts(scatter_opts)
-            overlay = overlay.NdOverlay.Scatter
-            aggregator = ds.by('det', ds.count())
-        else:
-            overlay.Scatter.Scatter.opts(scatter_opts)
-            overlay = overlay.Scatter.Scatter
-            aggregator = ds.count()
-        
-        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
-
-        if return_df:
-            return overlay, df
-        else:
-            return overlay
-
-    def phase_plot(self, x_prefix: str = '', y_prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
-        overlay, df = self.plot('f', 'phase', x_prefix=x_prefix, y_prefix=y_prefix, include=include, exclude=exclude)
-        xlabel = r'$Frequency\ [Hz]$'
-        ylabel = r'$Phase\ [rad]$'
-
-        scatter_opts = opts.Scatter(xlabel=xlabel,
-                                    ylabel=ylabel)
-
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Scatter.opts(scatter_opts)
-            overlay = overlay.NdOverlay.Scatter
-            aggregator = ds.by('det', ds.count())
-        else:
-            overlay.Scatter.Scatter.opts(scatter_opts)
-            overlay = overlay.Scatter.Scatter
-            aggregator = ds.count()
-        
-        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
-
-        if return_df:
-            return overlay, df
-        else:
-            return overlay
-
-    def IQ_plot(self, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, rasterize=True):
-        overlay, df = self.plot('I', 'Q', x_prefix=prefix, y_prefix=prefix, include=include, exclude=exclude)
-        xlabel = r'$I$'
-        ylabel = r'$Q$'
-
-        scatter_opts = opts.Scatter(xlabel=xlabel,
-                                    ylabel=ylabel)
-
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Scatter.opts(scatter_opts)
-            overlay = overlay.NdOverlay.Scatter
-            aggregator = ds.by('det', ds.count())
-        else:
-            overlay.Scatter.Scatter.opts(scatter_opts)
-            overlay = overlay.Scatter.Scatter
-            aggregator = ds.count()
-        
-        if rasterize: overlay = dynspread(datashade(overlay, aggregator=aggregator))
-
-        if return_df:
-            return overlay, df
-        else:
-            return overlay
-
-    def psd_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
-        overlay, df = self.plot(col_name, col_name, x_prefix=f"psd_f{'_' if prefix else ''}{prefix}",  y_prefix=f"psd{'_' if prefix else ''}{prefix}", include=include, exclude=exclude)
-        xlabel = r'$PSD\ Frequency\ [Hz]$'
-        ylabel = f'psd_{prefix}_{col_name}'
-
-        curve_opts = opts.Curve(xlabel=xlabel,
-                                ylabel=ylabel)
-        scatter_opts = opts.Scatter(xlabel=xlabel,
-                                    ylabel=ylabel)
-
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(curve_opts)
-            overlay.NdOverlay.Scatter.opts(scatter_opts)
-            overlay.NdOverlay.opts(logx=True, logy=True)
-        else:
-            overlay.Curve.Curve.opts(curve_opts)
-            overlay.Scatter.Scatter.opts(scatter_opts)
-            overlay.Curve.opts(logx=True, logy=True)
-            overlay.Scatter.opts(logx=True, logy=True)
-
-        if return_df:
-            return overlay, df
-        else:
-            return overlay
-    
-    def fft_plot(self, col_name, prefix: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False):
-        overlay, df = self.plot('f', col_name, x_prefix=f'fft',  y_prefix=f"fft{'_' if prefix else ''}{prefix}", include=include, exclude=exclude, unpivot_x=False)
-        xlabel = r'$FFT\ Frequency\ [Hz]$'
-        ylabel = f'fft_{prefix}_{col_name}'
-
-        curve_opts = opts.Curve(xlabel=xlabel,
-                                ylabel=ylabel)
-        scatter_opts = opts.Scatter(xlabel=xlabel,
-                                    ylabel=ylabel)
-
-        if not (include is None and exclude is None):
-            overlay.NdOverlay.Curve.opts(curve_opts)
-            overlay.NdOverlay.Scatter.opts(scatter_opts)
-            overlay.NdOverlay.opts(logy=True)
-        else:
-            overlay.Curve.Curve.opts(curve_opts)
-            overlay.Scatter.Scatter.opts(scatter_opts)
-            overlay.Curve.opts(logy=True)
-            overlay.Scatter.opts(logy=True)
-
-        if return_df:
-            return overlay, df
-        else:
-            return overlay
+        if not 'logx' in kwargs: kwargs['logx'] = True
+        if not 'logy' in kwargs: kwargs['logy'] = True
+        rtn = self.plot('f', col_name, 
+                        x_prefix=f'fft',  
+                        y_prefix=f"fft{'_' if prefix else ''}{prefix}", 
+                        grouping=grouping,
+                        include=include, 
+                        exclude=exclude, 
+                        unpivot_x=False,
+                        xlabel=xlabel,
+                        ylabel=ylabel,
+                        return_df=return_df,
+                        save_fig=save_fig,
+                        save_name=save_name,
+                        overwrite=overwrite,
+                        **kwargs)
+        return rtn
     
     #==========================#
     # Lazily Loaded Attributes #

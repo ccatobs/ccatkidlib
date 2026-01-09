@@ -91,6 +91,11 @@ class Data:
         self.padding = len(str(self.analysis_cfg['tones']['max_tones']*100))
         if not self.root_dir[-1] == '/': self.root_dir += '/'
 
+        self.save_fig = self.viz_cfg['save']['save_fig']
+        self.overwrite = self.viz_cfg['save']['overwrite']
+        self.save_fmt = self.viz_cfg['save']['save_fmt']
+        self.figs_per_file = self.viz_cfg['save']['figs_per_file']
+
         log_dir = Path(__file__).parent / '..' / '..' / 'log'
         rfsoc_io.create_dir(log_dir) # Create log directory if it does not exist
         #rfsoc_io.setup_logging(log_dir / 'analysis.log', self.analysis_cfg['io']['file_level'], self.analysis_cfg['io']['terminal_level'])
@@ -128,8 +133,8 @@ class Data:
                 rfsoc_io.send_msg('CRITICAL', error)
                 raise ValueError(error)
 
-            self.timestamp = pair.get_timestamp(self.data_path[0])
-            if not all(pair.get_timestamp(path) == self.timestamp for path in self.data_path):
+            self.timestamp = rfsoc_io.get_timestamp(self.data_path[0])
+            if not all(rfsoc_io.get_timestamp(path) == self.timestamp for path in self.data_path):
                 error = 'All data paths must have the same timestamp!'
                 rfsoc_io.send_msg('CRITICAL', error)
                 raise ValueError(error)              
@@ -833,6 +838,26 @@ class Data:
         if not original_root[-1] == '/': original_root += '/'
         return original_root
 
+    @cached_property
+    def save_dir(self) -> str:
+        '''
+        Directory where figures should be saved. Create if it does not already exist.
+        '''
+        save_root_dir = self.viz_cfg['save']['save_root_dir']
+        if not save_root_dir[-1] == '/': save_root_dir += '/'
+
+        data_path = str(self.data_path[0])
+
+        for data_type in ('/vna/', '/targ/', '/timestream/'): 
+            save_dir = data_path.replace(data_type, '/fig/', 1)
+            if not save_dir == data_path: break
+
+        save_dir = Path(save_dir).parent
+        save_dir = str(save_dir).strip().replace(self.original_root, save_root_dir)
+        rfsoc_io.create_dir(save_dir)
+
+        return save_dir
+        
     @cached_property
     def comb(self) -> pl.DataFrame:
         '''

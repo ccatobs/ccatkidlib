@@ -249,7 +249,7 @@ class Network:
             
             detectors[i] = detector
             detector_types[i] = det_type
-            detector_timestamps[i] = pair.get_timestamp(data_path)
+            detector_timestamps[i] = rfsoc_io.get_timestamp(data_path)
         return detectors, detector_types, detector_timestamps
     
     @staticmethod
