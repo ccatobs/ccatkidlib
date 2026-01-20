@@ -68,6 +68,10 @@ class Target(Sweep):
         self._properties_df = pl.DataFrame({'det': self.tones}).with_columns(pl.lit(f'{self.bid}.{self.drid}').alias('com_to'),
                                                                              pl.lit(self.timestamp).alias('timestamp'))
 
+    # ================ #
+    # Analysis Methods #
+    # ================ #
+
     #==========================#
     # Lazily Loaded Attributes #
     #==========================#

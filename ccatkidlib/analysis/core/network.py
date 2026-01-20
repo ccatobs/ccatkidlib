@@ -11,6 +11,7 @@ import ccatkidlib
 import ccatkidlib.rfsoc_io as rfsoc_io
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
+import ccatkidlib.analysis.viz.viz_utils as viz_utils
 
 from ccatkidlib.analysis.core.vna import VNA
 from ccatkidlib.analysis.core.target import Target
@@ -62,9 +63,14 @@ class Network:
         network_dir = f'B{bid}D{drid}'
 
         self.analysis_cfg, self.viz_cfg = rfsoc_io.load_config(analysis_cfg)
+
+        self.save_fig = self.viz_cfg['save']['save_fig']
+        self.overwrite = self.viz_cfg['save']['overwrite']
+        self.save_fmt = self.viz_cfg['save']['save_fmt']
+        self.figs_per_file = self.viz_cfg['save']['figs_per_file']
+
         self.root_dir = self.analysis_cfg['file_paths']['root_data_dir']
         if not self.root_dir[-1] == '/': self.root_dir += '/'
-
         if not isinstance(detectors, Iterable) or len(detectors) == 0:
             if not sess_ids:
                 error = 'Must either provide a list of Detector objects or specify session ID(s) of the data to load.'
@@ -123,8 +129,16 @@ class Network:
             for i, detector in enumerate(detectors):
                 if detector.stream is None: detector_types[i] = 'Target'
 
-        self.data = pl.DataFrame({'detector': detectors, 'type': detector_types, 'timestamp': detector_timestamps})
+        self.det_dict = {str(det) : det for det in detectors}
+        self.data = pl.DataFrame({'detector': list(self.det_dict.keys()), 'type': detector_types, 'timestamp': detector_timestamps})
 
+        # Create directory for saving figures
+        self.timestamp = '_'.join(sess_ids)
+        save_dir = Path(detectors[0].save_dir).parent
+        dir_name = f'{'stream' if include_streams else 'targ'}_network_{self.timestamp}'
+        self.save_dir = save_dir / dir_name
+        rfsoc_io.create_dir(self.save_dir)
+        
     def add_columns(self, data_cols: str | list[str], max_workers: int = 1, ex=None) -> pl.dataframe.frame.DataFrame:
         ''' Add columns to the Network.data DataFrame using fields from the ext_cfg or drone_cfg
 
@@ -133,9 +147,13 @@ class Network:
             max_workers (int, optional): Maximum number of CPU cores to use. Defaults to 1. 
         '''
         detectors = self.data.select(pl.col(['detector', 'type'])).to_numpy()
+        detectors = [(self.det_dict[detector], detector_type) for detector, detector_type in detectors]
+ 
         detector_cfgs = [[detector.stream.drone_cfg, detector.stream.ext_cfg] if detector_type == 'Timestream' else [detector.targ.drone_cfg, detector.targ.ext_cfg] for detector, detector_type in detectors]
         num_detectors = self.data.height
-        data_dict = {data_col: [None]*num_detectors for data_col in data_cols}
+
+        combined_names = ['_'.join(data_col) if not isinstance(data_col, str) and isinstance(data_col, Iterable) else data_col for data_col in data_cols]
+        data_dict = {name: [None]*num_detectors for name in combined_names}
         with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
             future_to_batch = {executor.submit(Network._extract_data,
                                                detector_cfg,
@@ -143,10 +161,10 @@ class Network:
             for future in concurrent.futures.as_completed(future_to_batch):
                 i = future_to_batch[future]
                 data = future.result()
-                for k, v in zip(data_cols, data):
+                for k, v in zip(combined_names, data):
                     data_dict[k][i] = v
         data_df = pl.DataFrame(data_dict)
-        self.data = self.data.drop([data_col for data_col in data_cols if data_col in self.data.schema])
+        self.data = self.data.drop([name for name in combined_names if name in self.data.schema])
         self.data = pl.concat([self.data, data_df], how='horizontal')
         return self.data
 
@@ -160,7 +178,7 @@ class Network:
     def combine_properties(self, data_cols = []):
         properties_df = None
         for i, (det, *cols) in enumerate(self.data.select(['detector'] + data_cols).iter_rows()):
-            df = det.properties
+            df = self.det_dict[det].properties
             df = df.with_columns([pl.lit(data).alias(name) for name, data in zip(data_cols, cols)])
             try:
                 properties_df = df if properties_df is None else pl.concat([properties_df, df], how='diagonal')
@@ -171,17 +189,30 @@ class Network:
     #==================#
     # Plotting Methods #
     #==================#
+    @staticmethod
+    def _plot(df, plot_opts, *plot_args, **kwargs):
+        plot_func, by, overlay_cols, args = plot_args
+
+        kwargs['save_fig'] = False
+        
+        fig = plot_func(*args, df=df, by=by, **kwargs)
+        if overlay_cols is not None: fig = fig.overlay(overlay_cols).opts(show_legend=False)
+        fig.opts(*plot_opts)
+
+        return fig
     
-    def plot(self, func, data_type, *args, data_cols = [], return_df = True, **kwargs):
+    def plot(self, func, data_type, *args, data_cols = [], return_df = True, save_fig: bool | None = None, overwrite: bool | None = None, save_name: str = None, overlay_cols: str | list[str] = None, **kwargs):
         '''
+        
+
         Args:
             func (str): 
             data_type (str):
         '''
         
         # Validate data_type
-        if not data_type in ['vna', 'targ', 'stream']:
-            error = "data_type must be one of: 'vna', 'targ', or 'stream'"
+        if not data_type in ['vna', 'targ', 'stream', 'detector']:
+            error = "data_type must be one of: 'vna', 'targ', 'stream', or 'detector'"
             rfsoc_io.send_msg('CRITICAL', error)
             raise ValueError(error)
         
@@ -190,25 +221,45 @@ class Network:
         if not func_parts[-1] == 'plot':
             func_parts.append('plot')
             func = '_'.join(func_parts)
-        
-        # Always want to return plot DataFrames
-        kwargs['return_df'] = True
-        
-        figs = [None]*self.data.height
-        plot_df = None
-        for i, (det, *cols) in enumerate(self.data.select(['detector'] + data_cols).iter_rows()):
-            data_obj = getattr(det, data_type)
+
+        all_cols, by_cols = ['detector'] + data_cols, data_cols
+        kwargs['return_df'], kwargs['return_fig'] = True, False
+        plot_df, bys = None, [None]*self.data.height
+        for i, (det, *cols) in enumerate(self.data.select(all_cols).sort(all_cols).iter_rows()):
+            det = self.det_dict[det]
+            data_obj = det if data_type == 'detector' else getattr(det, data_type)
             if hasattr(data_obj, func) and callable(plot_func := getattr(data_obj, func)): 
-                fig, df = plot_func(*args, **kwargs)
-                figs[i] = fig
+                df, by = plot_func(*args, **kwargs)
+                bys[i] = by
                 
                 df = df.with_columns([pl.lit(data).alias(name) for name, data in zip(data_cols, cols)])
                 plot_df = df if plot_df is None else pl.concat([plot_df, df], how='diagonal')
         
+        if not len(set(bys)) == 1: 
+            error = "Inconsistent by columns specified"
+            rfsoc_io.send_msg('CRITICAL', error)
+            raise ValueError(error)
+        if bys[0] is not None: by_cols += [bys[0]]
+        kwargs['return_df'], kwargs['return_fig'] = False, True
+
+        plot_opts = []
+
+        plot_args = [plot_func, by_cols, overlay_cols, args]
+        
+        # Create plot for immediate visualization
+        # ---------------------------------------
+        fig = Network._plot(plot_df, plot_opts, *plot_args, **kwargs)
+
+        # Save plot in background
+        # -----------------------
+        prefix = kwargs['y_prefix'] if 'y_prefix' in kwargs else kwargs.get('prefix', '')
+        if save_name is None: save_name = f'network_{data_type}{'_' if prefix else ''}{prefix}_{func}'
+        viz_utils.save_fig(self, Network._plot, plot_df, plot_opts, *plot_args, save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
+
         if return_df:
-            return hv.Overlay(figs), plot_df
+            return fig, plot_df
         else:
-            return hv.Overlay(figs)
+            return fig        
 
     #================#
     # Helper Methods #

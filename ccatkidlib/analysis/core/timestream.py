@@ -110,12 +110,14 @@ class Timestream(Data):
 
         self._properties = {f'det_{tone:0{self.padding}d}': {} for tone in self.tones}
         self._properties_df = pl.DataFrame({'det': self.tones})
+        self.spline_dict = {'None': None}
 
     #==================#
     # Plotting Methods #
     #==================#
     @staticmethod
-    def _plot(df, x_dim, y_dim, plot_opts, **kwargs):
+    def _plot(df, plot_opts, *args, **kwargs):
+        x_dim, y_dim = args
         datashade_plot = kwargs.pop('datashade')
 
         if datashade_plot:
@@ -153,11 +155,14 @@ class Timestream(Data):
              include: int | list[int] | None = None, 
              exclude: int | list[int] | None = None, 
              unpivot_x=True,
+             return_fig = True,
              return_df = False,
              plot_opts = None,
              save_fig: bool | None = None,
              overwrite: bool | None = None,
              save_name: str = None,
+             df: pl.DataFrame | None = None,
+             by: str | list[str] | None = None,
              **kwargs):
         # Get DataFrame with data to plot
         # -------------------------------
@@ -165,9 +170,12 @@ class Timestream(Data):
                     'x': x_dim,
                     'y': y_dim}
 
-        df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude, unpivot_x=unpivot_x)
-        col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns
-        df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
+        if df is None or by is None:
+            df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude, unpivot_x=unpivot_x)
+            col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns
+            df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
+
+        if not return_fig: return df, by
 
         # Set default hvplot key word arguments
         # -------------------------------------
@@ -209,11 +217,11 @@ class Timestream(Data):
         
         # Create plot for immediate visualization
         # ---------------------------------------
-        plot = Timestream._plot(df, col_dict['x'], col_dict['y'], all_opts, **kwargs)
+        plot = Timestream._plot(df, all_opts, *(col_dict['x'], col_dict['y']), **kwargs)
 
         # Save plot in background
         # -----------------------
-        viz_utils.save_fig(self, Timestream._plot, df, col_dict['x'], col_dict['y'], all_opts, save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
+        viz_utils.save_fig(self, Timestream._plot, df, all_opts, *(col_dict['x'], col_dict['y']), save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
 
         if return_df:
             return plot, df

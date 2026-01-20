@@ -5,6 +5,8 @@ import polars as pl
 
 from pathlib import Path
 from functools import cached_property
+from collections.abc import Iterable
+import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 import holoviews as hv
 from holoviews import opts
@@ -35,8 +37,11 @@ class Sweep(Data):
     #==================#
         
     @staticmethod
-    def _plot(df, x_dim, y_dim, plot_opts, **kwargs):
-        tone_marker, tone_ms = kwargs.pop('tone_marker'), kwargs.pop('tone_ms')
+    def _plot(df, plot_opts, *args, **kwargs):
+        x_dim, y_dim = args
+
+        tone_marker = kwargs.pop('tone_marker')
+        tone_ms = kwargs.pop('tone_ms')
 
         sweep = df.hvplot.line(x=x_dim,
                                y=y_dim,
@@ -51,6 +56,14 @@ class Sweep(Data):
                                label='Tone',
                                **kwargs)).relabel(group='Sweep')
         plot = sweep*tone
+        if 'area_sample' in df.schema:
+            if df.schema['area_sample'] == pl.List: df = df.explode('area_sample')
+            area = df.filter(pl.col('sample') == pl.col('area_sample')).hvplot.area(x=x_dim,
+                                                                                    y=y_dim,
+                                                                                    label='Area Data',
+                                                                                    **kwargs).relabel(group='Sweep')
+            plot *= area
+
         plot.opts(*plot_opts)
 
         return plot
@@ -65,11 +78,15 @@ class Sweep(Data):
              grouping: str = 'groupby',
              include: int | list[int] | None = None, 
              exclude: int | list[int] | None = None, 
+             return_fig = True,
              return_df = False,
-             plot_opts = None,
              save_fig: bool | None = None,
              overwrite: bool | None = None,
              save_name: str = None,
+             plot_opts = None,
+             df: pl.DataFrame | None = None,
+             by: str | list[str] | None = None,
+             area_df: pl.DataFrame | None = None,
              **kwargs):
         '''
         
@@ -81,15 +98,19 @@ class Sweep(Data):
                     'x': x_dim,
                     'y': y_dim}
 
-        df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude)
-        col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns    
-        df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
+        if df is None or by is None:
+            df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude)
+            col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns    
+            df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
 
-        tone_sample = int((self.drone_cfg['tones']['sweep_steps']-1)/2)
-        df = (df.with_columns(pl.when(pl.col(col_dict['sample']) == tone_sample)
-                                .then(pl.lit(True))
-                                .otherwise(pl.lit(False))
-                                .alias('tone')))
+            tone_sample = int((self.drone_cfg['tones']['sweep_steps']-1)/2)
+            df = (df.with_columns(pl.when(pl.col(col_dict['sample']) == tone_sample)
+                                    .then(pl.lit(True))
+                                    .otherwise(pl.lit(False))
+                                    .alias('tone')))
+            if area_df is not None: df = df.join(area_df, on='det', how='left')
+
+        if not return_fig: return df, by
 
         # Set default hvplot key word arguments
         # -------------------------------------
@@ -117,24 +138,26 @@ class Sweep(Data):
         
         overlay_opts = opts.Overlay(title=title,
                                     xlabel = xlabel if xlabel is not None else col_dict['x'],
-                                    ylabel = ylabel if ylabel is not None else col_dict['y'])
-        curve_opts = opts.Curve(show_legend=False, 
-                                fig_size = kwargs.pop('fig_size') if 'fig_size' in kwargs else self.viz_cfg['static_plot']['sweep']['fig_size'])
+                                    ylabel = ylabel if ylabel is not None else col_dict['y'], 
+                                    fig_size = kwargs.pop('fig_size') if 'fig_size' in kwargs else self.viz_cfg['static_plot']['sweep']['fig_size'])
+        curve_opts = opts.Curve(show_legend=False)
+        area_opts = opts.Area(alpha = kwargs.pop('area_alpha') if 'area_alpha' in kwargs else self.viz_cfg['static_plot']['sweep']['area_alpha'])
         data_opts = opts.Curve('Sweep.Data')
         tone_opts = opts.Curve('Sweep.Tone')
         all_opts = [overlay_opts,
                     curve_opts,
+                    area_opts,
                     data_opts,
                     tone_opts]
-        if plot_opts is not None: all_opts.append(plot_opts)
+        if plot_opts is not None: all_opts += plot_opts if isinstance(plot_opts, Iterable) else [plot_opts]
         
         # Create plot for immediate visualization
         # ---------------------------------------
-        plot = Sweep._plot(df, col_dict['x'], col_dict['y'], all_opts, **kwargs)
+        plot = Sweep._plot(df, all_opts, *(col_dict['x'], col_dict['y']), **kwargs)
 
         # Save plot in background
         # -----------------------
-        viz_utils.save_fig(self, Sweep._plot, df, col_dict['x'], col_dict['y'], all_opts, save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
+        viz_utils.save_fig(self, Sweep._plot, df, all_opts, *(col_dict['x'], col_dict['y']), save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
 
         if return_df:
             return plot, df
@@ -183,15 +206,39 @@ class Sweep(Data):
 
         return rtn
 
-    def IQ_plot(self, prefix: str = '', projection='IQ', grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+    def IQ_plot(self, prefix: str = '', projection='IQ', max_IQ_sliver = False, grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+        shared_opts = {'padding': 0.1}
+        area_df = None
         if projection == 'IQ':
             xlabel, ylabel = r'$I\ [arb]$', r'$Q\ [arb]$'
             x_dim, y_dim = 'I', 'Q'
-            plot_opts=None
+
+            plot_opts=opts.Curve(data_aspect=1, **shared_opts)
         elif projection == 'polar':
             xlabel, ylabel = r'$Phase\ [deg]$', r'$|S_{21}|$'
             x_dim, y_dim = 'phase', 'mag'
-            plot_opts = opts.Curve(projection='polar', show_grid=True)
+
+            # Define custom angle tick marks that do not block the radial label or title
+            # --------------------------------------------------------------------------
+            x_ticks = np.arange(0, 2*np.pi, np.pi/6)
+            mask = [np.all(filt) for filt in zip(x_ticks != np.pi, x_ticks != np.pi/2)]
+            x_ticks = x_ticks[mask]
+
+            # Get DataFrame of samples with the maximum seperation in IQ space 
+            # ----------------------------------------------------------------
+            if max_IQ_sliver:
+                area_df = ccat_df.get_properties(self, col_name='max_IQ_dist_sample', include=include, exclude=exclude, strict=True)
+                if 'max_IQ_dist_sample' in area_df.schema:
+                    area_df = area_df.select(pl.col('det'),
+                                             pl.concat_list([pl.col('max_IQ_dist_sample'), pl.col('max_IQ_dist_sample') - 1]).alias('area_sample'))
+                
+            # Create plot options
+            # -------------------
+            plot_opts = opts.Curve(projection='polar',
+                                   show_grid=True, 
+                                   ylim=(0, None), 
+                                   xticks=x_ticks,
+                                   **shared_opts)
         else:
             error = 'Invalid projection specified, must be either "IQ" or "polar".'
             rfsoc_io.send_msg('CRITICAL', error)
@@ -199,16 +246,7 @@ class Sweep(Data):
         save_name = f'sweep_{prefix}{'_' if prefix else ''}{projection}'
 
         if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
-        #I_min, I_max = df.select(pl.col('I').min().alias('min'), pl.col('I').max().alias('max'))[0].to_numpy()[0]
-        #Q_min, Q_max = df.select(pl.col('Q').min().alias('min'), pl.col('Q').max().alias('max'))[0].to_numpy()[0]
-
-        #max_diff = 1.1*max(I_max - I_min, Q_max - Q_min) / 2
-        #I_avg, Q_avg = (I_min + I_max)/2, (Q_min + Q_max)/2
-
-        #x_min, x_max = I_avg - max_diff, I_avg + max_diff
-        #y_min, y_max = Q_avg - max_diff, Q_avg + max_diff
-        #plot_opts = opts.Curve(xlim = (x_min, x_max), ylim = (y_min, y_max), linewidth=0)            
-    
+        
         rtn = self.plot(x_dim=x_dim,
                         y_dim=y_dim,
                         x_prefix=prefix, 
@@ -219,6 +257,7 @@ class Sweep(Data):
                         xlabel=xlabel, 
                         ylabel=ylabel, 
                         return_df = return_df,
+                        area_df = area_df,
                         save_fig = save_fig,
                         save_name = save_name,
                         overwrite = overwrite,

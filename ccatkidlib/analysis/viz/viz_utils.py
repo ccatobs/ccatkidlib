@@ -4,34 +4,58 @@ import holoviews as hv
 from multiprocessing import Process
 from functools import wraps
 from pathlib import Path
+from collections.abc import Iterable
 
 '''
 Library of helper functions for plotting KID data.
 '''
 
-def save_fig(self, plot_func, df, x_dim, y_dim, plot_opts, save_fig = None, overwrite=None, save_name = None, **kwargs):
-    if save_fig is None: save_fig = self.save_fig
-    if overwrite is None: overwrite = self.overwrite
-    if save_name is None: save_name =  f'{x_dim}_{y_dim}'
-    figs_per_file = kwargs.pop('figs_per_file') if 'figs_per_file' in kwargs else self.figs_per_file
+def save_fig(obj, plot_func, data, plot_opts, *args, save_fig = None, overwrite=None, save_name = None, **kwargs):
+    '''
+    Create and save Holoviews figure
+
+    Args:
+        obj (Data | Detector | Network): ccatkidlib Data, Detector, or Network analysis object
+        plot_func (Callable[]): Function that creates Holoviews figure
+        data (Any): Data to be passed to ``plot_func`` for creating figure
+        plot_opts (list[Opts]): List of Holoviews Opts to be passed to ``plot_func`` for styling figure
+        save_fig (bool | None): Whether to save figure. Defaults to that specified in analysis config
+        overwrite (bool | None): Whether to overwrite figure files that already exist. Defaults to that specified in analysis config
+        save_name (str | None): Save name of file. Will always add timestamp . Defaults to that specified in analysis config
+    ''' 
+    if save_fig is None: save_fig = obj.save_fig
+    if overwrite is None: overwrite = obj.overwrite
+    if save_name is None: save_name = 'tmp'
+    figs_per_file = kwargs.pop('figs_per_file') if 'figs_per_file' in kwargs else obj.figs_per_file
 
     if save_fig:
-        save_dir, save_fmt = Path(self.save_dir), self.save_fmt
-        timestamp = self.timestamp
+        save_dir, save_fmt = Path(obj.save_dir), obj.save_fmt
+        timestamp = obj.timestamp
 
-        save_process = Process(target=_save_fig, args=(plot_func, df, x_dim, y_dim, plot_opts, overwrite, save_dir, save_name, save_fmt, timestamp, figs_per_file), kwargs = kwargs)
+        print(args)
+        save_process = Process(target=_save_fig, args=(plot_func, data, plot_opts, overwrite, save_dir, save_name, save_fmt, timestamp, figs_per_file, args), kwargs = kwargs)
         save_process.start()
     return
 
-def _save_fig(plot_func, df, x_dim, y_dim, plot_opts, overwrite, save_dir, save_name, save_fmt, timestamp, figs_per_file, **kwargs):
+def _save_fig(plot_func, data, plot_opts, overwrite, save_dir, save_name, save_fmt, timestamp, figs_per_file, args, **kwargs):
+    '''
+    Worker function for saving Holoviews figure
+
+    '''
     import holoviews as hv
     import hvplot.polars    
     hv.extension('matplotlib', enable_mathjax=True)
 
     kwargs['dynamic'] = False
-    plot = plot_func(df, x_dim, y_dim, plot_opts, **kwargs)
+    plot = plot_func(data, plot_opts, *args, **kwargs)
 
     if isinstance(plot, hv.HoloMap):
+        kdims = [kdim.name for kdim in plot.kdims]
+
+        for key, fig in plot.items():
+            if not isinstance(key, Iterable) or isinstance(key, str): key = [key]
+            fig.opts(title=', '.join([f'{name}={value}' for name, value in zip(kdims, key)]))
+
         num_files = (len(plot) + figs_per_file - 1) // figs_per_file
         plots = num_files*[None]
         for i in range(num_files): 
