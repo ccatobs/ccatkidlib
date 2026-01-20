@@ -100,24 +100,6 @@ def dict_set(dic, keys, value):
             return False
     return _dict_set_r(dic, keys[-1], value)
 
-def from_dB(power):
-    '''
-    Convert a power from dB into normal units.
-    '''
-    try:
-        return 10**(np.array(power)/20)
-    except:
-        return 10**(power/20)
-
-def to_dB(power):
-    '''
-    Convert a power from normal units into dB.
-    '''
-    try:
-        return 20*np.log10(np.array(power))
-    except:
-        return 20*np.log10(power)
-
 def method_timer(func):
     @wraps(func)
     def _wrapper(self, *args, **kwargs):
@@ -144,6 +126,7 @@ def function_timer(func):
         time_diff = time.time() - start_time
 
         s = Style()
+        print(time_diff)
         rfsoc_io.send_msg('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper

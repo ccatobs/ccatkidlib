@@ -11,6 +11,7 @@ import os
 import sys
 import time
 
+import copy
 import numpy as np
 import polars as pl
 import pathlib
@@ -29,6 +30,7 @@ import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.fit.fit as ccat_fit
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
+import ccatkidlib.analysis.viz.viz_utils as viz_utils
 
 from ccatkidlib.rfsoc_io import header
 from ccatkidlib.analysis.core.data import Data
@@ -47,7 +49,7 @@ class Detector:
     Attributes:
         bid  (str): RFSoC board that took the detector data
         drid (str): RFSoC drone that took the detector data
-        dets (list[int]): List of detectors
+        tones (list[int]): List of detectors
 
         stream (Timestream | None): ``Timestream`` object of detector timestream
         targ (Target): ``Target`` object of detector target sweep
@@ -114,7 +116,7 @@ class Detector:
         # ------------------------------------------------
         if not isinstance(targ, Target):
             if isinstance(stream, Timestream): # If timestream provided, try to find associated sweep
-                self.dets = stream.tones
+                self.tones = stream.tones
                 vna_path, targ_path = pair.get_sweep(stream.data_path[0], **kwargs)
 
                 # Load found sweep
@@ -131,22 +133,42 @@ class Detector:
                 rfsoc_io.send_msg('CRITICAL', error)
                 raise RuntimeError(error)
         else:
-            self.dets = targ.tones
+            self.tones = targ.tones
             if vna is None: 
                 vna_path, _ = pair.get_sweep(targ.data_path[0], **kwargs)
                 if Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
 
         self.bid, self.drid = com_to.split('.')
         self.analysis_cfg, self.viz_cfg = rfsoc_io.load_config(analysis_cfg)
+        
+        self.save_fig = self.viz_cfg['save']['save_fig']
+        self.overwrite = self.viz_cfg['save']['overwrite']
+        self.save_fmt = self.viz_cfg['save']['save_fmt']
+        self.figs_per_file = self.viz_cfg['save']['figs_per_file']
 
         self.stream = stream
         self.targ = targ
         self.vna = vna
 
         # Create internal attributes corresponding to lazily loaded attributes
-        # ====================================================================
+        # --------------------------------------------------------------------
         self._cable_delay = cable_delay
         self._properties_df = self.targ.comb
+
+        # Create directory for saving figures
+        # -----------------------------------
+        if self.stream is not None:
+            self.timestamp = self.stream.timestamp
+            name = 'stream_detector'
+        else:
+            self.timestamp = self.targ.timestamp
+            name = 'targ_detector'
+
+        self.timestamp = self.stream.timestamp if self.stream is not None else self.targ.timestamp
+        save_dir = Path(self.targ.save_dir).parent
+        dir_name = f'{name}_{self.timestamp}'
+        self.save_dir = save_dir / dir_name
+        rfsoc_io.create_dir(self.save_dir)
 
     #==========================#
     # Lazily Loaded Attributes #
@@ -177,22 +199,22 @@ class Detector:
         if isinstance(value, pl.DataFrame):
             self._properties_df = value
 
-    @cached_property
+    @property
     def cable_delay(self):
         self._cable_delay = self.vna.cable_delay if self._cable_delay is None and isinstance(self.vna, VNA) else self._cable_delay
-        self.properties
-
-        # Get cable delays for individual detectors using target sweep data. The target sweep cable delays tend to be too large so average with the overall network cable delay 
-        #self.targ._properties = {det: {'det_cable_delay': 0.4*delay + 0.6*self._cable_delay} for det, delay in self.targ.cable_delay.items()}
-        
-        # Replace cable delays that are far from the overall network cable delay with the network cable delay
-        threshold = pl.lit(100) # TODO: Make this accessible
-        self._properties_df = (self.properties.lazy()#.with_columns(pl.when((pl.col('det_cable_delay') - self._cable_delay).abs() > threshold)
-                                                     #                .then(pl.lit(self._cable_delay))
-                                                     #                .otherwise(pl.col('det_cable_delay'))
-                                                     #               .alias('det_cable_delay'))
-                                                    .with_columns(pl.lit(self._cable_delay).alias('network_cable_delay'))
-                                                    .collect())
+        if not isinstance(self._cable_delay, Iterable):
+            self._properties_df = self.properties.with_columns(pl.lit(self._cable_delay).alias('network_cable_delay'))
+            # Get cable delays for individual detectors using target sweep data. The target sweep cable delays tend to be too large so average with the overall network cable delay 
+            #self.targ._properties = {det: {'det_cable_delay': 0.4*delay + 0.6*self._cable_delay} for det, delay in self.targ.cable_delay.items()}
+            
+            # Replace cable delays that are far from the overall network cable delay with the network cable delay
+            #threshold = pl.lit(100) # TODO: Make this accessible
+            #self._properties_df = (self.properties.lazy()#.with_columns(pl.when((pl.col('det_cable_delay') - self._cable_delay).abs() > threshold)
+            #                                             #                .then(pl.lit(self._cable_delay))
+            #                                             #                .otherwise(pl.col('det_cable_delay'))
+            #                                             #               .alias('det_cable_delay'))
+            #                                            .with_columns(pl.lit(self._cable_delay).alias('network_cable_delay'))
+            #                                            .collect())
         return self._cable_delay
 
     @cached_property
@@ -217,43 +239,8 @@ class Detector:
             strict (bool, optional): Defaults to *False*
         
         '''
+        return ccat_df.get_properties(self, col_name = col_name, include=include, exclude=exclude, strict=strict)
 
-        def _get_expr(tones):
-            expr = [pl.col('det').is_in(tones)]
-            return expr
-        
-        def _include(include: list[int]):
-            ''' Internal function for getting data rows when ``include`` is specified
-
-            Args:
-                include (list[int]): List of tones to get data for
-            '''
-            return _get_expr(include)
-
-        def _exclude(exclude: list[int]):
-            ''' Internal function for getting data rows when ``exclude`` is specified
-
-            Args:
-                exclude (list[int]): List of tones to **not** get data for
-            '''
-            tones = set(self.targ.tones) - set(exclude)
-            return _get_expr(tones)
-
-        def _all():
-            ''' Internal function for getting all data rows (neither ``include`` or ``exclude`` specified)
-
-            '''
-            
-            return _get_expr(self.targ.tones)
-
-        if isinstance(col_name, str): col_name = [col_name] 
-    
-        exprs = ccat_df.parse_tones(_include, _exclude, _all, include, exclude)
-        return (self.properties.lazy()
-                               .select(['det'] + [f"^{'' if strict else '.*'}{name}{'' if strict else '.*'}$" for name in col_name])
-                               .filter(*exprs)
-                               .collect())
-    
     # Fitting
     # -------
     def complex_fit(self, 
@@ -261,11 +248,11 @@ class Detector:
                     asymm: bool = False, 
                     fix_cable: bool = False, 
                     fix_thetaQ: bool = False,
-                    save_model_result: bool = False,
                     include: int | list[int] | None = None, 
                     exclude: int | list[int] | None = None, 
                     recalc: bool = False, 
-                    max_workers: int = 1) -> pl.DataFrame:
+                    max_workers: int = 1,
+                    ex = None) -> pl.DataFrame:
         '''
         Fit target sweep using complex forward transmission data (*z = I + iQ*)
 
@@ -274,7 +261,6 @@ class Detector:
             asymm (bool, optional): Whether to perform a asymmetric fit. Defaults to *False*
             fix_cable (bool, optional): Whether to vary cable parameters for fit. Defaults to *False*: parameters are varied
             fix_thetaQ (bool, optional): Whether to vary impedance mismatch angle and coupling quality factor for fit. Defaults to *False*: parameters are varied
-            save_model_result (bool, optional): Whether to save fit ``ModelResult`` object to ``properties`` Polars DataFrame. Defaults to *False*
         Returns:
             return (pl.DataFrame): Polars DataFrame with fit I and Q data
         '''
@@ -286,8 +272,8 @@ class Detector:
         col_name = ['f', 'I', 'Q', 'complex_fit']
         
         self.properties # Load properties 
-        args = [[self, nonlinear, asymm, fix_cable, fix_thetaQ, ccat_mp.check_max_workers(max_workers), save_model_result]]
-        self.targ.transform(Detector.calc_complex_fit, *args, include=include, exclude=exclude, recalc = recalc, col_name = col_name, batch_size=len(self.targ.tones))
+        args = [[self, nonlinear, asymm, fix_cable, fix_thetaQ, ccat_mp.check_max_workers(max_workers), ex]]
+        self.targ.transform(Detector.calc_complex_fit, *args, include=include, exclude=exclude, recalc = recalc, col_name = col_name, batch_size=len(self.tones))
         self.targ.data = self.targ._unnest('struct_' + col_name[-1])
 
         # Calculate Q_c and Q_i. Convert cable delay into nanaseconds
@@ -306,11 +292,11 @@ class Detector:
                   method: str = 'least_squares', 
                   params: lmfit.Parameters = None,
                   window: float = 1,
-                  save_model_result: bool = True,
                   include: int | list[int] | None = None, 
                   exclude: int | list[int] | None = None, 
                   recalc: bool = False, 
-                  max_workers: int = 1) -> pl.DataFrame:
+                  max_workers: int = 1,
+                  ex=None) -> pl.DataFrame:
         ''' 
         Fit target sweep using phase data (*arctan(Q/I)*)
         
@@ -331,8 +317,8 @@ class Detector:
             col_names[i] = [col_name[0]] + [f"{pre}{'_' if pre else ''}{name}" for name in col_name[1:-1]] + [col_name[-1]]
         
         radii = [self.get_properties(col_name = f'{col}_R', include=include, exclude=exclude, strict=True).to_numpy().T[1] for col in circle_fit_col]
-        args = [[self, pre, radius, nonlin, method, param, win, ccat_mp.check_max_workers(max_workers), save_model_result] for pre, radius, nonlin, param, win in zip(prefix, radii, nonlinear, params, window)]
-        self.targ.transform([Detector.calc_phase_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.targ.tones))        
+        args = [[self, pre, radius, nonlin, method, param, win, ccat_mp.check_max_workers(max_workers), ex] for pre, radius, nonlin, param, win in zip(prefix, radii, nonlinear, params, window)]
+        self.targ.transform([Detector.calc_phase_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))        
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
 
         # Calculate Q_c, Q_i, and nonlinearity parameter 'a'
@@ -354,7 +340,8 @@ class Detector:
                       include: int | list[int] | None = None, 
                       exclude: int | list[int] | None = None, 
                       recalc: bool = False, 
-                      max_workers=1) -> pl.DataFrame:
+                      max_workers=1,
+                      ex=None) -> pl.DataFrame:
         '''
         Fit the target sweep circle in the IQ plane
         
@@ -370,13 +357,14 @@ class Detector:
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
         
         self.properties # load properties
-        args = [[self, pre, bounds, loss, f_scale, method, ccat_mp.check_max_workers(max_workers)] for pre in prefix]
-        self.targ.transform([Detector.calc_IQ_circle_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.targ.tones))        
+        args = [[self, pre, bounds, loss, f_scale, method, ccat_mp.check_max_workers(max_workers), ex] for pre in prefix]
+        self.targ.transform([Detector.calc_IQ_circle_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))        
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.targ.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
     # IQ transformations
     # ------------------
+
     def IQ_unwind(self, 
                   prefix: str | list[str] = '',
                   data: str = 'both',
@@ -445,7 +433,7 @@ class Detector:
         tone_freqs = self.get_properties('tone_freqs', include=include, exclude=exclude, strict=True)
         norm_dfs = []
         for data_obj, data_type in zip(data_objs, data_types):
-            cable_mags = self.targ.get_data(f'{norm_col}{'_' if norm_col else ''}mag', include=include, exclude=exclude, strict=True)
+            cable_mags = self.targ.get_data(f"{norm_col}{'_' if norm_col else ''}mag", include=include, exclude=exclude, strict=True)
             if data_type == 'targ':
                 scale = 1/cable_mags.to_numpy().T
             else:
@@ -501,7 +489,7 @@ class Detector:
         else:
             fwhm_col_name = ['sample', f"{mag_prefix}{'_' if mag_prefix else ''}mag"] # Data columns used for estimating the FWHM
 
-            include_subset = self._check_properties('HM_mid', include=include, exclude=exclude, recalc=recalc)
+            include_subset = ccat_df.check_properties(self, 'HM_mid', include=include, exclude=exclude, recalc=recalc)
             if not len(include_subset) == 0:
                 # Get detector magnitudes and sample numbers and unpivot DataFrame from wide to long format
                 mag_df = self.targ.get_data(col_name=fwhm_col_name, strict=True, include=include_subset)
@@ -578,8 +566,8 @@ class Detector:
         col_name = ['I', 'Q', f"{loc}{'_' if loc else ''}shift{'_' if loc else ''}{loc}_rotate"]
 
         if dest_I is None: # Do not transform the circle if no destination provided
-            shift = np.zeros(len(self.dets))
-            center_angle = np.zeros(len(self.dets))
+            shift = np.zeros(len(self.tones))
+            center_angle = np.zeros(len(self.tones))
         else:
             if not use_fit: # Use median I & Q values of target sweep IQ circle if not using center from circle fit
                 property_names = [f"targ_median_{prefix}{'_' if prefix else ''}{col_name[0]}",
@@ -588,20 +576,20 @@ class Detector:
                                   f"targ_median_{prefix}{'_' if prefix else ''}mag"]
                 
                 # Calculate target sweep median I & Q values if not in ``properties`` DataFrame already
-                include_subset = self._check_properties(property_names[0], include=include, exclude=exclude, recalc=recalc)
+                include_subset = ccat_df.check_properties(self, property_names[0], include=include, exclude=exclude, recalc=recalc)
                 if not len(include_subset) == 0:
                     median_I_df = self.targ.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
                     median_Q_df = self.targ.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
 
-                    self.add_data_to_properties(median_I_df, property_names[0])
-                    self.add_data_to_properties(median_Q_df, property_names[1])
+                    ccat_df.add_data_to_properties(self, median_I_df, property_names[0])
+                    ccat_df.add_data_to_properties(self, median_Q_df, property_names[1])
             else:
                 property_names = [f"{circle_fit_col}_center_I",
                                   f"{circle_fit_col}_center_Q",
                                   f"{circle_fit_col}_center_angle",
                                   f"{circle_fit_col}_center_mag"]
             
-            include_subset = self._check_properties(property_names[2], include=include, exclude=exclude, recalc=recalc)
+            include_subset = ccat_df.check_properties(self, property_names[2], include=include, exclude=exclude, recalc=recalc)
             if not len(include_subset) == 0:
                 circle_fit_df = (self.get_properties(property_names[0:2] , include=include_subset, strict=True)
                                      .select(['det',
@@ -649,7 +637,7 @@ class Detector:
         for i, pre in enumerate(prefix):
             if rotation == 'mismatch':
                 mismatch_col_name = f'{pre}_{col_name[-1]}_angle'
-                include_subset = self._check_properties(mismatch_col_name, include=include, exclude=exclude, recalc=recalc)
+                include_subset = ccat_df.check_properties(self, mismatch_col_name, include=include, exclude=exclude, recalc=recalc)
                 if not len(include_subset) == 0:
                     pi = pl.lit(np.pi)
                     I_df = self.targ.get_data(f"{pre}{'_' if pre else ''}{col_name[0]}", include=include_subset, strict=True)
@@ -662,14 +650,14 @@ class Detector:
                                         .select([(pi - (pl.arctan2(pl.col(f"first_{Q_col}"), pl.col(f"first_{I_col}")) % (2*pi) +
                                                         pl.arctan2(pl.col(f"last_{Q_col}"),  pl.col(f"last_{I_col}")) % (2*pi))/2).alias(I_col.split('_')[-1]) for I_col, Q_col in zip(I_cols, Q_cols)])
                                         .collect())
-                    self.add_data_to_properties(mismatch_df, mismatch_col_name)
+                    ccat_df.add_data_to_properties(self, mismatch_df, mismatch_col_name)
                 mismatch_angle = self.get_properties(mismatch_col_name, include=include, exclude=exclude, strict=True).to_numpy().T[1]
                 angles[i] = mismatch_angle
             elif rotation == 'timestream':
                 timestream_col_name = f'{pre}_{col_name[-1]}_angle'
 
                 # Calculate angle of center of timestream (center determined using I and Q medians)
-                include_subset = self._check_properties(timestream_col_name, include=include, exclude=exclude, recalc=recalc)
+                include_subset = ccat_df.check_properties(self, timestream_col_name, include=include, exclude=exclude, recalc=recalc)
                 if not len(include_subset) == 0:
                     pi = pl.lit(np.pi)
                     I_df = self.stream.get_data(f"{pre}{'_' if pre else ''}{col_name[0]}", include=include_subset, strict=True)
@@ -680,7 +668,7 @@ class Detector:
                                           .select(pl.all().median()) 
                                           .select([(pl.arctan2(pl.col(Q_col), pl.col(I_col)) % (2*pi)).alias(I_col.split('_')[-1]) for I_col, Q_col in zip(I_cols, Q_cols)])
                                           .collect())
-                    self.add_data_to_properties(timestream_df, timestream_col_name)
+                    ccat_df.add_data_to_properties(self, timestream_df, timestream_col_name)
                 timestream_angle = self.get_properties(timestream_col_name, include=include, exclude=exclude, strict=True).to_numpy().T[1]
                 angles[i] = timestream_angle
             else:
@@ -718,13 +706,13 @@ class Detector:
         def _get_medians(prefix):
             med_col = ['stream_median']
 
-            include_subset = self._check_properties(f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}", include=include, exclude=exclude, recalc=recalc)
+            include_subset = ccat_df.check_properties(self, f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}", include=include, exclude=exclude, recalc=recalc)
             if not len(include_subset) == 0:
                 median_I_df = self.stream.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
-                median_Q_df = self.stream.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
+                median_Q_df = self.stream.get_data(f"{prefix}{'_' if prefix else ''}{col_name[1]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
 
-                self.add_data_to_properties(median_I_df, f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}")
-                self.add_data_to_properties(median_Q_df, f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[1]}")
+                ccat_df.add_data_to_properties(self, median_I_df, f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}")
+                ccat_df.add_data_to_properties(self, median_Q_df, f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[1]}")
             median_I, median_Q = self.get_properties([f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}",
                                                       f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[1]}"], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
             return median_I, median_Q
@@ -738,12 +726,12 @@ class Detector:
         if use_noise_tones and not (noise_tones is None): # Use noise tones
             col_name += ['noise_shift']
 
-            include_subset = self._check_properties(f'closest_noise_tone', include=include, exclude=exclude, recalc=recalc)
+            include_subset = ccat_df.check_properties(self, f'closest_noise_tone', include=include, exclude=exclude, recalc=recalc)
             if not len(include_subset) == 0:
                 noise_freqs = self.get_properties('tone_freqs', include=noise_tones, strict=True).to_numpy().T[1]
                 closest_tones = (self.get_properties('tone_freqs', include=include_subset, strict=True)
                                      .lazy()
-                                     .select(['det'] + [((pl.col('tone_freqs') - freq).abs()/pl.lit(1e6)).alias(f'{tone:04d}') for tone, freq in zip(noise_tones, noise_freqs)]) 
+                                     .select(['det'] + [((pl.col('tone_freqs') - freq).abs()/pl.lit(1e6)).alias(f'{tone:0{self.padding}d}') for tone, freq in zip(noise_tones, noise_freqs)]) 
                                      .collect()       
                                      .unpivot(index='det', variable_name='closest_noise_tone', value_name='dist')
                                      .lazy()
@@ -790,6 +778,7 @@ class Detector:
                      exclude: int | list[int] | None = None, 
                      recalc: bool = False, 
                      max_workers=1, 
+                     ex = None,
                      **kwargs) -> pl.DataFrame:
         '''Interpolate target sweep phase vs. frequency data and add interpolating splines to ``properties`` attribute
 
@@ -803,8 +792,8 @@ class Detector:
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
-        if not isinstance(phase_low, Iterable) or not len(phase_low) == num_prefix: phase_low = [phase_low]
-        if not isinstance(phase_up, Iterable) or not len(phase_up) == num_prefix: phase_up = [phase_up]
+        if not isinstance(phase_low, Iterable) or not len(phase_low) == num_prefix: phase_low = [phase_low]*num_prefix
+        if not isinstance(phase_up, Iterable) or not len(phase_up) == num_prefix: phase_up = [phase_up]*num_prefix
 
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
@@ -812,8 +801,8 @@ class Detector:
         
         self.properties
         stream_timestamp = self.stream.timestamp
-        args = [[self, low, up, k, stream_timestamp, ccat_mp.check_max_workers(max_workers)] for low, up in zip(phase_low, phase_up)]
-        self.targ.transform([Detector.calc_phase_spline]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.targ.tones))   
+        args = [[self, low, up, k, stream_timestamp, ccat_mp.check_max_workers(max_workers), ex] for low, up in zip(phase_low, phase_up)]
+        self.targ.transform([Detector.calc_phase_spline]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))   
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.targ.get_data(col_name=([col_name[-1] for col_name in col_names] + [col_name[-2] for col_name in col_names]), include=include, exclude=exclude)
 
@@ -826,6 +815,7 @@ class Detector:
                    exclude: int | list[int] | None = None, 
                    recalc: bool = False, 
                    max_workers=1, 
+                   ex = None,
                    **kwargs) -> pl.DataFrame:
         '''
         Convert timestream phase data to frequency using target sweep phase vs. frequency interpolating spline
@@ -845,25 +835,30 @@ class Detector:
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
-        if isinstance(spline_col, str) or len(spline_col) == num_prefix: spline_col = [spline_col]*num_prefix
+        if isinstance(spline_col, str) or not len(spline_col) == num_prefix: spline_col = [spline_col]*num_prefix
 
         col_names, min_phases, max_phases = [[]]*num_prefix, [[]]*num_prefix, [[]]*num_prefix
         for i, (pre, spline) in enumerate(zip(prefix, spline_col)):
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
             spline_names = [f"{spline}{'_' if spline else ''}{name}" for name in col_name]
 
-            include_subset = self._check_properties(f'min_{spline_names[0]}', include=include, exclude=exclude, recalc=recalc)
+            include_subset = ccat_df.check_properties(self, f'min_{spline_names[0]}', include=include, exclude=exclude, recalc=recalc)
             if not len(include_subset) == 0:
                 phase_df = self.stream.get_data(spline_names[0], include=include_subset, strict=True)
                 min_df, max_df = phase_df.select([pl.all().min().name.map(lambda s: s.split('_')[-1])]), phase_df.select([pl.all().max().name.map(lambda s: s.split('_')[-1])])
-                self.add_data_to_properties(min_df, f'min_{spline_names[0]}'), self.add_data_to_properties(max_df, f'max_{spline_names[0]}')
+                ccat_df.add_data_to_properties(self, min_df, f'min_{spline_names[0]}'), ccat_df.add_data_to_properties(self, max_df, f'max_{spline_names[0]}')
             min_phase, max_phase = self.get_properties([f'min_{spline_names[0]}', f'max_{spline_names[0]}'], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
             min_phases[i], max_phases[i] = min_phase - phase_bounds, max_phase + phase_bounds
-        self.phase_spline(prefix=spline_col, phase_low = min_phases, phase_up = max_phases, k = k, include=include, exclude=exclude, recalc=recalc, max_workers=max_workers, **kwargs)
-
+        
+        self.phase_spline(prefix=spline_col, phase_low = min_phases, phase_up = max_phases, k = k, include=include, exclude=exclude, recalc=recalc, max_workers=1, ex=ex, **kwargs)
+        spline_dict = self.stream.spline_dict
         y_to_x_spline = [self.get_properties(col_name = f'{col}_phase_to_f_spline', include=include, exclude=exclude, strict=True).to_numpy().T[1] for col in spline_col]
         x_to_y_spline = [self.get_properties(col_name = f'f_to_{col}_phase_spline', include=include, exclude=exclude, strict=True).to_numpy().T[1] for col in spline_col]
-        args = [[self, y_to_x, x_to_y, ccat_mp.check_max_workers(max_workers)] for y_to_x, x_to_y in zip(y_to_x_spline, x_to_y_spline)]
+
+        args = [[[spline_dict[spline] for spline in y_to_x], 
+                 [spline_dict[spline] for spline in x_to_y], 
+                 ccat_mp.check_max_workers(max_workers), 
+                 ex] for y_to_x, x_to_y in zip(y_to_x_spline, x_to_y_spline)]
         self.stream.transform([Detector.calc_phase_to_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.stream.tones))
         self.stream.data = self.stream._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.stream.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
@@ -885,7 +880,7 @@ class Detector:
         num_prefix = len(prefix)
 
         if isinstance(f_0, str): f_0 = self.get_properties(f_0, include=include, exclude=exclude, strict=True).to_numpy().T[1]
-        if not isinstance(f_0, Iterable) or not len(f_0) == num_prefix: f_0 = [f_0]
+        if not isinstance(f_0, Iterable) or not len(f_0) == num_prefix: f_0 = [f_0]*num_prefix
 
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
@@ -895,54 +890,246 @@ class Detector:
         self.stream.transform([Detector.calc_frac_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)        
         return self.stream.get_data(col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names], include=include, exclude=exclude)
 
+    # High Level Analysis Methods
+    # ---------------------------
+
+    def mag_min(self, 
+                include: int | list[int] | None = None, 
+                exclude: int | list[int] | None = None, 
+                recalc: bool = False) -> list[pl.DataFrame]:
+        col_name = ['f', 'mag', 'min']
+        prop_names = [f'{col_name[-1]}_{col_name[1]}_{col_name[0]}', f'{col_name[-1]}_{col_name[1]}']
+
+        include_subset = ccat_df.check_properties(self, prop_names[0], include=include, exclude=exclude, recalc=recalc)
+        if not len(include_subset) == 0:
+            # Get detector magnitudes and frequencies and unpivot DataFrame from wide to long format
+            f_df = self.targ.get_data(col_name=col_name[0], strict=True, include=include_subset)
+            mag_df = self.targ.get_data(col_name=col_name[1], strict=True, include=include_subset)
+
+            mag_df = (mag_df.unpivot(variable_name='det',
+                                     value_name=col_name[1])
+                            .with_columns(pl.col('det').str.strip_prefix(f'{col_name[1]}_').cast(pl.Int32)))
+
+            f_df = (f_df.unpivot(variable_name='tmp',
+                                 value_name=col_name[0])
+                        .drop('tmp'))
+
+            mag_f_df = pl.concat([mag_df, f_df], how='horizontal')
+
+            # Get minimum magnitude values for each detector and corresponding sample numbers
+
+            min_df = (mag_f_df.filter((pl.col(col_name[1]) == pl.col(col_name[1]).min()).over('det'))
+                              .rename({col_name[0]: prop_names[0], col_name[1]: prop_names[1]}))
+            shared_cols = prop_names if prop_names[0] in self._properties_df.schema else []
+            self._properties_df = ccat_df.coalesce_join(self._properties_df, min_df, 'det', shared_cols) 
+        return self.get_properties(col_name = prop_names, include=include, exclude=exclude, strict=True)
+
+    def IQ_circle_center(self):
+        '''
+        Remove cable delay from IQ circle and center at the origin
+        '''
+        return
+
+    def IQ_max_dist(self,
+                    trim_window: int = 2,
+                    trim_savgol_window: int = 9,
+                    diff_savgol_window: int = 21,
+                    trim_savgol_k: int = 1,
+                    diff_savgol_k: int = 1,
+                    include=None,
+                    exclude=None,
+                    recalc=False, 
+                    max_workers=1,
+                    ex=None):
+        '''
+        Get the frequency corresponding to the max geometric distance between adjacent points in IQ space
+        '''
+        trim_savgol, diff_savgol = trim_savgol_window > 1, diff_savgol_window > 1
+        # Calculate the geometric distance between adjacent points in IQ space
+        self.cable_delay
+        self.targ.mag(include=include, exclude=exclude, recalc=recalc)
+
+        if trim_savgol: self.targ.savgol(col_name='mag', prefix='', window=trim_savgol_window, k=trim_savgol_k, deriv=0, max_workers=max_workers, ex=ex, include=include, exclude=exclude, recalc=recalc)
+        self.IQ_unwind(prefix='', data='targ', delay_col = 'network_cable_delay', include=include, exclude=exclude, recalc=recalc)
+        self.IQ_trim(prefix='unwind_rotate',  window=trim_window, use_fit=False, mag_prefix=f"{'savgol0' if trim_savgol else ''}", include=include, exclude=exclude, recalc=recalc)
+
+        if diff_savgol:
+            self.targ.savgol(col_name='I', prefix='tail_trim_unwind_rotate', window=diff_savgol_window, k=diff_savgol_k, deriv=1, include=include, exclude=exclude, recalc=recalc, max_workers=max_workers, ex=ex)
+            self.targ.savgol(col_name='Q', prefix='tail_trim_unwind_rotate', window=diff_savgol_window, k=diff_savgol_k, deriv=1, include=include, exclude=exclude, recalc=recalc, max_workers=max_workers, ex=ex)
+        else:
+            self.targ.diff(col_name='I', prefix='tail_trim_unwind_rotate', include=include, exclude=exclude, recalc=recalc)
+            self.targ.diff(col_name='Q', prefix='tail_trim_unwind_rotate', include=include, exclude=exclude, recalc=recalc)
+        self.targ.mag(prefix=f"{'savgol1' if diff_savgol else 'diff'}_tail_trim_unwind_rotate", include=include, exclude=exclude, recalc=recalc)
+
+        # Get the frequencies corresponding to the max distance in IQ space (same as frequency with steepest phase gradient)
+        include_subset = ccat_df.check_properties(self, 'max_IQ_dist_f', include=include, exclude=exclude, recalc=recalc)
+        if not len(include_subset) == 0:
+            diff_IQ = (self.targ.get_data(['sample', f"{'savgol1' if diff_savgol else 'diff'}_tail_trim_unwind_rotate_mag"], strict=True, include=include_subset)
+                                .rechunk()
+                                .lazy()
+                                .unpivot(index='sample', value_name='IQ', variable_name='temp')
+                                .drop('temp')
+                                .collect())
+            f = (self.targ.get_data(['f'], strict=True, include=include_subset)
+                          .lazy()
+                          .unpivot(value_name='f', variable_name='det')
+                          .with_columns((pl.col('det').str.strip_prefix('f_')).cast(pl.Int32))
+                          .collect())
+            full_df = pl.concat([f, diff_IQ], how='horizontal')
+            max_sample = (full_df.lazy()
+                                 .filter(~pl.col('IQ').is_nan())
+                                 .filter((pl.col('IQ') == pl.col('IQ').max()).over('det'))
+                                 .select('det', pl.col('sample').alias('max_sample'))
+                                 .group_by('det').agg(pl.col('max_sample').first())
+                                 .collect())
+
+            full_df = full_df.join(max_sample, on='det', how='left')
+            max_IQ = (full_df.lazy()
+                             .filter(pl.col('sample') == pl.col('max_sample'))
+                             .select('det', pl.col('sample').alias('max_IQ_dist_sample'), pl.col('f').alias('max_IQ_dist_f'), pl.col('IQ').alias('max_IQ_dist'))
+                             .collect())
+            adj_IQ = (full_df.lazy()
+                             .filter(pl.col('sample') == pl.col('max_sample') - 1)
+                             .select('det', pl.col('f').alias('max_IQ_dist_adj_f'))
+                             .collect())
+
+            max_IQ = max_IQ.join(adj_IQ, on='det', how='left')
+            
+            # Use tone frequencies for detectors where finding the max distance frequency failed
+            tone_freq_df = self.get_properties('tone_freqs', strict=True, include=include_subset)
+            max_IQ = (max_IQ.join(tone_freq_df, on='det', how='right', coalesce=True)
+                            .lazy()
+                            .with_columns(pl.when(pl.col('max_IQ_dist_f').is_null())
+                                            .then(pl.col('tone_freqs'))
+                                            .otherwise(pl.col('max_IQ_dist_f')).alias('max_IQ_dist_f'))
+                            .drop('tone_freqs')
+                            .collect())
+            shared_cols = ['max_IQ_dist_f', 'max_IQ_dist', 'max_IQ_dist_sample', 'max_IQ_dist_adj_f'] if 'max_IQ_dist_f' in self._properties_df.schema else []
+            self._properties_df = ccat_df.coalesce_join(self.properties, max_IQ, 'det', shared_cols)
+            self.targ._properties_df = ccat_df.coalesce_join(self.targ.properties, max_IQ, 'det', shared_cols)
+
+        max_IQ_f = self.get_properties('max_IQ_dist_f', include=include, exclude=exclude, strict=True)
+        return max_IQ_f
+    
+    def is_bifurcated(self,
+                      bifurcation_threshold=40,
+                      qifurcation_threshold=50,
+                      trim_window: int = 2,
+                      trim_savgol_window: int = 9,
+                      trim_savgol_k: int = 1,
+                      include=None,
+                      exclude=None,
+                      recalc=False,
+                      max_workers=1,
+                      ex=None):
+        '''
+        Determine if a detector is bifurcated or has a high quasiparticle nonlinearity using the angle of the maximally seperated points in IQ space
+        
+        
+        '''
+
+
+
+        # Get maximally distant points in IQ space
+        # ----------------------------------------
+        self.IQ_max_dist(diff_savgol_window=1,
+                         trim_window=trim_window, 
+                         trim_savgol_window=trim_savgol_window, 
+                         trim_savgol_k=trim_savgol_k,
+                         include=include,
+                         exclude=exclude,
+                         recalc=recalc,
+                         max_workers=max_workers,
+                         ex=ex) 
+
+        # Fit IQ circle to get radius
+        # ---------------------------
+        self.IQ_circle_fit(prefix='tail_trim_unwind_rotate',
+                           include=include,
+                           exclude=exclude,
+                           recalc=recalc,
+                           max_workers=max_workers,
+                           ex=ex)
+
+        # Get frequency corresponding to the |S_21| minimum
+        # -------------------------------------------------
+        self.mag_min(include=include, exclude=exclude, recalc=recalc)
+
+        include_subset = ccat_df.check_properties(self, 'bifurcated', include=include, exclude=exclude, recalc=recalc)
+        
+        added_cols = ['bifurcated', 'qifurcated', 'sin_max_IQ_angle', 'chord_length_ratio', 'max_IQ_angle_rad', 'max_IQ_angle_deg']
+        if not len(include_subset) == 0:
+            df = self.get_properties(['max_IQ_dist', 
+                                      'max_IQ_dist_f', 
+                                      'max_IQ_dist_adj_f', 
+                                      'circle_fit_tail_trim_unwind_rotate_R', 
+                                      'min_mag_f'], include=include_subset, strict=True)
+
+
+            bif_df = (df.lazy()
+                        .with_columns((0.5*(pl.col('max_IQ_dist')/pl.col('circle_fit_tail_trim_unwind_rotate_R'))).alias('sin_max_IQ_angle'),
+                                    (0.5*(4 - (pl.col('max_IQ_dist')/pl.col('circle_fit_tail_trim_unwind_rotate_R'))**2).sqrt()).alias('chord_length_ratio'))
+                        .with_columns((pl.col('sin_max_IQ_angle').arcsin()).alias('max_IQ_angle_rad'))
+                        .with_columns((180/np.pi*pl.col('max_IQ_angle_rad')).alias('max_IQ_angle_deg'))
+                        .with_columns(((pl.col('max_IQ_angle_deg') >= bifurcation_threshold) & (pl.col('max_IQ_dist_adj_f') < pl.col('min_mag_f'))).alias('bifurcated'),
+                                    ((pl.col('max_IQ_angle_deg') >= qifurcation_threshold) & (pl.col('max_IQ_dist_f') > pl.col('min_mag_f'))).alias('qifurcated'))
+                        .select(['det'] + added_cols)
+                        .collect())
+            shared_cols = added_cols if 'bifurcated' in self._properties_df.schema else []
+            self._properties_df = ccat_df.coalesce_join(self.properties, bif_df, 'det', shared_cols)
+
+        bif_df = self.get_properties(['bifurcated', 'qifurcated'], include=include, exclude=exclude, strict=True)
+        return bif_df
+         
     #==================#
     # Analysis Methods #
     #==================#
 
     @staticmethod
-    def calc_complex_fit(schema, *args, tones: list[int], recalc: bool = False, col_name = ['f', 'I', 'Q', 'complex_fit']):
+    def calc_complex_fit(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['f', 'I', 'Q', 'complex_fit']):
         ''' Fit using resonator_model_v3
         '''
 
         def _complex_fit(df):
-            struct = df.struct
+            data = ccat_mp.struct_batches(df, 3, batch_len, max_workers)
 
             results_dict = {}
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(resonator_model_v3.nonlinear_fit,
-                                                   struct.field(f_col).to_numpy(),
-                                                   struct.field(I_col).to_numpy(),
-                                                   struct.field(Q_col).to_numpy(),
-                                                   nonlinear=nonlinear[ind],
-                                                   asymm=asymm[ind],
-                                                   fix_cable=fix_cable[ind],
-                                                   fix_thetaQ=fix_thetaQ[ind]):  (tone, f_col, I_col, Q_col) for tone, ind, (f_col, I_col, Q_col) in zip(to_calc, calc_ind, batches)}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {executor.submit(ccat_mp.process_batches,
+                                                   resonator_model_v3.nonlinear_fit,
+                                                   data[i][0],
+                                                   data[i][1],
+                                                   data[i][2],
+                                                   nonlinear=nonlinear[inds],
+                                                   asymm=asymm[inds],
+                                                   fix_cable=fix_cable[inds],
+                                                   fix_thetaQ=fix_thetaQ[inds]):  (i, tones, cols) for i, (tones, inds, cols) in enumerate(zip(to_calc, calc_ind, batches))}
                 
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tone, f_col, I_col, Q_col = future_to_batch[future]
-                    try:
-                        result = future.result()
-                        best_fit = result.best_fit
-                        cable_fit = resonator_model_v3.fine_s21_model(struct.field(f_col).to_numpy(), result.params, cable=True)
-                        best_vals_dict = {f'{col_name[-1]}_{k}': float(v) for k, v in result.best_values.items()}
-                        if save_model_result: best_vals_dict[f'{col_name[-1]}_model_result'] = result
-                        self.targ._properties[f'det_{tone:04d}'] = best_vals_dict
-                    except Exception as e:
-                        rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, e)
-                        best_fit = np.zeros(df.len())
-                        cable_fit = np.zeros(df.len())
-                        self.targ._properties[f'det_{tone:04d}'] = {}
-                    results_dict[f'{col_name[-1]}_{I_col}'] = best_fit.real
-                    results_dict[f'{col_name[-1]}_{Q_col}'] = best_fit.imag
-                    results_dict[f'cable_{col_name[-1]}_{I_col}'] = cable_fit.real
-                    results_dict[f'cable_{col_name[-1]}_{Q_col}'] = cable_fit.imag
+                    i, tones, cols = future_to_batch[future]
+                    f_cols = data[i][0]
+                    fit_cols = future.result()
+                    for tone, f_col, (_, I_col, Q_col), fit_col in zip(tones, f_cols, cols, fit_cols):
+                        if isinstance(fit_col, Exception):
+                            rfsoc_io.send_msg('DEBUG', 'Fit failed for tone %s with exception: %s', tone, fit_col)
+                            best_fit, cable_fit = np.zeros(df.len()), np.zeros(df.len())
+                            self.targ._properties[f'det_{tone:0{padding}d}'] = {}
+                        else:
+                            best_fit = fit_col.best_fit
+                            cable_fit = resonator_model_v3.fine_s21_model(f_col, fit_col.params, cable=True)
+                            best_vals_dict = {f'{col_name[-1]}_{k}': float(v) for k, v in fit_col.best_values.items()}
+                            self.targ._properties[f'det_{tone:0{padding}d}'] = best_vals_dict
+                        
+                        results_dict[f'{col_name[-1]}_{I_col}'] = best_fit.real
+                        results_dict[f'{col_name[-1]}_{Q_col}'] = best_fit.imag
+                        results_dict[f'cable_{col_name[-1]}_{I_col}'] = cable_fit.real
+                        results_dict[f'cable_{col_name[-1]}_{Q_col}'] = cable_fit.imag
 
-            df = pl.DataFrame(dict(sorted(results_dict.items())))
-            return pl.Series(df.select(pl.struct(df.columns)))
+            return ccat_mp.package_results(results_dict)
             
         if len(args) == 7:
-            self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, save_model_result = args
-            if tones is not None: self, max_workers, save_model_result = self[0], max_workers[0], save_model_result[0]
+            self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, ex = np.array(args)
+            if tones is not None: self, max_workers, ex = self[0], int(max_workers[0]), ex[0]
         else:
             error = 'nonlinear, asymm, fix_cable, and fix_thetaQ are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
@@ -950,67 +1137,66 @@ class Detector:
         
         return_col = [f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}', f'cable_{col_name[-1]}_{col_name[1]}', f'cable_{col_name[-1]}_{col_name[2]}']
         return_type = [pl.Float64, pl.Float64, pl.Float64, pl.Float64]
-        expr, to_calc, calc_ind, calc_col, batches = ccat_mp.batch_calc(_complex_fit, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc)
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_complex_fit, tones, col_name, schema, return_col=return_col, return_type=return_type, padding=padding, max_workers=max_workers, recalc=recalc)
         return expr
 
     @staticmethod
-    def calc_phase_fit(schema, *args, tones: list[int], recalc: bool = False, col_name = ['f', 'I', 'Q', 'phase', 'phase_fit']):
+    def calc_phase_fit(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['f', 'I', 'Q', 'phase', 'phase_fit']):
         def _phase_fit(df):
-            struct = df.struct
+            data = ccat_mp.struct_batches(df, 4, batch_len, max_workers)
 
             results_dict = {}
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(ccat_fit.phase_fit,
-                                                   struct.field(f_col).to_numpy(),
-                                                   struct.field(phase_col).to_numpy(),
-                                                   I = struct.field(I_col).to_numpy(),
-                                                   Q = struct.field(Q_col).to_numpy(),
-                                                   nonlinear = nonlinear[ind],
-                                                   method=method[ind],
-                                                   params = params[ind],
-                                                   R = radius[ind],
-                                                   window=window[ind]):  (tone, f_col, phase_col) for tone, ind, (f_col, I_col, Q_col, phase_col) in zip(to_calc, calc_ind, batches)}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {executor.submit(ccat_mp.process_batches,
+                                                   ccat_fit.phase_fit,
+                                                   data[i][0],
+                                                   data[i][3],
+                                                   I = data[i][1],
+                                                   Q = data[i][2],
+                                                   nonlinear = nonlinear[inds],
+                                                   method=method[inds],
+                                                   params = params[inds],
+                                                   R = radius[inds],
+                                                   window=window[inds]):  (tones, cols) for i, (tones, inds, cols) in enumerate(zip(to_calc, calc_ind, batches))}
                 
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tone, f_col, phase_col = future_to_batch[future]
-                    try:
-                        result = future.result()
-                        best_fit = np.full(df.len(), np.nan)
-                        mask = result.mask
-                        best_fit[mask] = result.best_fit
-                        best_vals_dict = {f'{col_name[-1]}_{prefix}_{k}': float(v) for k, v in result.best_values.items()}
-                        init_vals_dict = {f'{col_name[-1]}_{prefix}_init_{k}': float(v) for k, v in result.init_values.items()}
-                        if save_model_result: 
-                            best_vals_dict[f'{col_name[-1]}_{prefix}_model_result'] = result
-                            best_vals_dict[f'{col_name[-1]}_{prefix}_params'] = result.params
-                        self.targ._properties[f'det_{tone:04d}'] = best_vals_dict | init_vals_dict
-                    except Exception as e:
-                        print(e)
-                        rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, e)
-                        best_fit = np.full(df.len(), np.nan)
-                        self.targ._properties[f'det_{tone:04d}'] = {}
-                    results_dict[f'{col_name[-1]}_{phase_col}'] = best_fit
-
-            df = pl.DataFrame(dict(sorted(results_dict.items())))
-            return pl.Series(df.select(pl.struct(df.columns)))
+                    tones, cols = future_to_batch[future]
+                    fit_cols = future.result()
+                    for tone, (_, _, _, phase_col), fit_col in zip(tones, cols, fit_cols):
+                        if isinstance(fit_col, Exception):
+                            rfsoc_io.send_msg('DEBUG', 'Fit failed for tone %s with exception: %s', tone, fit_col)
+                            best_fit = np.full(df.len(), np.nan)
+                            self.targ._properties[f'det_{tone:0{padding}d}'] = {}
+                        else:
+                            best_fit = np.full(df.len(), np.nan)
+                            mask = fit_col.mask
+                            best_fit[mask] = fit_col.best_fit
+                            best_vals_dict = {f'{col_name[-1]}_{prefix}_{k}': float(v) for k, v in fit_col.best_values.items()}
+                            init_vals_dict = {f'{col_name[-1]}_{prefix}_init_{k}': float(v) for k, v in fit_col.init_values.items()}
+                            best_vals_dict[f'{col_name[-1]}_{prefix}_params'] = fit_col.params
+                            self.targ._properties[f'det_{tone:0{padding}d}'] = best_vals_dict | init_vals_dict
+                        results_dict[f'{col_name[-1]}_{phase_col}'] = best_fit
+            return ccat_mp.package_results(results_dict)
             
         if len(args) == 9:
-            self, prefix, radius, nonlinear, method, params, window, max_workers, save_model_result = args
-            if tones is not None: self, prefix, max_workers, save_model_result = self[0], prefix[0], max_workers[0], save_model_result[0]
+            self, prefix, radius, nonlinear, method, params_list, window, max_workers, ex = args
+            params = np.empty(len(params_list), dtype=object)
+            for i in range(len(params_list)): params[i] = params_list[i]
+            radius, nonlinear, method, window = np.array(radius), np.array(nonlinear), np.array(method), np.array(window)
+            if tones is not None: self, prefix, max_workers, ex = self[0], prefix[0], int(max_workers[0]), ex[0]
         else:
-            error = 'nonlinear, prefix, params, window, max_workers, and save_model_result are required arguments.'
+            error = 'nonlinear, prefix, params, window, and max_workers are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)
         
-        return_col = [f'{col_name[-1]}_{col_name[-2]}']
-        return_type = [pl.Float64]
-        expr, to_calc, calc_ind, calc_col, batches = ccat_mp.batch_calc(_phase_fit, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc)
+        return_col, return_type = [f'{col_name[-1]}_{col_name[-2]}'], [pl.Float64]
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_phase_fit, tones, col_name, schema, padding=padding, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
         return expr 
 
     @staticmethod
-    def calc_IQ_circle_fit(schema, *args, tones: list[int], recalc: bool = False, col_name = ['I', 'Q', 'circle_fit']):
+    def calc_IQ_circle_fit(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'circle_fit']):
         def _circle_fit(df):
-            struct = df.struct
+            data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
 
             angles = np.linspace(0, 2*np.pi, df.len())
             sin = np.sin(angles)
@@ -1018,55 +1204,49 @@ class Detector:
 
             property_keys = ['center_I', 'center_Q', 'R', 'A', 'D', 'theta', 'optimality', 'nfev', 'njev']
             results_dict = {}
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(ccat_fit.circle_fit,
-                                                   struct.field(I_col).to_numpy(),
-                                                   struct.field(Q_col).to_numpy(),
-                                                   full_output=True,
-                                                   bounds=bounds[ind],
-                                                   loss=loss[ind],
-                                                   f_scale=f_scale[ind],
-                                                   method=method[ind]):  (tone, I_col, Q_col) for tone, ind, (I_col, Q_col) in zip(to_calc, calc_ind, batches)}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {executor.submit(ccat_mp.process_batches,
+                                                   ccat_fit.circle_fit,
+                                                   data[i][0],
+                                                   data[i][1],
+                                                   full_output=[True]*len(tones),
+                                                   bounds=bounds[inds],
+                                                   loss=loss[inds],
+                                                   f_scale=f_scale[inds],
+                                                   method=method[inds]):  (tones, cols) for i, (tones, inds, cols) in enumerate(zip(to_calc, calc_ind, batches))}
                 
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tone, I_col, Q_col = future_to_batch[future]
-                    try:
-                        I_c, Q_c, R, result = future.result()
-                        if not result.success: 
-                            raise RuntimeError(f'Fit failed with exit code {result.status}')
-                        elif result.optimality < 1:
-                            raise RuntimeError(f'Fit converged with low optimality {result.optimality}.')
-                    
-                        fit_I, fit_Q = R*cos + I_c, R*sin + Q_c
-                        
-                        A, D, theta = result.x
-                        property_vals = [I_c, Q_c, R, A, D, theta, result.optimality, result.nfev, result.njev]
-                        self.targ._properties[f'det_{tone:04d}'] = {f'{col_name[-1]}_{prefix}_{k}': v for k, v in zip(property_keys, property_vals)}
-                    except Exception as e:
-                        rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, e)
-                        fit_I, fit_Q = np.zeros(df.len()), np.zeros(df.len())
-                        self.targ._properties[f'det_{tone:04d}'] = {}
-                    results_dict[f'{col_name[-1]}_{I_col}'] = fit_I
-                    results_dict[f'{col_name[-1]}_{Q_col}'] = fit_Q
-
-            df = pl.DataFrame(dict(sorted(results_dict.items())))
-            return pl.Series(df.select(pl.struct(df.columns)))
+                    tones, cols = future_to_batch[future]
+                    fit_cols = future.result()
+                    for tone, (I_col, Q_col), fit_col in zip(tones, cols, fit_cols):
+                        if isinstance(fit_col, Exception):
+                            rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, fit_col)
+                            fit_I, fit_Q = np.full(df.len(), np.nan), np.full(df.len(), np.nan)
+                            self.targ._properties[f'det_{tone:0{padding}d}'] = {}
+                        else:
+                            I_c, Q_c, R, result = fit_col
+                            fit_I, fit_Q = R*cos + I_c, R*sin + Q_c
+                            A, D, theta = result.x
+                            property_vals = [I_c, Q_c, R, A, D, theta, result.optimality, result.nfev, result.njev]
+                            self.targ._properties[f'det_{tone:0{padding}d}'] = {f'{col_name[-1]}_{prefix}_{k}': v for k, v in zip(property_keys, property_vals)}
+                        results_dict[f'{col_name[-1]}_{I_col}'] = fit_I
+                        results_dict[f'{col_name[-1]}_{Q_col}'] = fit_Q
+            return ccat_mp.package_results(results_dict)
             
-        if len(args) == 7:
-            self, prefix, bounds, loss, f_scale, method, max_workers = args
-            if tones is not None: self, prefix, max_workers = self[0], prefix[0], max_workers[0]
+        if len(args) == 8:
+            self, prefix, bounds, loss, f_scale, method, max_workers, ex = np.array(args)
+            if tones is not None: self, prefix, max_workers, ex = self[0], prefix[0], int(max_workers[0]), ex[0]
         else:
             error = 'self, prefix, bounds, loss, f_scale, method, and max_workers are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error)
         
-        return_col = [f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}']
-        return_type = [pl.Float64, pl.Float64]
-        expr, to_calc, calc_ind, calc_col, batches = ccat_mp.batch_calc(_circle_fit, tones, col_name, schema, return_col = return_col, return_type=return_type, recalc=recalc)
+        return_col, return_type = [f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}'], [pl.Float64, pl.Float64]
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_circle_fit, tones, col_name, schema, padding=padding, return_col = return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
         return expr
 
     @staticmethod
-    def calc_noise_shift(schema, *args, tones: list[int], recalc: bool = False, col_name = ['I', 'Q', 'noise']):
+    def calc_noise_shift(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'noise']):
         if tones is not None:
             tone = tones[0]
         if len(args) == 5:
@@ -1077,9 +1257,9 @@ class Detector:
         else:
             rfsoc_io.send_msg('ERROR', 'I_shift, Q_shift, tone_list, and noise_tone are required arguments.')
 
-        col_name = [f'{name}_{noise_tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+        col_name = [f'{name}_{noise_tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
         I_col_noise, Q_col_noise, shift_col = col_name
-        I_col_tone, Q_col_tone = f"{I_col_noise.split('_')[0]}_{tone:04d}", f"{Q_col_noise.split('_')[0]}_{tone:04d}"
+        I_col_tone, Q_col_tone = f"{I_col_noise.split('_')[0]}_{tone:0{padding}d}", f"{Q_col_noise.split('_')[0]}_{tone:0{padding}d}"
         
         if recalc or not (f'{shift_col}_{I_col_tone}' in schema):
             return [(pl.col(I_col_noise) - I_shift).alias(f'{shift_col}_{I_col_tone}'),
@@ -1088,54 +1268,43 @@ class Detector:
             return pl.col(f'{shift_col}_{I_col_tone}')
 
     @staticmethod
-    def calc_phase_spline(schema, *args, tones: list[int], recalc: bool = False, col_name = ['f', 'phase', 'to_f', 'to_phase']):
+    def calc_phase_spline(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['f', 'phase', 'to_f', 'to_phase']):
         def _phase_spline(df):
-            struct = df.struct
+            data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
 
             results_dict = {}
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(ccat_fit.y_to_x_spline,
-                                                   struct.field(f_col).to_numpy(),
-                                                   struct.field(phase_col).to_numpy(),
-                                                   k=k[ind],
-                                                   y_low = phase_low[ind],
-                                                   y_up = phase_up[ind]):  (tone, f_col, phase_col) for tone, ind, (f_col, phase_col) in zip(to_calc, calc_ind, batches)}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {executor.submit(ccat_mp.process_batches,
+                                                   ccat_fit.y_to_x_spline,
+                                                   data[i][0],
+                                                   data[i][1],
+                                                   k = k[inds],
+                                                   y_low = phase_low[inds],
+                                                   y_up = phase_up[inds]):  (i, tones) for i, (tones, inds, _) in enumerate(zip(to_calc, calc_ind, batches))}
                 
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tone, f_col, phase_col = future_to_batch[future]
-                    try:
-                        y_to_x, x_to_y = future.result()
-                    
-                        if y_to_x is not None:
-                            y_to_x.extrapolate=False
-                            to_phase = np.zeros(df.len())
-                            to_f = y_to_x(struct.field(phase_col).to_numpy())
-                        elif x_to_y is not None:
-                            x_to_y.extrapolate=False
-                            to_phase = x_to_y(struct.field(f_col).to_numpy())
-                            to_f = np.zeros(df.len())
-                        else:
-                            raise RuntimeError('No spline was calculated.')
-                        
-                        property_vals = [y_to_x, x_to_y]
-                        property_dict = {k: v for k, v in zip(interp_names, property_vals)}
-                    except Exception as e:
-                        rfsoc_io.send_msg('WARNING', 'Spline calculation for tone %s failed with exception: %s', tone, e)
-                        property_dict = {}
-                        to_phase, to_f = np.zeros(df.len()), np.zeros(df.len())
-                    self.stream._properties[f'det_{tone:04d}'] = property_dict
-                    results_dict[f'{interp_names[0]}_{stream_timestamp}_{tone:04d}'] = to_f
-                    results_dict[f'{interp_names[1]}_{stream_timestamp}_{tone:04d}'] = to_phase
-            
-            df = pl.DataFrame(dict(sorted(results_dict.items())))
-            return pl.Series(df.select(pl.struct(df.columns)))
+                    i, tones = future_to_batch[future]
+                    f_cols, phase_cols = data[i][0], data[i][1]
+                    spline_cols = future.result()
+                    for tone, f_col, phase_col, spline_col in zip(tones, f_cols, phase_cols, spline_cols):
+                        property_dict = {name: 'None' for name in interp_names}    
+                        spline_data = 2*[np.full(df.len(), np.nan)]
+                        if isinstance(spline_col, Exception):
+                            rfsoc_io.send_msg('WARNING', 'Spline calculation for tone %s failed with exception: %s', tone, spline_col)
+                        else:                        
+                            for i, (name, spline, data) in enumerate(zip(interp_names, spline_col, [phase_col, f_col])):
+                                if spline is not None:
+                                    spline.extrapolate = False
+                                    spline_data[i] = spline(data)
+                                    self.stream.spline_dict[str(spline)] = spline
+                                    property_dict[name] = str(spline)
+                        self.stream._properties[f'det_{tone:0{padding}d}'] = property_dict
+                        for name, data in zip(interp_names, spline_data): results_dict[f'{name}_{stream_timestamp}_{tone:0{padding}d}'] = data
+            return ccat_mp.package_results(results_dict)
 
-        if len(args) == 6:
-            self, phase_low, phase_up, k, stream_timestamp, max_workers = args
-            if tones is not None: self, stream_timestamp, max_workers = self[0], stream_timestamp[0], max_workers[0]
-
-            if isinstance(phase_low, float): phase_low = len(tones)*[phase_low]
-            if isinstance(phase_up, float): phase_up = len(tones)*[phase_up]
+        if len(args) == 7:
+            self, phase_low, phase_up, k, stream_timestamp, max_workers, ex = np.array(args)
+            if tones is not None: self, stream_timestamp, max_workers, ex = self[0], stream_timestamp[0], int(max_workers[0]), ex[0]
         else:
             error = 'self, phase_low, phase_up, k, max_workers are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
@@ -1143,55 +1312,53 @@ class Detector:
 
         data_col_name = [col_name[0], col_name[1], col_name[-1]]
         interp_names = [f'{col_name[1]}_{col_name[-2]}', f'{col_name[0]}_{col_name[-1]}']
-        calc_col = [f'{interp_names[0]}_{tone:04d}' for tone in tones]
+        calc_col = [f'{interp_names[0]}_{stream_timestamp}_{tone:0{padding}d}' for tone in tones]
 
         return_col = [f'{interp_names[0]}', f'{interp_names[1]}']
         return_type = [pl.Float64, pl.Float64]
-        expr, to_calc, calc_ind, calc_col, batches = ccat_mp.batch_calc(_phase_spline, tones, data_col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc, calc_col = calc_col)
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_phase_spline, tones, data_col_name, schema, padding=padding, calc_col = calc_col, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
         return expr
 
     @staticmethod
-    def calc_phase_to_f(schema, *args, tones: list[int], recalc: bool = False, col_name = ['phase', 'f']):
+    def calc_phase_to_f(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['phase', 'f']):
         def _phase_to_f(df):
-            struct = df.struct
+            data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
 
             results_dict = {}
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(ccat_fit.y_to_x_interp,
-                                                   struct.field(phase_col[0]).to_numpy(),
-                                                   y_to_x_spline = y_to_x_spline[ind],
-                                                   x_to_y_spline = x_to_y_spline[ind]): tone for tone, ind, (phase_col) in zip(to_calc, calc_ind, batches)}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {executor.submit(ccat_mp.process_batches,
+                                                   ccat_fit.y_to_x_interp,
+                                                   data[i][0],
+                                                   y_to_x_spline = y_to_x_spline[inds],
+                                                   x_to_y_spline = x_to_y_spline[inds]): tones for i, (tones, inds, _) in enumerate(zip(to_calc, calc_ind, batches))}
                 
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tone = future_to_batch[future]
-                    try:
-                        f = future.result()
-                    except Exception as e:
-                        rfsoc_io.send_msg('WARNING', 'Interpolation for tone %s failed with exception: %s', tone, e)
-                        f = np.zeros(df.len())
-                    results_dict[f'{col_name[-1]}_{tone:04d}'] = f
-
-            df = pl.DataFrame(dict(sorted(results_dict.items())))
-            return pl.Series(df.select(pl.struct(df.columns)))
+                    tones = future_to_batch[future]
+                    f_cols = future.result()
+                    for tone, f_col in zip(tones, f_cols):
+                        if isinstance(f_col, Exception):
+                            rfsoc_io.send_msg('WARNING', 'Interpolation for tone %s failed with exception: %s', tone, f_col)
+                            f_col = np.full(df.len(), np.nan)
+                        results_dict[f'{col_name[-1]}_{tone:0{padding}d}'] = f_col
+            return ccat_mp.package_results(results_dict)
         
         if len(args) == 4:
-            self, y_to_x_spline, x_to_y_spline, max_workers = args
-            if tones is not None: self, max_workers = self[0], max_workers[0]
+            y_to_x_spline, x_to_y_spline, max_workers, ex = np.array(args)
+            if tones is not None: max_workers, ex = int(max_workers[0]), ex[0]
         else:
             error = 'self, spline_col, and max_workers are required arguments.'
             rfsoc_io.send_msg('ERROR', error)
             raise ValueError(error) 
-
-        calc_col = [f'{col_name[-1]}_{tone:04d}' for tone in tones]
+        calc_col = [f'{col_name[-1]}_{tone:0{padding}d}' for tone in tones]
         return_col, return_type = [f'{col_name[-1]}'], [pl.Float64]
-        expr, to_calc, calc_ind, calc_col, batches = ccat_mp.batch_calc(_phase_to_f, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc, calc_col = calc_col)
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_phase_to_f, tones, col_name, schema, padding=padding, calc_col = calc_col, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
         return expr
     
     @staticmethod
-    def calc_frac_f(schema, *args, tones: list[int], recalc: bool = False, col_name = ['f', 'frac']):
+    def calc_frac_f(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['f', 'frac']):
         if tones is not None:
             tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
 
         f_col, frac_f_col = col_name
 
@@ -1238,15 +1405,38 @@ class Detector:
             counts, edges = np.pad(np.array(counts, dtype=float), (0, int(num_tones - len(counts))), constant_values=None), np.pad(np.array(edges, dtype=float), (0, int(num_tones - len(edges))), constant_values=None)
 
             self.properties = properties.with_columns([pl.Series(name, value) for name, value in zip(hist_col_name, [counts, edges])])
-        else:
-            counts, edges = properties.select(hist_col_name).to_numpy().T
-        return counts, edges
+        return self.properties.select(hist_col_name)
 
     #==================#
     # Plotting Methods #
     #==================#
 
-    def properties_histogram_plot(self, col_name, plot_median=True, label='',  **kwargs):
+    @staticmethod
+    def _plot_histogram(df, plot_opts, *args, **kwargs):
+        dynamic = kwargs['dynamic'] if 'dynamic' in kwargs else True
+        by, plot_median = args
+
+        if by is None:
+            by = ['tmp']
+            df = df.with_columns(pl.lit(True).alias('tmp'))
+
+        hist_dict = {}          
+        for *vals, counts, edges, median in df.group_by(by).agg('counts', 'edges', 'median').iter_rows():
+            hist = hv.Histogram((edges, counts), label=','.join([f'{name}={value}' if not name == 'tmp' else '' for name, value in zip(by, vals)])).relabel(group='Detector')
+            if plot_median:
+                median = median[0]
+                vline = hv.VLine(median, label='Median').relabel(group='Detector')
+                spike = hv.Curve(([median, median], [0, 1]), label=f'Median: {median:0.2e}').relabel(group='Detector')
+                hist = hist*spike*vline
+            hist_dict[tuple(vals)] = hist
+        
+        hist = hv.HoloMap(hist_dict, kdims=by)
+        hist.opts(*plot_opts)
+
+        if dynamic: hist = hv.util.Dynamic(hist)
+        return hist
+
+    def properties_histogram_plot(self, col_name, plot_median=None, xlabel = '' , title='', save_fig: bool | None = None, overwrite: bool | None = None, save_name: str = None, return_fig=True, return_df=False, df = None, by=None, **kwargs):
         ''' Plot histogram of a detector property
 
         Args:
@@ -1256,67 +1446,56 @@ class Detector:
             return (hv.Histogram | hv.Overlay): Holoviews histogram figure
         '''
 
-        counts, edges = self.properties_histogram(col_name, **kwargs)
-        hist = hv.Histogram((edges, counts), label=label)
+        if df is None: 
+            df = self.properties_histogram(col_name, **kwargs)
+            df = (df.rename({col: name for col, name in zip(df.columns, ['counts', 'edges'])})
+                    .with_columns(pl.lit(self.properties[col_name].median()).alias('median')))
         
-        if plot_median:
-            median = self.properties[col_name].median()
-            vline, spike = hv.VLine(median), hv.Curve(([median, median], [0, 1]), label=f'Median: {median:0.2e}')
-            hist = hist*spike*vline
-            hist.opts(opts.Curve(color=hv.Cycle(), linewidth=3, linestyle='--'),
-                      opts.VLine(color=hv.Cycle(), linewidth=3, linestyle='--'))
+        if not return_fig: return df, None
+
+        if plot_median is None: plot_median = self.viz_cfg['static_plot']['histogram']['plot_median']
+        if isinstance(by, str): by = [by]
+        args = [by, plot_median]
         
         cfg = self.targ.drone_cfg['det_config']
-        title = rf"${cfg['detector_type']}\ {cfg['network']}$: {len(counts)} Detectors"
-        hist.opts(opts.Histogram(xlabel=col_name,
-                                 ylabel='Count',
-                                 title=title,
-                                 aspect=self.viz_cfg['plot']['width']/self.viz_cfg['plot']['height'],
-                                 fig_size=250,
-                                 show_grid=True,
-                                 show_legend=True))
-        return hist
+        title = title if title else rf"${cfg['detector_type']}\ {cfg['network']}$"
+
+        cmap = kwargs['cmap'] if 'cmap' in kwargs else self.viz_cfg['static_plot']['histogram']['cmap']
+        linewidth = kwargs['linewidth'] if 'linewidth' in kwargs else self.viz_cfg['static_plot']['histogram']['linewidth']
+        linestyle = kwargs['linestyle'] if 'linestyle' in kwargs else self.viz_cfg['static_plot']['histogram']['linestyle']
+
+        plot_opts = (opts.Histogram(xlabel=xlabel if xlabel else col_name,
+                                    ylabel='Count',
+                                    title=title,
+                                    aspect=kwargs['aspect'] if 'aspect' in kwargs else self.viz_cfg['static_plot']['histogram']['aspect'],
+                                    fig_size=kwargs['fig_size'] if 'aspect' in kwargs else self.viz_cfg['static_plot']['histogram']['fig_size'],
+                                    #facecolor=hv.Cycle(cmap),
+                                    show_grid=True,
+                                    show_legend=True), 
+                    opts.Curve(#color=hv.Cycle(cmap), 
+                               linewidth=linewidth, 
+                               linestyle=linestyle),
+                    opts.VLine(#color=hv.Cycle(cmap), 
+                               linewidth=linewidth, 
+                               linestyle=linestyle))
+        
+        # Create plot for immediate visualization
+        # ---------------------------------------
+        plot = Detector._plot_histogram(df, plot_opts, *args, **kwargs)
+
+        # Save plot in background
+        # -----------------------
+        if save_name is None: save_name = f'hist_{col_name}'
+        viz_utils.save_fig(self, Detector._plot_histogram, df, plot_opts, *args, save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
+
+        if return_df:
+            return plot, df
+        else:
+            return plot
 
     #================#
     # Helper Methods #
     #================#
-    
-    def add_data_to_properties(self, df, col_name) -> pl.DataFrame:
-        '''
-        Add a quantity calculated with a data object's ``data`` DataFrame to the ``properties`` DataFrame
-        
-        Note:
-            - The ``df`` DataFrame does not necessarily need to derive from a data object's ``data`` DataFrame, but the structure of this method is designed specifically for that use case
-
-        Example:
-            -
-        
-        Args:
-            df (pl.DataFrame): Polars DataFrame with the data to be added to the ``properties`` DataFrame. The DataFrame must be in wide format with the column names being tone numbers (e.g., '0000', '0001', etc.)
-            col_name (str): Name of column to add to ``properties`` DataFrame 
-        '''
-
-        df = df.unpivot(variable_name='det', value_name=col_name).with_columns(pl.col('det').cast(int)).unique()
-        shared_cols = col_name if col_name in self.properties.schema else []
-        self._properties_df = ccat_df.coalesce_join(self._properties_df, df, 'det', shared_cols)
-        return self._properties_df
-
-    def _check_properties(self, col_name: str, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> list[int]:
-        ''' Check which subset of detectors do not have a value for the specified column
-
-        Args:
-            col_name (str): Name of data column
-            include ():
-            exclude ():
-            recalc (bool):
-        Returns:
-            return (list[int]): List of tones without a value for the specified column
-        '''
-
-        property_df = self.get_properties(col_name, include=include, exclude=exclude, strict=True)
-        if not recalc and not property_df.width == 1: property_df = property_df.filter(pl.col(col_name).is_null())
-        tones = property_df['det'].to_numpy().T
-        return tones
 
     def _get_data_obj(self, data: str):
         '''
@@ -1332,7 +1511,7 @@ class Detector:
             data_types.append('targ')
         if data == 'timestream' or data == 'both':
             data_objs.append(self.stream)
-            data_types = 'stream'
+            data_types.append('stream')
         return data_objs, data_types
     
     @staticmethod
@@ -1354,6 +1533,50 @@ class Detector:
             try:
                 data = data_class(com_to = com_to, analysis_cfg = analysis_cfg, tones = dets, noise_tones = noise_tones, timestamp = timestamp, data_path = data_path, **kwargs)
             except Exception as e:
+                print(e) # Print since logger is not loaded yet
                 rfsoc_io.send_msg('ERROR', 'Failed to load %s with exception: %s.', data_class.__name__, e)
                 data = None
         return data
+
+    def join(self, other, in_place=False):
+        def _join_consts(left_const: Any | list[Any], right_const: Any | list[Any]) -> list[Any]:
+            if not isinstance(left_const, list): left_const = [left_const]
+            if not isinstance(right_const, list): right_const = [right_const]
+            return left_const + right_const
+
+        if not isinstance(other, Detector):
+            error = f'Cannot join with object of type {type(other)}. Must be of type Detector.'
+            rfsoc_io.send_msg('ERROR', error)
+            raise ValueError(error)
+
+        # Create a copy of the Detector object
+        new_data = self if in_place else copy.deepcopy(self) 
+        new_data._cable_delay = _join_consts(self.cable_delay, other.cable_delay)
+
+        # Join Target, Timestream, and VNA objects
+        # ----------------------------------------
+        new_data.targ = self.targ.join(other.targ, in_place=in_place)
+        new_data.vna = _join_consts(self.vna, other.vna)
+
+        left_stream, right_stream = self.stream, other.stream
+
+        if not (left_stream is None or right_stream is None):
+            new_data.stream = self.stream.join(other.stream, in_place=in_place)
+        elif bool(left_stream is None) ^ bool(right_stream is None):
+            error = f'Cannot join Detector objects where one has a Timestream and the other does not. Either both or neither Detector objects must have a Timestream.'
+            rfsoc_io.send_msg('ERROR', error)
+            raise ValueError(error)
+        
+        # Join properties
+        # ---------------
+        left_prop, right_prop = self.properties, other.properties
+        new_data._properties_df = pl.concat([left_prop, right_prop], how='diagonal').with_columns(pl.Series('det', new_data.targ.tones))
+
+        return new_data
+
+    # ============= #
+    # Magic Methods #
+    # ============= #
+
+    def __str__(self):
+        return self.save_dir.stem

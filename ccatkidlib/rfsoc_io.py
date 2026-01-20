@@ -223,7 +223,7 @@ def edit_config(cfg, key, value, append = False):
 #===================#
 
 #@function_timer
-def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = None):
+def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = None, ccatkidlib_file: bool = False):
     '''
     Fetch the most recent file in a directory with the desired file identifier.
 
@@ -244,7 +244,9 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = No
         files = []
         for file_id in file_identifier:
             files.extend(path.glob(file_id))
-        files = sorted(files, key = get_creation_time, reverse = True)
+        
+        get_time = get_timestamp if ccatkidlib_file else get_creation_time
+        files = sorted(files, key = get_time, reverse = True)
 
         # Find file with time closest to time_ref using a binary search
         min_ind, max_ind = 0, len(files) - 1
@@ -253,7 +255,7 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = No
             num_its += 1
             curr_ind = min_ind + (max_ind - min_ind)//2
 
-            shifted_time = time_ref - get_creation_time(files[curr_ind])
+            shifted_time = time_ref - get_time(files[curr_ind])
             if shifted_time < 0: # If time difference is negative, then file is too new
                 min_ind = curr_ind + 1
             elif shifted_time > 0 and not (max_ind == min_ind): # If time difference is positive, then file is a candidate but there could be more recent files
@@ -270,6 +272,31 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = No
     except Exception as e:
         send_msg('DEBUG', f"Failed to fetch most recent file in '{path}' with identifier '{file_identifier}' with Exception:\n{e}")
         return Path("invalid/path")
+
+def get_timestamp(path: str) -> int:
+    '''Extract the timestamp from a ccatkidlib file name.
+
+    Args:
+        path (str | pathlib.PosixPath): Path of the file
+    Returns:
+        int: Timestamp of the file. -1 if no valid timestamp is found
+    '''
+
+    try: # Check that the passed path is a string or Path object
+        path = Path(path) # Cast to Path object
+        file = path.stem  # Get the file stem (without extension) 
+
+        parts = file.split('_') # Split file into parts
+        for i in [-1, -2, 0]: # Timestamp should only be at the 0, -1, or -2 index of the file part list
+            try:
+                tstamp = int(parts[i]) # Try casting part of file to int
+                if tstamp > 1.7e9: return tstamp # Check that integer is a valid timestamp
+            except:
+                pass
+        raise ValueError(f'The file {file} has no valid timestamp.') # Raise ValueError if timestamp could not be determined
+    except Exception as e: # If exception is thrown, return -1 to represent invalid path
+        send_msg('ERROR', 'Failed to determine timestamp of file %s with Exception %s', path, e)
+        return -1
 
 def get_creation_time(file_path):
     '''
@@ -370,12 +397,13 @@ def setup_logging(log_path, file_level, terminal_level, name = __name__):
         # Convert passed name to lowercase 
         method_name = name.lower()
 
-        logging.addLevelName(num, name) # Add new logging level to logger
-        setattr(logging, name, num)     # Add new attribute to the logging class corresponding to custom logging level
+        if not hasattr(logging, name):
+            logging.addLevelName(num, name) # Add new logging level to logger
+            setattr(logging, name, num)     # Add new attribute to the logging class corresponding to custom logging level
 
-        # Add new methods to relevant loggging classes
-        setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num)) 
-        setattr(logging, method_name, partial(logging.log, num))
+            # Add new methods to relevant loggging classes
+            setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num)) 
+            setattr(logging, method_name, partial(logging.log, num))
 
     # Get logger
     logger = logging.getLogger(name)
@@ -592,16 +620,17 @@ def save_array_board(ip, ssh_key, path, saved_array, tmp_dir):
     return result
 
 #@function_timer
-def get_most_recent_file_board(c, dir, file_identifier = "*", time_past = 60*60):
+def get_most_recent_file_board(c: Connection, dir: str, file_identifier: str = "*", time_past: int = 60*60):
     '''
-    Get most recent file in directory on RFSoC board.
+    Get most recent file in specified directory on RFSoC board.
 
-    Parameters:
-        c        (Connection) : Fabric Connection object of RFSoC board
-        dir             (str) : Directory in which the file is located
-        file_identifier (str) : Substring included in the file name 
+    Args:
+        c (Connection): Fabric Connection object of RFSoC board. Can be created using ``get_connection`` function
+        dir (str): Directory in which the file is located
+        file_identifier (str, optional): Substring included in the file name. Defaults to wildcard: *"\*"*
+        time_past (int, optional): How old the file can be in seconds. Files older than ``time_past`` will be ignored. Defaults to 3600 seconds
     Returns:
-        file            (str) : File path of most recent file (returns "invalid/path" if no valid files found)
+        return (str): File path of most recent file. Returns *"invalid/path"* if no valid file found
     '''
 
     # Define command string for finding most recent file, use find to get most recent file
@@ -622,15 +651,15 @@ def get_most_recent_file_board(c, dir, file_identifier = "*", time_past = 60*60)
         send_msg('WARNING', f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}'")
         return "invalid/path"
 
-def path_exists(c, path) -> bool:
+def path_exists(c: Connection, path: str) -> bool:
     '''
-    Check if path exists on RFSoC board.
+    Check if specified path exists on RFSoC board.
 
-    Parameters:
-        c      (Connection) : Fabric Connection object of RFSoC board. Use get_connection to create object
-        path          (str) : File path to check existence of
+    Args:
+        c (Connection): Fabric Connection object of RFSoC board. Can be created using ``get_connection`` function
+        path (str | pathlib.PosixPath): File path to check existence of
     Returns:
-        exists       (bool) : Whether the file path exists
+        return (bool): Whether the file path exists
     '''
 
     path = str(path) # Convert path objects to str

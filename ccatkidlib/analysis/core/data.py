@@ -1,16 +1,13 @@
-import gc
-import sys
 import pathlib
 import numpy as np
 import polars as pl
 import concurrent.futures
-import multiprocessing as mp
 import time
 import pathlib
 import re
+import copy
 
 from pathlib import Path
-from numba import njit
 from scipy.signal import savgol_filter
 from functools import cached_property
 from collections.abc import Iterable
@@ -91,11 +88,17 @@ class Data:
         # ----------------------------------
         self.analysis_cfg, self.viz_cfg = rfsoc_io.load_config(analysis_cfg)
         self.root_dir = self.analysis_cfg['file_paths']['root_data_dir']
+        self.padding = len(str(self.analysis_cfg['tones']['max_tones']*100))
         if not self.root_dir[-1] == '/': self.root_dir += '/'
+
+        self.save_fig = self.viz_cfg['save']['save_fig']
+        self.overwrite = self.viz_cfg['save']['overwrite']
+        self.save_fmt = self.viz_cfg['save']['save_fmt']
+        self.figs_per_file = self.viz_cfg['save']['figs_per_file']
 
         log_dir = Path(__file__).parent / '..' / '..' / 'log'
         rfsoc_io.create_dir(log_dir) # Create log directory if it does not exist
-        rfsoc_io.setup_logging(log_dir / 'analysis.log', self.analysis_cfg['io']['file_level'], self.analysis_cfg['io']['terminal_level'])
+        #rfsoc_io.setup_logging(log_dir / 'analysis.log', self.analysis_cfg['io']['file_level'], self.analysis_cfg['io']['terminal_level'])
 
         # If full data path is None, [], or "", find data file based on timestamp and (optional) file path parts
         # ------------------------------------------------------------------------------------------------------
@@ -130,8 +133,8 @@ class Data:
                 rfsoc_io.send_msg('CRITICAL', error)
                 raise ValueError(error)
 
-            self.timestamp = pair.get_timestamp(self.data_path[0])
-            if not all(pair.get_timestamp(path) == self.timestamp for path in self.data_path):
+            self.timestamp = rfsoc_io.get_timestamp(self.data_path[0])
+            if not all(rfsoc_io.get_timestamp(path) == self.timestamp for path in self.data_path):
                 error = 'All data paths must have the same timestamp!'
                 rfsoc_io.send_msg('CRITICAL', error)
                 raise ValueError(error)              
@@ -177,63 +180,64 @@ class Data:
             return (pl.DataFrame): Polars DataFrame with specified data columns
 
         '''
-        def _include(include: list[int], *args):
+        def _get_exclude(exclude):
+            expr = []
+            for tones in exclude:
+                expr += [f"^{'' if strict else '.*'}{name}_{tones:0{self.padding}d}$" for name in col_name]
+            return [pl.col([rf"^{'' if strict else '.*'}{name}_\d+.*$" for name in col_name]).exclude(expr)]
+
+        def _include(include: list[int]):
             ''' Internal function for getting data columns when ``include`` is specified
 
             Args:
                 include (list[int]): List of tones to get data for
                 *args: Name of data column
             '''
-            col_name = args[0]
-            expr = []
+            exclude = set(self.tones) - set(include)
+            return _get_exclude(exclude)
 
-            for tones in include:
-                expr.append(pl.col([f"^{'' if strict else '.*'}{name}_{tones:04d}$" for name in col_name]))
-            return expr
-
-        def _exclude(exclude: list[int], *args):
+        def _exclude(exclude: list[int]):
             ''' Internal function for getting data columns when ``exclude`` is specified
 
             Args:
                 exclude (list[int]): List of tones to **not** get data for
                 *args: Name of data column
             '''
-            col_name = args[0]
-            expr = []
-            for tones in exclude:
-                expr += [f"^{'' if strict else '.*'}{name}_{tones:04d}$" for name in col_name]
-            return [pl.col([f"^{'' if strict else '.*'}{name}_\d+.*$" for name in col_name]).exclude(expr)]
+            
+            return _get_exclude(exclude)
 
-        def _all(*args):
+        def _all():
             ''' Internal function for getting all data columns (neither ``include`` or ``exclude`` specified)
 
             Args:
                 *args: Name of data column
             '''
-            col_name = args[0]
-            return [pl.col([f"^{'' if strict else '.*'}{name}_\d+.*$" for name in col_name])]
+            return _get_exclude([])
 
         col_name = [col_name] if isinstance(col_name, str) else col_name.copy() # Copy col_name list since it may be modified
         
         if self.tones is not None: 
             exprs=[]
-            # Timestreams never have self.tones = None but **do** have columns (the time columns in particular) without tones so need to handle those seperately
-            for no_tone_name in ['^sample$', '^t$', '^dt$', '^fft_f$', '^psd.*psd_f$']:
-                pattern = re.compile(no_tone_name) # Create regex pattern
 
-                # If a specified data column is in the no_tone_name list, add it to the list of Polars Exprs without additional processing
-                for name in col_name[::-1]:
-                    if pattern.match(name):
-                        exprs.append(pl.col(name))
-                        col_name.remove(name)
-                        break
-            
+            # Timestreams never have self.tones = None but **do** have columns (the time columns in particular) without tones so need to handle those seperately
+            no_tone_name = r'^(sample|t|dt|fft_f)(?:_\d+)?$'
+            pattern = re.compile(no_tone_name) # Create regex pattern
+
+            # If a specified data column is in the no_tone_name list, add it to the list of Polars Exprs without additional processing
+            for name in col_name[::-1]:
+                if pattern.match(name):
+                    exprs.append(pl.col(name))
+                    col_name.remove(name)
+                    
             # Parse data columns that have tones
-            args = [col_name]
-            exprs += ccat_df.parse_tones(_include, _exclude, _all, include, exclude, *args)
-            return self.data.select(*exprs)
+            exprs += ccat_df.parse_tones(_include, _exclude, _all, include, exclude)
+            return (self.data.lazy()
+                             .select(*exprs)
+                             .collect())
         else:
-            return self.data.select([pl.col(f"^{'' if strict else '.*'}{name}$") for name in col_name])
+            return (self.data.lazy()
+                             .select([pl.col(f"^{'' if strict else '.*'}{name}$") for name in col_name])
+                             .collect())
 
     def tone(self,
              include: int | list[int] | None = None, 
@@ -456,7 +460,33 @@ class Data:
         return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] + 
                                       [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
     
-    def savgol(self, col_name: str, prefix: str | list[str] = '', window: int = 3, k: int = 1, deriv: int = 0, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False, max_workers=1):
+    def diff(self, col_name: str, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+        ''' Calculate the difference between adjacent elements of a specified data column
+        
+        Args:
+            col_name (str): Name of data column
+        '''
+        col_name = [col_name, 'diff']
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
+        self.transform([Data.calc_diff]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names], include=include, exclude=exclude)
+
+    def savgol(self, 
+               col_name: str, 
+               prefix: str | list[str] = '', 
+               window: int = 3, 
+               k: int = 1, 
+               deriv: int = 0, 
+               include: int | list[int] | None = None, 
+               exclude: int | list[int] | None = None, 
+               recalc: bool = False, 
+               max_workers=1, 
+               ex=None):
         ''' Calculate the difference between adjacent elements of a specified data column
         
         Args:
@@ -466,14 +496,14 @@ class Data:
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
-        if not isinstance(window, Iterable) or not len(window) == num_prefix: window = [window]
-        if not isinstance(k, Iterable) or not len(k) == num_prefix: k = [k]
-        if not isinstance(deriv, Iterable) or not len(deriv) == num_prefix: deriv = [deriv]
+        if not isinstance(window, Iterable) or not len(window) == num_prefix: window = [window]*num_prefix
+        if not isinstance(k, Iterable) or not len(k) == num_prefix: k = [k]*num_prefix
+        if not isinstance(deriv, Iterable) or not len(deriv) == num_prefix: deriv = [deriv]*num_prefix
 
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
-        args = [[win, order, der, ccat_mp.check_max_workers(max_workers)] for win, order, der in zip(window, k, deriv)]
+        args = [[win, order, der, ccat_mp.check_max_workers(max_workers), ex] for win, order, der in zip(window, k, deriv)]
         self.transform([Data.calc_savgol]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
         self.data = self._unnest([f'struct_{col_name[-1]}{der:01d}' for col_name, der in zip(col_names, deriv)])
         return self.get_data(col_name=[f'{col_name[-1]}{der}_{col_name[0]}' for col_name, der in zip(col_names, deriv)], include=include, exclude=exclude)
@@ -504,7 +534,7 @@ class Data:
             return (pl.DataFrame): Full ``data`` Polars DataFrame including columns with the transformed data
         '''
         
-        def _get_expr(schema, tones):
+        def _get_expr(tones):
             expr = []
 
             for func, f_arg, name, size in zip(funcs, funcs_args, col_name, batch_size):
@@ -521,7 +551,7 @@ class Data:
                         rfsoc_io.send_msg('WARNING', 'More tones than arguments specified. Ensure that each tone has a corresponding argument.')
 
                 for batch, arg  in zip(batches, args):
-                    exp = func(schema, *arg, tones=batch, recalc=recalc, col_name = name)
+                    exp = func(schema, *arg, tones=batch, padding=self.padding, recalc=recalc, col_name = name)
 
                     # Handle funcs that return a list of expressions and funcs that return single expressions
                     if isinstance(exp, Iterable):
@@ -530,7 +560,7 @@ class Data:
                         expr.append(exp)
             return expr
 
-        def _include(include: list[int], *args) -> list[pl.Expr]:
+        def _include(include: list[int]) -> list[pl.Expr]:
             '''Internal method for generating polars query expressions for the tones to include
 
             Args:
@@ -540,10 +570,9 @@ class Data:
                 list[pl.expr.expr.Expr]: List of query expressions
             '''
 
-            schema = args[0]
-            return _get_expr(schema, include)
+            return _get_expr(include)
 
-        def _exclude(exclude: list[int], *args) -> list[pl.Expr]:
+        def _exclude(exclude: list[int]) -> list[pl.Expr]:
             '''Internal method for generating polars query expressions for the tones to exclude
 
             Args:
@@ -552,21 +581,18 @@ class Data:
             Returns:
                 list[pl.expr.expr.Expr]: List of query expressions
             '''
-
-            schema = args[0]
             
             tones = set(self.tones) - set(exclude)
-            return _get_expr(schema, tones)
+            return _get_expr(tones)
 
-        def _all(*args) -> list[pl.Expr]:
+        def _all() -> list[pl.Expr]:
             '''Internal method for generating polars query expressions for all tones
             Args:
                 *args: Additional args to pass to query generating function
             Returns:
                 list[pl.expr.expr.Expr]: List of query expressions
             '''
-            schema = args[0]
-            return _get_expr(schema, self.tones)
+            return _get_expr(self.tones)
 
         def _check_len(arg_list, num_funcs, error: str = ''):
             if not len(arg_list) == num_funcs:
@@ -602,14 +628,14 @@ class Data:
         
         data = self.data.lazy()
         if self.tones is not None:
-            args = [data.collect_schema()]
-            self.data = data.with_columns(*ccat_df.parse_tones(_include, _exclude, _all, include, exclude, *args)).collect()
+            schema = data.collect_schema()
+            self.data = data.with_columns(*ccat_df.parse_tones(_include, _exclude, _all, include, exclude)).collect()
         else:
             self.data = data.with_columns(*[func(data.collect_schema(), *f_arg, tones = None, recalc = recalc, col_name = name) for func, f_arg, name in zip(funcs, funcs_args, col_name)]).collect()
         return self.data
 
     @staticmethod
-    def calc_phase(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'phase']) -> pl.Expr:
+    def calc_phase(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'phase']) -> pl.Expr:
         ''' Generates pl.Expr for calculating the phase of a tone using I & Q data
 
         Args:
@@ -619,7 +645,7 @@ class Data:
         
         if tones is not None:
             tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name]
+            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name]
 
         I_col, Q_col, phase_col = col_name
 
@@ -629,13 +655,13 @@ class Data:
             return pl.col(phase_col)
 
     @staticmethod
-    def calc_mag(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'mag']) -> pl.Expr:
+    def calc_mag(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'mag']) -> pl.Expr:
         ''' Generates pl.Expr for calculating the magnitude of a tone using I & Q data
         '''
     
         if tones is not None:
             tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name]
+            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name]
         
         I_col, Q_col, mag_col = col_name
 
@@ -653,10 +679,10 @@ class Data:
             return pl.col(mag_col)
 
     @staticmethod
-    def calc_IQ_rotate(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'rotate']) -> pl.Expr:        
+    def calc_IQ_rotate(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'rotate']) -> pl.Expr:        
         if tones is not None:
             tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
 
         I_col, Q_col, rotate_col = col_name
 
@@ -672,10 +698,10 @@ class Data:
             return pl.col(f'{rotate_col}_{I_col}')    
 
     @staticmethod
-    def calc_IQ_shift(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'shift']) -> pl.Expr:
+    def calc_IQ_shift(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'shift']) -> pl.Expr:
         if tones is not None:
             tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
 
         I_col, Q_col, shift_col = col_name
 
@@ -692,10 +718,10 @@ class Data:
             return pl.col(f'{shift_col}_{I_col}')
 
     @staticmethod
-    def calc_IQ_scale(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['I', 'Q', 'scale']) -> pl.Expr:
+    def calc_IQ_scale(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'scale']) -> pl.Expr:
         if tones is not None:
             tone = tones[0]
-            col_name = [f'{name}_{tone:04d}' for name in col_name[:-1]] + [col_name[-1]]
+            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
 
         I_col, Q_col, scale_col = col_name
 
@@ -711,10 +737,10 @@ class Data:
             return pl.col(f'{scale_col}_{I_col}')
 
     @staticmethod
-    def calc_IQ_trim(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['sample', 'I', 'Q', 'trim']) -> pl.Expr:
+    def calc_IQ_trim(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['sample', 'I', 'Q', 'trim']) -> pl.Expr:
         if tones is not None:
             tone = tones[0]
-            col_name = [col_name[0]] + [f'{name}_{tone:04d}' for name in col_name[1:-1]] + [col_name[-1]]
+            col_name = [col_name[0]] + [f'{name}_{tone:0{padding}d}' for name in col_name[1:-1]] + [col_name[-1]]
 
         sample_col, I_col, Q_col, trim_col = col_name
         if len(args) == 2:
@@ -732,36 +758,54 @@ class Data:
             return pl.col(f'{trim_col}_{I_col}')
 
     @staticmethod
-    def calc_savgol(schema: pl.Schema, *args, tones: list[int] | None = None, recalc: bool = False, col_name = ['', 'savgol']) -> pl.Expr:
+    def calc_diff(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'diff']) -> pl.Expr:
+        ''' Generates pl.Expr for calculating difference between adjacent data points for the specified column
+        Args:
+            schema (pl.Schema)
+        '''
+        if tones is not None:
+            tone = tones[0]
+            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
+
+        data_col, diff_col = col_name
+        if recalc or not (f'{diff_col}_{data_col}' in schema):
+            return pl.col(data_col).diff().name.prefix(f'{diff_col}_')
+        else:
+            return pl.col(f'{diff_col}_{data_col}')
+        
+    @staticmethod
+    def calc_savgol(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'savgol']) -> pl.Expr:
         def _calc_savgol(df):
-            struct = df.struct
-
+            data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
             results_dict = {}
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {executor.submit(savgol_filter, struct.field(col[0]).to_numpy(), window[ind], k[ind], deriv = deriv):  (tone, col) for tone, ind, (col) in zip(to_calc, calc_ind, batches)}
-                for future in concurrent.futures.as_completed(future_to_batch):
-                    tone, col = future_to_batch[future]
-                    try:
-                        filtered_col = future.result()
-                    except Exception as e:
-                        rfsoc_io.send_msg('WARNING', 'Savgol filter for tone %s failed with exception: %s', tone, e)
-                        filtered_col = np.zeros(df.len())
-                    results_dict[f'{col_name[-1]}_{col[0]}'] = filtered_col
-            
-            df = pl.DataFrame(dict(sorted(results_dict.items())))
-            return pl.Series(df.select(pl.struct(df.columns)))
-        col_name = col_name.copy()
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {executor.submit(ccat_mp.process_batches,
+                                                   savgol_filter, 
+                                                   data[i][0], 
+                                                   window[inds], 
+                                                   k[inds], 
+                                                   deriv = deriv[inds]):  (tones, cols) for i, (tones, inds, (cols)) in enumerate(zip(to_calc, calc_ind, batches))}
 
-        if len(args) == 4:
-            window, k, deriv, max_workers = args
-            if tones is not None: deriv, max_workers = deriv[0], max_workers[0]
-            col_name[-1] = f'{col_name[-1]}{deriv}'
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tones, cols = future_to_batch[future]
+                    filtered_cols = future.result()
+                    for tone, col, filtered_col in zip(tones, cols, filtered_cols):
+                        if isinstance(filtered_col, Exception):
+                            rfsoc_io.send_msg('WARNING', 'Savgol filter for tone %s failed with exception: %s', tone, filtered_col)
+                            filtered_col = np.full(df.len(), np.nan)
+                        results_dict[f'{col_name[-1]}_{col[0]}'] = filtered_col
+            return ccat_mp.package_results(results_dict)
+
+        col_name = col_name.copy()
+        if len(args) == 5:
+            window, k, deriv, max_workers, ex = np.array(args)
+            if tones is not None: max_workers, ex = int(max_workers[0]), ex[0]
+            col_name[-1] = f'{col_name[-1]}{deriv[0]}'
         else:
             rfsoc_io.send_msg('ERROR', 'window, k, deriv, and max_workers are required arguments.')
 
-        return_col = [f'{col_name[-1]}_{col_name[-2]}']
-        return_type = [pl.Float64]
-        expr, to_calc, calc_ind, calc_col, batches = ccat_mp.batch_calc(_calc_savgol, tones, col_name, schema, return_col=return_col, return_type=return_type, recalc=recalc)
+        return_col, return_type = [f'{col_name[-1]}_{col_name[-2]}'], [pl.Float64]
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_calc_savgol, tones, col_name, schema, padding=padding, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
         return expr
 
     #==========================#
@@ -782,8 +826,8 @@ class Data:
 
     @cached_property
     def num_tones(self) -> int:
-        return self.drone_cfg['tones']['num_tones']
-    
+        return self.drone_cfg.get('tones', {'num_tones': -1})['num_tones']
+        
     @cached_property
     def original_root(self) -> str:
         try:
@@ -795,15 +839,35 @@ class Data:
         return original_root
 
     @cached_property
+    def save_dir(self) -> str:
+        '''
+        Directory where figures should be saved. Create if it does not already exist.
+        '''
+        save_root_dir = self.viz_cfg['save']['save_root_dir']
+        if not save_root_dir[-1] == '/': save_root_dir += '/'
+
+        data_path = str(self.data_path[0])
+
+        for data_type in ('/vna/', '/targ/', '/timestream/'): 
+            save_dir = data_path.replace(data_type, '/fig/', 1)
+            if not save_dir == data_path: break
+
+        save_dir = Path(save_dir).parent
+        save_dir = str(save_dir).strip().replace(self.original_root, save_root_dir)
+        rfsoc_io.create_dir(save_dir)
+
+        return save_dir
+        
+    @cached_property
     def comb(self) -> pl.DataFrame:
         '''
         Load comb frequencies, powers, and phases
         '''
         comb = {'tone_freqs': [], 'tone_powers': [], 'tone_phis': []}
         for key in comb.keys():
-            value = self.drone_cfg['tones'][key]
+            value = self.drone_cfg.get('tones', {f'{key}': []})[key]
             if isinstance(value, list):
-                value = value.real
+                value = np.array(value).real
             elif isinstance(value, str):
                 comb_path = pair.replace_root(value, self.original_root, self.root_dir)
                 value = np.load(comb_path).real if Path(comb_path).exists() else np.zeros(self.num_tones)
@@ -826,7 +890,6 @@ class Data:
         # Get frequency and magnitude data
         x_df = self.get_data([col_dict['sample'], f"{x_prefix}{'_' if x_prefix else ''}{col_dict['x']}"], include=include, exclude=exclude, strict=True)
         y_df = self.get_data([col_dict['sample'], f"{y_prefix}{'_' if y_prefix else ''}{col_dict['y']}"], include=include, exclude=exclude, strict=True)
-
         on, by = [col_dict['sample']], None
 
         # Convert frequency and magnitude DataFrames from wide to long
@@ -916,3 +979,92 @@ class Data:
                 self._configs.pop(i)
                 break
         return cfg
+
+    def join(self, other, in_place=False):
+        ''' 
+        Join two Data objects together.
+
+        Args:
+            other (Data): Data object to join with
+        Returns:
+            return (Data): New Data object created from the two joined Data objects
+        '''
+        def _join_consts(left_const: Any | list[Any], right_const: Any | list[Any]) -> list[Any]:
+            if not isinstance(left_const, list): left_const = [left_const]
+            if not isinstance(right_const, list): right_const = [right_const]
+            return left_const + right_const
+
+        def _join_cfg(left_cfg: dict, right_cfg: dict) -> dict:
+            if len(left_mapping) == 1: 
+                left_cfg['index'] = 0
+                left_cfg = {f'{self.bid}.{self.drid}': {str(self.timestamp): {**left_cfg}}}
+            
+            left_ind = left_mapping[-1] + 1
+            if len(right_mapping) == 1:
+                right_cfg['index'] = int(left_ind)
+                right_cfg = {f'{other.bid}.{other.drid}': {str(other.timestamp): {**right_cfg}}}
+            else:
+                for i, (bid, drid, timestamp) in enumerate(zip(other.bid, other.drid, other.timestamp)):
+                    utils.dict_set(right_cfg, [f'{bid}.{drid}', str(timestamp), 'index'], int(i + left_ind))
+
+            return left_cfg | right_cfg
+
+        if not isinstance(other, Data):
+            error = f'Cannot join with object of type {type(other)}. Must be of type Data.'
+            rfsoc_io.send_msg('ERROR', error)
+            raise ValueError(error)
+        elif self.tones is None or other.tones is None:
+            error = f'Both Data objects must have tones not equal to None.'
+            rfsoc_io.send_msg('ERROR', error)
+            raise NotImplementedError(error)
+
+        # Create a copy of the Data object
+        new_data = self if in_place else copy.deepcopy(self) 
+
+        # Load data before joining to prevent in-place errors
+        # ---------------------------------------------------
+        left_df, right_df = self.data, other.data 
+        left_comb, right_comb = self.comb, other.comb
+
+        # Join tones arrays
+        # -----------------
+        max_tones = self.analysis_cfg['tones']['max_tones']
+        left_tones, right_tones = np.array(self.tones), np.array(other.tones)
+        left_mapping, right_mapping = np.unique(left_tones // max_tones), np.unique(right_tones // max_tones)
+        shift = (left_mapping[-1] - right_mapping[0] + 1)        
+        new_data.tones = list(np.append(left_tones, right_tones + shift * max_tones))
+        
+        # Join data DataFrames
+        # --------------------
+        if len(str(new_data.tones[-1])) == new_data.padding: 
+            new_data.padding += 1
+            left_df.rename({col: re.sub(r"(0\d+)$", lambda tone: f'{int(tone.group(1)):0{new_data.padding}d}', col) for col in left_df.columns})
+        right_df = right_df.rename({col: re.sub(r"(0\d+)$", lambda tone: f'{int(tone.group(1)) + shift*max_tones:0{new_data.padding}d}', col) for col in right_df.columns})
+        new_data.data = left_df.join(right_df, on='sample', how='full', coalesce=True)
+
+        # Join comb DataFrames
+        # --------------------
+        new_data.comb = pl.concat([left_comb, right_comb], how='diagonal').with_columns(pl.Series('det', new_data.tones))
+
+        # Join configs
+        # ------------
+        new_data.ext_cfg = _join_cfg(self.ext_cfg, other.ext_cfg)
+        new_data.io_cfg = _join_cfg(self.io_cfg, other.io_cfg)
+        new_data.drone_cfg = _join_cfg(self.drone_cfg, other.drone_cfg)
+
+        # Join constant attributes
+        # ------------------------
+        consts = ['bid', 'drid', 'timestamp', 'num_tones', 'data_path']
+        for const in consts:
+            left_const, right_const = getattr(self, const), getattr(other, const)
+            setattr(new_data, const, _join_consts(left_const, right_const))
+
+        return new_data
+
+
+                                
+
+
+
+
+
