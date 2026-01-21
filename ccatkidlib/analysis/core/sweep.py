@@ -169,7 +169,7 @@ class Sweep(Data):
         Plot the magnitude of the complex transmission |S_21| = \sqrt{I^2 + Q^2} of a frequency sweep
         '''
         xlabel, ylabel = r'$Frequency\ [Hz]$', r'$|S_{21}|$'
-        save_name = f'sweep_{prefix}{'_' if prefix else ''}mag'
+        save_name = f"sweep_{prefix}{'_' if prefix else ''}mag"
 
         rtn = self.plot('f', 'mag', 
                         y_prefix=prefix, 
@@ -190,7 +190,7 @@ class Sweep(Data):
         Plot the phase of the complex transmission \phi = \arctan{Q/I} of a frequency sweep
         '''
         xlabel, ylabel = r'$Frequency\ [Hz]$', r'$Phase\ [rad]$'
-        save_name = f'sweep_{prefix}{'_' if prefix else ''}phase'
+        save_name = f"sweep_{prefix}{'_' if prefix else ''}phase"
         rtn = self.plot('f', 'phase', 
                              y_prefix=prefix, 
                              grouping=grouping, 
@@ -243,7 +243,7 @@ class Sweep(Data):
             error = 'Invalid projection specified, must be either "IQ" or "polar".'
             rfsoc_io.send_msg('CRITICAL', error)
             raise ValueError(error)
-        save_name = f'sweep_{prefix}{'_' if prefix else ''}{projection}'
+        save_name = f"sweep_{prefix}{'_' if prefix else ''}{projection}"
 
         if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
         

@@ -405,7 +405,8 @@ class R:
 
                 # Parse OCS reply to get whether drone is currently running and if it supposed to be running
                 # ------------------------------------------------------------------------------------------
-                ip, to_run, running = json.loads(rtn.session['data']['data'])
+                ip, to_run, running = [substr.split('=')[-1] for substr in json.loads(rtn.session['data']['data']).split(', ')]
+                to_run , running = bool(to_run), bool(running)
                 rfsoc_io.send_msg('PCS', f"{rtn.session}")
 
                 # Start or Restart drones as appropriate
@@ -437,7 +438,8 @@ class R:
 
                     # Parse OCS reply to get whether drone is currently running and if it supposed to be running
                     # ------------------------------------------------------------------------------------------
-                    ip, to_run, running = json.loads(rtn.session['data']['data'])
+                    ip, to_run, running = [substr.split('=')[-1] for substr in json.loads(rtn.session['data']['data']).split(', ')]
+                    to_run , running = bool(to_run), bool(running)
                     rfsoc_io.send_msg('PCS', f"{rtn.session}")
 
                     if to_run:
@@ -664,7 +666,7 @@ class R:
 
     @header
     @utils.method_timer
-    def get_stats(self, space: bool = True, temps: bool = True, ADC_rms: bool = True, **kwargs) -> tuple[list[float], tuple[list[float], list[float]], list[float]]:
+    def get_stats(self, space: bool = False, temps: bool = False, ADC_rms: bool = True, **kwargs) -> tuple[list[float], tuple[list[float], list[float]], list[float]]:
         '''
         Get RFSoC storage space, temperatures, and RMS power at drone analog-to-digital converters (ADCs).
 
@@ -688,6 +690,7 @@ class R:
             self.rfsoc.feedMonitor.start()
             rfsoc_io.wait(60, desc="HK Feed Monitor Starting")
 
+        avail_spaces, temp_lists, rms_list = [], [], []
         kwargs['setup'] = False # Do not set up drones again
         if space: avail_spaces = self.get_avail_space(**kwargs) # Get storage space
         if temps: temp_lists = self.get_temps(**kwargs) # Get temperatures
@@ -2438,9 +2441,9 @@ class R:
         # Save drone config
         self.drone_cfg[ind] = rfsoc_io.save_config(self.config_dirs[ind] / f"{name}_config_drone_{self.timestamp}.yaml", self.drone_cfg[ind], self.save_cfg)
 
-    #================#
-    # Helper Methods #
-    #================#
+    # ================ #
+    #  Helper Methods  #
+    # ================ #
 
     def _parse_ocs_session(self, sess: dict) -> tuple[bool, dict]:
         '''

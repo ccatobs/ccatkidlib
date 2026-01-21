@@ -242,7 +242,7 @@ class Timestream(Data):
         
         '''
         xlabel, ylabel = r'$Time [s]$', f'{prefix}_{col_name}'
-        save_name = f'timestream_{prefix}{'_' if prefix else ''}{col_name}_stream'
+        save_name = f"timestream_{prefix}{'_' if prefix else ''}{col_name}_stream"
 
         kwargs['datashade'] = datashade if datashade is not None else self.viz_cfg['static_plot']['stream']['datashade']
         rtn = self.plot(time_col, col_name, 
@@ -262,7 +262,7 @@ class Timestream(Data):
 
     def mag_plot(self, x_prefix: str = '', y_prefix: str = '', grouping = 'groupby', datashade=None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
         xlabel, ylabel = r'$Frequency\ [Hz]$', r'$|S_{21}|$'
-        save_name = f'timestream_{y_prefix}{'_' if y_prefix else ''}mag'
+        save_name = f"timestream_{y_prefix}{'_' if y_prefix else ''}mag"
 
         if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
         kwargs['datashade'] = datashade if datashade is not None else self.viz_cfg['static_plot']['stream']['datashade']
@@ -283,7 +283,7 @@ class Timestream(Data):
         
     def phase_plot(self, x_prefix: str = '', y_prefix: str = '', grouping = 'groupby', datashade=None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
         xlabel, ylabel = r'$Frequency\ [Hz]$', r'$Phase\ [rad]$'
-        save_name = f'timestream_{y_prefix}{'_' if y_prefix else ''}phase'
+        save_name = f"timestream_{y_prefix}{'_' if y_prefix else ''}phase"
 
         if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
         kwargs['datashade'] = datashade if datashade is not None else self.viz_cfg['static_plot']['stream']['datashade']
@@ -315,7 +315,7 @@ class Timestream(Data):
             error = 'Invalid projection specified, must be either "IQ" or "polar".'
             rfsoc_io.send_msg('CRITICAL', error)
             raise ValueError(error)
-        save_name = f'timestream_{prefix}{'_' if prefix else ''}{projection}'
+        save_name = f"timestream_{prefix}{'_' if prefix else ''}{projection}"
 
         if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
         kwargs['datashade'] = datashade if datashade is not None else self.viz_cfg['static_plot']['stream']['datashade']
@@ -337,7 +337,7 @@ class Timestream(Data):
 
     def psd_plot(self, col_name, prefix: str = '', grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
         xlabel, ylabel = r'$PSD\ Frequency\ [Hz]$', rf'psd_{prefix}_{col_name}'
-        save_name = f'timestream_{prefix}{'_' if prefix else ''}{col_name}_psd'
+        save_name = f"timestream_{prefix}{'_' if prefix else ''}{col_name}_psd"
 
         if not 'logx' in kwargs: kwargs['logx'] = True
         if not 'logy' in kwargs: kwargs['logy'] = True
@@ -359,7 +359,7 @@ class Timestream(Data):
     
     def fft_plot(self, col_name, prefix: str = '', grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
         xlabel, ylabel = r'$FFT\ Frequency\ [Hz]$', f'fft_{prefix}_{col_name}'
-        save_name = f'timestream_{prefix}{'_' if prefix else ''}{col_name}_fft'
+        save_name = f"timestream_{prefix}{'_' if prefix else ''}{col_name}_fft"
 
         if not 'logx' in kwargs: kwargs['logx'] = True
         if not 'logy' in kwargs: kwargs['logy'] = True

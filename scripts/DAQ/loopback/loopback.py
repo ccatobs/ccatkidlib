@@ -2,11 +2,11 @@ from ccatkidlib.rfsoc.rfsoc_daq import R
 import numpy as np
 
 def loopback_measurement(R):
-    NCLOs = [768, 1280]
+    NCLOs = [256, 768, 1270] #, 768, 1280]
     for NCLO in NCLOs:
         # Take VNA sweeps with different drive & sense attenuations to confirm that VNA sweeps and attenuators are working
         # ----------------------------------------------------------------------------------------------------------------
-        R.take_vna_sweep(NCLO=NCLO) # Take VNA sweep with no attenuation
+        R.take_vna_sweep(NCLO = NCLO) # Take VNA sweep with no attenuation
 
         # Take VNA sweeps with varying drive attens (and enough sense atten to not overdrive ADC)
         drive_attens = np.arange(0, 32, 2)
@@ -24,6 +24,7 @@ def loopback_measurement(R):
         tone_powers = np.arange(25, 525, 25)
         R.set_atten(drive=15, sense=15) # Set reasonable attenuations to not overdrive ADC
         for power in tone_powers:
+            print(power)
             R.take_target_sweep(tone_powers=power)
 
         # Take target sweep with a single tone
@@ -32,6 +33,8 @@ def loopback_measurement(R):
         R.take_timestream(5)
 
 if __name__ == '__main__':
-    RC = R(cfg_path='/home/pcs/ccatkidlib/scripts/loopback/system_config.yaml', initialize_boards=True)
-    loopback_measurement(RC)
-    RC.close()
+    RC = R(cfg_path='/home/rfsoc/ccatkidlib/scripts/loopback/system_config.yaml', initialize_boards=False)
+    #RC.take_vna_sweep()
+    RC.take_timestream(60)
+    #loopback_measurement(RC)
+    #RC.close()
