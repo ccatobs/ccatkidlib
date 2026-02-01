@@ -1,5 +1,5 @@
 #=================================#
-# rfsoc_io.py               2025 #
+# io.py               2025 #
 # Darshan Patel dp649@cornell.edu #
 #=================================#
 
@@ -13,23 +13,18 @@ import sys
 import ast
 import time
 import yaml
-import logging
 import subprocess
 import numpy as np
-import traceback
 
 from pathlib import Path
 from tqdm import tqdm
-import tqdm.contrib.logging as tqdm_logging
-from functools import partial, partialmethod, wraps
 from fabric import Connection, Config
 from jinja2 import Environment, FileSystemLoader
 
-
 # Local imports
-from ccatkidlib.style import Style
 from ccatkidlib.utils import function_timer
 import ccatkidlib.utils as utils
+import ccatkidlib.log as log
 
 #========================#
 # Directory IO Functions #
@@ -126,15 +121,44 @@ def create_dir(dir_path: str) -> None:
         # Check if directory already exists, if not make directory
         if not dir_path.exists():
             dir_path.mkdir(parents = True, exist_ok = False)
-            send_msg('DEBUG', "The directory '%s' was successfully created!", dir_path)
+            log.log('DEBUG', "The directory '%s' was successfully created!", dir_path)
         else:
-            send_msg('DEBUG', "The directory '%s' already exists! Directory was not overwritten.", dir_path)
+            log.log('DEBUG', "The directory '%s' already exists! Directory was not overwritten.", dir_path)
     except FileNotFoundError:
-        send_msg('ERROR', "The directory '%s' could not be created! Ensure that the file path is valid!", dir_path)
+        log.log('ERROR', "The directory '%s' could not be created! Ensure that the file path is valid!", dir_path)
         raise FileNotFoundError(f"The directory '{dir_path}' could not be created! Ensure that the file path is valid!")
     except PermissionError:
-        send_msg('ERROR', f"The directory '%s' could not be created! Ensure that the parent directory has suitable write permissions!", dir_path)
+        log.log('ERROR', f"The directory '%s' could not be created! Ensure that the parent directory has suitable write permissions!", dir_path)
         raise PermissionError(f"The directory '{dir_path}' could not be created! Ensure that the parent directory has suitable write permissions!")
+
+def add_dir(dir_name: str, 
+            data_dir: str, 
+            save_root: str | None = None,
+            data_root: str | None = None,
+            sub_dirs: list[str] = [],
+            timestamp: str | None = None):
+    '''
+    Add a new directory to a pre-existing ccatkidlib data file tree
+    
+    '''
+    if not dir_name[-1] == '/': dir_name += '/'
+    if not dir_name[0] == '/': dir_name = '/' + dir_name
+
+    for data_type in ('/targ/', '/timestream/', '/vna/'): 
+        add_dir = data_dir.replace(data_type, dir_name, 1)
+        if not add_dir == data_dir: 
+            add_dir = Path(add_dir).parent 
+            add_dir = add_dir / Path(*sub_dirs) if sub_dirs else add_dir / data_type[1:]
+            if timestamp is not None: add_dir = add_dir / timestamp
+            break
+    
+    if save_root is not None and data_root is not None:
+        if not data_root[-1] == '/': data_root += '/'
+        if not save_root[-1] == '/': save_root += '/' 
+        add_dir = str(add_dir).strip().replace(data_root, save_root)
+
+    create_dir(add_dir)
+    return str(add_dir)
 
 #=====================#
 # Config IO Functions #
@@ -181,8 +205,8 @@ def save_config(cfg_path, cfg_dic, save = True):
         with open(cfg_path, 'w') as config:
             yaml.safe_dump(cfg_dic, config, sort_keys=False, default_flow_style=None)
         
-        send_msg('DEBUG', f"Saved configuration file: '{cfg_path}'!")
-        #send_msg('DEBUG', f'Configuration file contents: {cfg_dic}')
+        log.log('DEBUG', f"Saved configuration file: '{cfg_path}'!")
+        #log.log('DEBUG', f'Configuration file contents: {cfg_dic}')
 
         # Load new config file
         with open(cfg_path, 'r') as config:
@@ -209,13 +233,13 @@ def edit_config(cfg, key, value, append = False):
     # Check if key was successfully updated
     # -------------------------------------
     if done: # If matching key was updated
-        send_msg('DEBUG', f'Updated key "{key}" with value "{value}" in config file"!')
+        log.log('DEBUG', f'Updated key "{key}" with value "{value}" in config file"!')
     elif append: # If key was not found and append=True, add key value pair to dictionary
         cfg[key] = value
         done = True
-        send_msg('DEBUG', f'Added key "{key}" with value "{value}" to config file!')
+        log.log('DEBUG', f'Added key "{key}" with value "{value}" to config file!')
     else: # If key was not found and append=False
-        send_msg('DEBUG', f'Failed to update key "{key}" with value "{value}" in config file!')
+        log.log('DEBUG', f'Failed to update key "{key}" with value "{value}" in config file!')
     return done
 
 #===================#
@@ -265,12 +289,12 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = No
         # Check that most recent file satisfies time constraints
         if 0 <= shifted_time < time_past:
             file = files[curr_ind]
-            send_msg('DEBUG', f"Found most recent file '{file}' in {path}.")
+            log.log('DEBUG', f"Found most recent file '{file}' in {path}.")
             return file
         else:
             raise Exception("No files found within specified time range!")
     except Exception as e:
-        send_msg('DEBUG', f"Failed to fetch most recent file in '{path}' with identifier '{file_identifier}' with Exception:\n{e}")
+        log.log('DEBUG', f"Failed to fetch most recent file in '{path}' with identifier '{file_identifier}' with Exception:\n{e}")
         return Path("invalid/path")
 
 def get_timestamp(path: str) -> int:
@@ -295,7 +319,7 @@ def get_timestamp(path: str) -> int:
                 pass
         raise ValueError(f'The file {file} has no valid timestamp.') # Raise ValueError if timestamp could not be determined
     except Exception as e: # If exception is thrown, return -1 to represent invalid path
-        send_msg('ERROR', 'Failed to determine timestamp of file %s with Exception %s', path, e)
+        log.log('ERROR', 'Failed to determine timestamp of file %s with Exception %s', path, e)
         return -1
 
 def get_creation_time(file_path):
@@ -311,10 +335,10 @@ def get_creation_time(file_path):
         file = Path(file_path)
         # Get creation time of file
         creation_time = file.stat().st_ctime
-        send_msg('DEBUG', f"Creation time of file '{file_path}' is {creation_time}.")
+        log.log('DEBUG', f"Creation time of file '{file_path}' is {creation_time}.")
         return creation_time
     except:
-        send_msg('DEBUG', f"Error getting creation time of file: '{file_path}'")
+        log.log('DEBUG', f"Error getting creation time of file: '{file_path}'")
         return -1
 
 def get_array(src_path, dest_path, action = 'cp', load = True, timestamp = False):
@@ -343,15 +367,26 @@ def get_array(src_path, dest_path, action = 'cp', load = True, timestamp = False
             loaded_array = np.load(dest_path).tolist() if load else str(dest_path)
         except Exception as e:
             # Send error message if failed to copy or load array
-            send_msg('ERROR', f'Failed to copy/load array with error {e}!')
+            log.log('ERROR', f'Failed to copy/load array with error {e}!')
             loaded_array = None
         
-        send_msg('DEBUG', f"Copied array from '{src_path}' to '{dest_path}'.")
+        log.log('DEBUG', f"Copied array from '{src_path}' to '{dest_path}'.")
     else:
         # Send error message if specified path does not exist on the RFSoC board
-        send_msg('ERROR', f'Failed to locate array at path {src_path}!')
+        log.log('ERROR', f'Failed to locate array at path {src_path}!')
         loaded_array = None
     return loaded_array
+
+def increment_file(dir_path, file_prefix, file_suffix, overwrite=False):
+    if overwrite:
+        return Path(dir_path) / f'{file_prefix[:-1]}{file_suffix}', None
+    else:
+        file_count = 0
+        full_path = Path(dir_path) / f'{file_prefix}{file_count}{file_suffix}' 
+        while full_path.exists(): 
+            file_count += 1
+            full_path = Path(dir_path) / f'{file_prefix}{file_count}{file_suffix}'
+        return full_path, file_count
 
 def combine_npy(files, num, com = None, fname_out = None):
     files = list(files)
@@ -371,154 +406,6 @@ def combine_npy(files, num, com = None, fname_out = None):
     
     return fnames
 
-#======================#
-# Logging IO Functions #
-#======================#
-
-def setup_logging(log_path, file_level, terminal_level, name = __name__):
-    '''
-    Setup logger and logger config.
-
-    Args:
-        log_path  (str) : File path of the logger including log name
-        level     (str) : Level at which to log (messages below this level are ignored)
-        name      (str) : Name of the logger
-    '''
-
-    def _addLevel(name, num):
-        '''
-        Adds a custom logging level to the logger.
-
-        Parameters:
-            num  (int): Logging level
-            name (str): Name of logging level
-        '''
-        
-        # Convert passed name to lowercase 
-        method_name = name.lower()
-
-        if not hasattr(logging, name):
-            logging.addLevelName(num, name) # Add new logging level to logger
-            setattr(logging, name, num)     # Add new attribute to the logging class corresponding to custom logging level
-
-            # Add new methods to relevant loggging classes
-            setattr(logging.getLoggerClass(), method_name, partialmethod(logging.getLoggerClass().log, num)) 
-            setattr(logging, method_name, partial(logging.log, num))
-
-    # Get logger
-    logger = logging.getLogger(name)
-
-    # Add custom logging levels
-    # -------------------------
-    custom_levels = [['HEADER', int((logging.INFO + logging.WARNING)/2)],
-                     ['FOOTER', int((logging.INFO + logging.WARNING)/2)],
-                     ['PCS', int(logging.DEBUG - 1)],
-                     ['TIMER', int(logging.INFO)]]
-    
-    for lvl in custom_levels: _addLevel(*lvl)
-
-    # Setup logger config
-    # -------------------
-
-    # Setup logging to file
-    if not any(isinstance(handler, logging.FileHandler) for handler in logger.handlers):
-        file_log = logging.FileHandler(log_path, mode='a')
-
-        file_level = logging.getLevelName(file_level)
-        file_log.setLevel(file_level)
-
-        file_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
-        file_log.setFormatter(file_format)
-        logger.addHandler(file_log)
-
-    # Setup logging to terminal
-    if not any(isinstance(handler, tqdm_logging._TqdmLoggingHandler) for handler in logger.handlers):
-        terminal_log = tqdm_logging._TqdmLoggingHandler()
-
-        terminal_level = logging.getLevelName(terminal_level)
-        terminal_log.setLevel(terminal_level)
-
-        terminal_format = logging.Formatter(fmt='%(asctime)s | %(message)s', datefmt="%m/%d/%Y %I:%M:%S %p")
-        terminal_log.setFormatter(terminal_format)
-        logger.addHandler(terminal_log)
-        
-    # Set logger level and add handlers
-    logger.setLevel(min(file_level, terminal_level)) # Set logger level to the minimum of file and terminal levels
-
-    # Test logging/confirm successful logger setup
-    send_msg('DEBUG', "Successfully initialized logger: %s", name, name = name)
-
-def send_msg(level: str, msg: str, *args, name: str = __name__) -> None:
-    '''
-    Log message and print message to terminal. 
-
-    Args:
-        level (str) : Level of message at which to log (One of: 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
-        msg   (str) : Message to log
-        *args: Additional arguments to the ``logger.log`` method for message formatting
-
-        name  (str, optional) : Name of logger
-    '''
-    # Get logger
-    logger = logging.getLogger(name)
-
-    # Try logging message
-    # -------------------
-    try:
-        log_level = logging.getLevelName(level)
-        style = Style()
-
-        msg = f'{style.log_begin(level, getattr(style, level))} {msg}'
-        logger.log(log_level, msg, *args) if not len(args) == 0 else logger.log(log_level, msg)
-    except Exception as e:
-        # Log error message
-        logger.log(logging.ERROR, 'Failed to log message %s with error %s!', msg, e)
-
-def wait(t_sec: float, desc: str = "") -> None:
-    '''
-    Wait for ``t_sec`` seconds with a progress bar
-
-    Parameters:
-        t_sec (int) : Number of seconds to wait
-        desc (str, optional): Description to add to progress bar. Defaults to ""
-    '''    
-
-    start_time = time.time()
-    time_diff = 0
-
-    with tqdm(total=t_sec, colour='BLUE', desc = f"{Style().log_begin('WAIT', Style.WAIT)} {desc}") as pbar:
-        while time_diff < t_sec:
-            pbar.update(int(time_diff - pbar.n))
-            time.sleep(0.1)
-            time_diff = time.time() - start_time
-        pbar.update(t_sec - pbar.n)
-
-def header(func):
-    '''
-    Decorator for wrapping rfsoc_daq methods. Provides error handling and logs HEADER and FOOTER messages.
-
-    Parameters:
-        func (func): Function to decorate    
-    '''
-    @wraps(func) # Help calls on func will print help message of func instead of help message of header
-    def _wrapper(self, *args, **kwargs):
-        name = func.__name__ # Get method name
-        fmt = Style().func_name(name) # Add style to function name
-
-        # Try to execute func
-        # -------------------
-        try:
-            send_msg('HEADER', "Executing %s...", fmt)
-            rtn = func(self, *args, **kwargs)
-            send_msg('FOOTER', "%s executed successfully!", fmt)
-            return rtn
-        except Exception as e:
-            import traceback 
-            # Print error traceback if func failed to execute and exit out of program
-            send_msg('CRITICAL', "TERMINATING PROGRAM -- %s failed to execute with error:\n%s", fmt, traceback.format_exc())
-            sys.exit()
-    return _wrapper
-
 #=====================#
 # Remote IO Functions #
 #=====================#
@@ -536,7 +423,7 @@ def get_connection(ip, ssh_key):
 
     # Get Fabric Connection to RFSoC board
     connect = Connection(f'xilinx@{ip}', connect_kwargs = {'key_filename': ssh_key})
-    send_msg('DEBUG', f'Created Fabric Connection to {ip}.')
+    log.log('DEBUG', f'Created Fabric Connection to {ip}.')
     return connect
 
 #@function_timer
@@ -581,13 +468,13 @@ def get_array_board(c, ip, ssh_key, remote_path, local_path, load = True, timest
             loaded_array = np.load(local_path).tolist() if load else str(local_path)
         except Exception as e:
             # Send error message if failed to copy or load array
-            send_msg('ERROR', f'Failed to copy/load array with error {e}!')
+            log.log('ERROR', f'Failed to copy/load array with error {e}!')
             loaded_array = None
         
-        send_msg('DEBUG', f"Copied array from '{remote_path}' to '{local_path}'.")
+        log.log('DEBUG', f"Copied array from '{remote_path}' to '{local_path}'.")
     else:
         # Send error message if specified path does not exist on the RFSoC board
-        send_msg('ERROR', f'Failed to locate array at path {remote_path}!')
+        log.log('ERROR', f'Failed to locate array at path {remote_path}!')
         loaded_array = None
     return loaded_array
 
@@ -613,10 +500,10 @@ def save_array_board(ip, ssh_key, path, saved_array, tmp_dir):
         result = subprocess.run(cmd, check=True)
     except Exception as e:
         # Send error message if failed to copy or load array
-        send_msg('ERROR', f'Failed to copy/load array with error {e}!')
+        log.log('ERROR', f'Failed to copy/load array with error {e}!')
         result = None
 
-    send_msg('DEBUG', f"Saved array to '{path}'.")
+    log.log('DEBUG', f"Saved array to '{path}'.")
     return result
 
 #@function_timer
@@ -644,11 +531,11 @@ def get_most_recent_file_board(c: Connection, dir: str, file_identifier: str = "
     try:
         file = c.run(cmd, hide = 'out').stdout
         file = file.rstrip('\r\n') # Remove trailing characters from str
-        send_msg('DEBUG', f"Found most recent file '{file}' in {dir}.")
+        log.log('DEBUG', f"Found most recent file '{file}' in {dir}.")
         return file
     except:
         # Send warning message if failed to fetch most recent file
-        send_msg('WARNING', f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}'")
+        log.log('WARNING', f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}'")
         return "invalid/path"
 
 def path_exists(c: Connection, path: str) -> bool:

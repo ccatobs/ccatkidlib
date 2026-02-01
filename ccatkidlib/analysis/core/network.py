@@ -7,15 +7,17 @@ from collections.abc import Iterable
 from pathlib import Path
 from tqdm import tqdm
 
+from functools import cached_property
+
 import ccatkidlib
-import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.io as io
+import ccatkidlib.log as log
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.viz.viz_utils as viz_utils
 
 from ccatkidlib.analysis.core.vna import VNA
 from ccatkidlib.analysis.core.target import Target
-
 from ccatkidlib.analysis.core.detector import Detector
 
 class Network:
@@ -24,7 +26,7 @@ class Network:
     '''
 
     def __init__(self, com_to: str,
-                 analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
+                 cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
                  dets: int | list[int] = -1,
                  noise_tones: int | list[int] | None = None,
                  cable_delay: float | None = None,
@@ -32,6 +34,8 @@ class Network:
                  sess_ids: str | list[str] | None  = None,
                  include_streams: bool = True,
                  include_targs:   bool = False,
+                 analysis_cfg: dict | None = None,
+                 viz_cfg: dict | None = None,
                  **kwargs):
         ''' Initialize Network object by creating Detector objects and loading them into a Polars DataFrame with the specified data columns
 
@@ -62,23 +66,20 @@ class Network:
         bid, drid = com_to.split('.')
         network_dir = f'B{bid}D{drid}'
 
-        self.analysis_cfg, self.viz_cfg = rfsoc_io.load_config(analysis_cfg)
-
-        self.save_fig = self.viz_cfg['save']['save_fig']
-        self.overwrite = self.viz_cfg['save']['overwrite']
-        self.save_fmt = self.viz_cfg['save']['save_fmt']
-        self.figs_per_file = self.viz_cfg['save']['figs_per_file']
+        self.analysis_cfg, self.viz_cfg = io.load_config(cfg_path)
+        if analysis_cfg is not None: self.analysis_cfg = analysis_cfg
+        if viz_cfg is not None: self.viz_cfg = viz_cfg
 
         self.root_dir = self.analysis_cfg['file_paths']['root_data_dir']
         if not self.root_dir[-1] == '/': self.root_dir += '/'
         if not isinstance(detectors, Iterable) or len(detectors) == 0:
             if not sess_ids:
                 error = 'Must either provide a list of Detector objects or specify session ID(s) of the data to load.'
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise RuntimeError(error)
             elif not (include_streams or include_targs):
                 error = 'Must include target sweeps or timestreams (or both).'
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise RuntimeError(error)
 
             data_dir = '**'
@@ -108,13 +109,13 @@ class Network:
             detector_types = []
             detector_timestamps = []
             if include_targs:
-                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, self.targs, analysis_cfg, dets, noise_tones, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, self.targs, self.analysis_cfg, dets, noise_tones, cable_delay)
                 detectors += det_objs
                 detector_types += det_types
                 detector_timestamps += det_timestamps
 
             if include_streams:
-                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, self.streams, analysis_cfg, dets, noise_tones, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, self.streams, self.analysis_cfg, dets, noise_tones, cable_delay)
                 detectors += det_objs
                 detector_types += det_types
                 detector_timestamps += det_timestamps
@@ -122,7 +123,7 @@ class Network:
             # Ensure that all objects in the detectors list are the correct type
             if any([not isinstance(detector, Detector) for detector in detectors]):
                 error = 'All detectors must be of type ccatkidlib.analysis.core.detector.Detector.'
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise ValueError(error)
             
             detector_types = ['Timestream']*len(detectors)
@@ -134,11 +135,52 @@ class Network:
 
         # Create directory for saving figures
         self.timestamp = '_'.join(sess_ids)
-        save_dir = Path(detectors[0].save_dir).parent
-        dir_name = f'{'stream' if include_streams else 'targ'}_network_{self.timestamp}'
-        self.save_dir = save_dir / dir_name
-        rfsoc_io.create_dir(self.save_dir)
+
+        # Setup logging
+        # -------------
+        targ = self.det_dict[self.data['detector'][0]].targ
+        log_dir = io.add_dir('log', 
+                             str(targ.data_path[0]), 
+                             save_root = self.analysis_cfg['io']['file_logging']['logging_root_dir'],
+                             data_root = targ.root_dir,
+                             sub_dirs=[""])
+        log.setup_logging(Path(log_dir) / self.analysis_cfg['io']['file_logging']['logging_fname'], 
+                    self.analysis_cfg['io']['file_logging']['network_level'], 
+                    self.analysis_cfg['io']['terminal_logging']['network_level'],
+                    name='analysis.network')
         
+
+    # ------------------------ #
+    # Lazily Loaded Attributes #
+    # ------------------------ #
+
+    @cached_property
+    def fig_dir(self) -> str:
+        '''
+        Directory where figures should be saved. Create if it does not already exist.
+        '''
+        targ = self.det_dict[self.data['detector'][0]].targ
+        return io.add_dir('fig', 
+                          str(targ.data_path[0]), 
+                          save_root = self.viz_cfg['save']['fig_root_dir'],
+                          data_root = targ.root_dir,
+                          sub_dirs = ['network'],
+                          timestamp = str(self.timestamp))
+
+    @cached_property
+    def pickle_dir(self) -> str:
+        '''
+        Directory where pickle files should be saved. Create if it does not already exist.
+        '''
+        targ = self.det_dict[self.data['detector'][0]].targ
+        pickle_dir = io.add_dir('pickle', 
+                                str(targ.data_path[0]), 
+                                save_root = self.analysis_cfg['io']['pickle']['pickle_root_dir'],
+                                data_root = targ.root_dir,
+                                sub_dirs = ['network'],
+                                timestamp = str(self.timestamp))
+        return pickle_dir
+
     def add_columns(self, data_cols: str | list[str], max_workers: int = 1, ex=None) -> pl.dataframe.frame.DataFrame:
         ''' Add columns to the Network.data DataFrame using fields from the ext_cfg or drone_cfg
 
@@ -168,13 +210,6 @@ class Network:
         self.data = pl.concat([self.data, data_df], how='horizontal')
         return self.data
 
-    def match_detectors(self, ):
-        ''' Match detectors across different target sweeps using nearest frequency neighbor to 
-        '''
-
-
-        return
-
     def combine_properties(self, data_cols = []):
         properties_df = None
         for i, (det, *cols) in enumerate(self.data.select(['detector'] + data_cols).iter_rows()):
@@ -183,7 +218,7 @@ class Network:
             try:
                 properties_df = df if properties_df is None else pl.concat([properties_df, df], how='diagonal')
             except Exception as e:
-                rfsoc_io.send_msg('WARNING', 'Failed to combine properties DataFrame with error %s', e)
+                log.log('WARNING', 'Failed to combine properties DataFrame with error %s', e)
         return properties_df
 
     #==================#
@@ -213,7 +248,7 @@ class Network:
         # Validate data_type
         if not data_type in ['vna', 'targ', 'stream', 'detector']:
             error = "data_type must be one of: 'vna', 'targ', 'stream', or 'detector'"
-            rfsoc_io.send_msg('CRITICAL', error)
+            log.log('CRITICAL', error)
             raise ValueError(error)
         
         # Parse func
@@ -222,7 +257,7 @@ class Network:
             func_parts.append('plot')
             func = '_'.join(func_parts)
 
-        all_cols, by_cols = ['detector'] + data_cols, data_cols
+        all_cols, by_cols = ['detector'] + data_cols, data_cols.copy()
         kwargs['return_df'], kwargs['return_fig'] = True, False
         plot_df, bys = None, [None]*self.data.height
         for i, (det, *cols) in enumerate(self.data.select(all_cols).sort(all_cols).iter_rows()):
@@ -237,7 +272,7 @@ class Network:
         
         if not len(set(bys)) == 1: 
             error = "Inconsistent by columns specified"
-            rfsoc_io.send_msg('CRITICAL', error)
+            log.log('CRITICAL', error)
             raise ValueError(error)
         if bys[0] is not None: by_cols += [bys[0]]
         kwargs['return_df'], kwargs['return_fig'] = False, True
@@ -253,7 +288,8 @@ class Network:
         # Save plot in background
         # -----------------------
         prefix = kwargs['y_prefix'] if 'y_prefix' in kwargs else kwargs.get('prefix', '')
-        if save_name is None: save_name = f'network_{data_type}{'_' if prefix else ''}{prefix}_{func}'
+        if save_name is None: save_name = f"network_{data_type}{'_' if prefix else ''}{prefix}_{func}"
+        if len(by_cols) > 1: plot_args[2] = data_cols # Overlay all data dimensions when saving figures
         viz_utils.save_fig(self, Network._plot, plot_df, plot_opts, *plot_args, save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
 
         if return_df:
@@ -297,10 +333,10 @@ class Network:
             targ = _create_sweep(targ_path, self.targs, Target, dets)
             
             detector = Detector(com_to=com_to, analysis_cfg=analysis_cfg, dets=dets, noise_tones=noise_tones, cable_delay=cable_delay, targ=targ, vna=vna, stream_path=stream_path)
-            
+
             detectors[i] = detector
             detector_types[i] = det_type
-            detector_timestamps[i] = rfsoc_io.get_timestamp(data_path)
+            detector_timestamps[i] = io.get_timestamp(data_path)
         return detectors, detector_types, detector_timestamps
     
     @staticmethod

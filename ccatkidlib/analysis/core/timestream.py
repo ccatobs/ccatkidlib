@@ -26,7 +26,7 @@ from holoviews import opts
 from holoviews.operation.datashader import datashade, dynspread
 
 # Local Imports
-import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.io as log
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.viz.viz_utils as viz_utils
 import ccatkidlib.analysis.utils.pair as pair
@@ -50,7 +50,7 @@ class Timestream(Data):
         sampling_freq (float): Sampling frequency of timestream data in Hz
     '''
 
-    def __init__(self, com_to, tones: int | list[int] = -1, noise_tones: int | list[int] | None = None, start = 0, end = -1, analysis_cfg = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to, tones: int | list[int] = -1, noise_tones: int | list[int] | None = None, start = 0, end = -1, cfg_path = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         '''
         Constructor for Timestream. 
 
@@ -62,10 +62,7 @@ class Timestream(Data):
             analysis_cfg (str): File path of analysis configuration file. Defaults to analysis configuration file in *ccatkidlib/analysis* directory.
         '''
         kwargs['data_type'] = 'timestream'
-        super().__init__(com_to, analysis_cfg, **kwargs)
-
-        self.save_dir = Path(self.save_dir) / f'timestream_{self.timestamp}'
-        rfsoc_io.create_dir(self.save_dir)
+        super().__init__(com_to, cfg_path, **kwargs)
 
         # Define list of tones
         # --------------------
@@ -78,7 +75,7 @@ class Timestream(Data):
             self.tones = tones
         else:
             error = f"Invalid type {type(tones)} for argument 'tones'. Should be int, list[int], or None."
-            rfsoc_io.send_msg('CRITICAL', error)
+            log.log('CRITICAL', error)
             raise ValueError(error)
 
         # Define list of noise tones
@@ -88,7 +85,7 @@ class Timestream(Data):
                 noise_tones = [noise_tones]
             elif not isinstance(noise_tones, Iterable) or not all([isinstance(noise_tone, int) for noise_tone in noise_tones]):
                 noise_tones = None
-                rfsoc_io.send_msg('CRITICAL', f"Invalid type {type(noise_tones)} for argument 'noise_tones'. Should be int, list[int], or None.")
+                log.log('CRITICAL', f"Invalid type {type(noise_tones)} for argument 'noise_tones'. Should be int, list[int], or None.")
         else:
             noise_tones = utils.dict_get(self.drone_cfg, ['tones', 'noise_tones'])
         self.noise_tones = noise_tones
@@ -101,15 +98,16 @@ class Timestream(Data):
         # End time should be larger than start time
         if not (self.end - self.start > 0): 
             error = "End time must be greater than start time!"
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
 
         # Create packet count attribute
         # -----------------------------
         self.packet_counts = []
 
-        self._properties = {f'det_{tone:0{self.padding}d}': {} for tone in self.tones}
-        self._properties_df = pl.DataFrame({'det': self.tones})
+        self._properties = {}
+        self._properties_df = None
+        
         self.spline_dict = {'None': None}
 
     #==================#
@@ -192,7 +190,7 @@ class Timestream(Data):
             kwargs['groupby'] = by
         else:
             error = 'Invalid string specified for argument "grouping"! Must be either "by" or "groupby".'
-            rfsoc_io.send_msg('CRITICAL', error)
+            log.log('CRITICAL', error)
             raise ValueError(error)
 
         # Create opts for plots
@@ -313,7 +311,7 @@ class Timestream(Data):
             plot_opts = opts.Curve(projection='polar', show_grid=True)
         else:
             error = 'Invalid projection specified, must be either "IQ" or "polar".'
-            rfsoc_io.send_msg('CRITICAL', error)
+            log.log('CRITICAL', error)
             raise ValueError(error)
         save_name = f"timestream_{prefix}{'_' if prefix else ''}{projection}"
 
@@ -406,7 +404,7 @@ class Timestream(Data):
                 dt, unit = np.array(ts)*1e5, 'us'
             else:
                 error = f"Invalid timestream file type: '{ftype}'!"
-                rfsoc_io.send_msg('ERROR', error)
+                log.log('ERROR', error)
                 raise ValueError(error)
             
             ts, Is, Qs = np.array(ts), np.array(Is, dtype=np.float64), np.array(Qs, dtype=np.float64)
@@ -417,17 +415,25 @@ class Timestream(Data):
                 data[f'Q_{t:0{self.padding}d}'] = Q
             self._data = pl.DataFrame(data)
             self._data = self._data.with_columns(pl.col('dt').cast(pl.Datetime(unit)))
+        elif isinstance(self._data, pl.LazyFrame): 
+            self._data = self._data.collect()
         return self._data
 
     @data.setter
     def data(self, value: pl.lazyframe.frame.LazyFrame | None): 
-        if value is None or isinstance(value, pl.dataframe.frame.DataFrame): 
+        if value is None or isinstance(value, (pl.DataFrame, pl.LazyFrame)): 
             self._data = value
         else:
-            rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
+            log.log('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
 
     @property
     def properties(self):
+        if isinstance(self._properties_df, pl.LazyFrame): 
+            self._properties_df = self._properties_df.collect()
+        elif self._properties_df is None:
+            self._properties_df = self.comb.with_columns(pl.lit(f'{self.bid}.{self.drid}').alias('com_to'),
+                                                         pl.lit(self.timestamp).alias('timestamp'))
+
         # Reshape properties dictionary to have resonator properties as primary keys
         new_dict = {'det': []}
 
@@ -454,7 +460,7 @@ class Timestream(Data):
     
     @properties.setter
     def properties(self, value):
-        if isinstance(value, pl.DataFrame):
+        if isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._properties_df = value
 
     @cached_property
@@ -557,7 +563,7 @@ class Timestream(Data):
 
                     for tone, col, psd_col in zip(tones, cols, psd_cols):
                         if isinstance(psd_col, Exception):
-                            rfsoc_io.send_msg('WARNING', 'PSD calculation for tone %s failed with exception: %s', tone, psd_col)
+                            log.log('WARNING', 'PSD calculation for tone %s failed with exception: %s', tone, psd_col)
                             psd_f, psd = np.full(df.len(), np.nan), np.full(df.len(), np.nan)
                         else:
                             psd_f, psd = psd_col
@@ -569,7 +575,7 @@ class Timestream(Data):
             sampling_freq, height, window, nperseg, detrend, average, max_workers, ex = np.array(args, dtype=object)
             if tones is not None: max_workers, ex = max_workers[0], ex[0]
         else:
-            rfsoc_io.send_msg('ERROR', 'sampling_freq, window, nperseg, detrend, average, and max_workers are required arguments')
+            log.log('ERROR', 'sampling_freq, window, nperseg, detrend, average, and max_workers are required arguments')
 
         calc_col = [f'{col_name[-1]}_{col_name[0]}_{tone:0{padding}d}' for tone in tones]
         return_col, return_type = [f'{col_name[-2]}_{col_name[0]}', f'{col_name[-1]}_{col_name[0]}'], [pl.Float64, pl.Float64]
@@ -771,6 +777,29 @@ class Timestream(Data):
         new_data._properties_df = pl.concat([left_prop, right_prop], how='diagonal').with_columns(pl.Series('det', new_data.tones))
         return new_data
 
+    # =============================== #
+    # Define Custom Pickling Behavior #
+    # =============================== #
+
+    def __getstate__(self):
+            state = super().__getstate__()
+            if not self.analysis_cfg['io']['pickle']['pickle_dataframes'] and state.get('_data', True):
+                properties = self.properties
+                del state['_properties_df']
+
+                file_name = 'properties' if (pickle_count := state['pickle_count']) is None else f'properties_{pickle_count}'
+                save_path = Path(self.pickle_dir) / 'dataframe' / f'{file_name}.parquet'
+                
+                properties.write_parquet(save_path)
+            return state
+        
+    def __setstate__(self, state):
+        super().__setstate__(state)
+
+        if not self.analysis_cfg['io']['pickle']['pickle_dataframes'] and not isinstance(prop_df := getattr(self, '_properties_df', True), pl.DataFrame) and prop_df:
+            file_name = 'properties' if (pickle_count := self.pickle_count) is None else f'properties_{pickle_count}'
+            self.properties = pl.scan_parquet(Path(self.pickle_dir) / 'dataframe' / f'{file_name}.parquet')
+
 #====================#
 # Analysis Functions #
 #====================#
@@ -786,3 +815,4 @@ def _psd(data, height, fs, window='hann', nperseg=None, detrend=False, average='
     except Exception as e:
         psd_f, psd = np.zeros(height), np.zeros(height)
     return psd_f, psd
+

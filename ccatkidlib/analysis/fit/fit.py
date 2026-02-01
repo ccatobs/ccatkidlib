@@ -6,6 +6,9 @@ from scipy.optimize import least_squares, root_scalar
 from scipy.interpolate import make_interp_spline, PchipInterpolator
 from numba import njit, guvectorize, float64, prange
 
+import warnings
+warnings.filterwarnings('ignore')
+
 #=================#
 # General Fitting #
 #=================#

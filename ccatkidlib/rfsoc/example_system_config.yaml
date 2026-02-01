@@ -120,6 +120,7 @@ io:
   file_level: 'DEBUG'                                  # * File logging level
   terminal_level: 'INFO'                               # * Terminal logging level 
   logging_fname: "ccatkidlib_{{measurement_name}}.log" # * Log file name
+  max_size: 100 # Max log file size in mega bytes
   influx_output: True                                  # * Whether to push measurement info to InfluxDB through the queen_agent
   save_data: True                                      # * Whether to save data
   save_config_copy: True                               # * Whether to save copy of config (Recommended to use True)

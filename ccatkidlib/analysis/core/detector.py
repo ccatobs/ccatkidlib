@@ -25,14 +25,15 @@ from functools import cached_property
 
 # local imports
 import ccatkidlib
-import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.io as io
+import ccatkidlib.log as log
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.fit.fit as ccat_fit
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.viz.viz_utils as viz_utils
 
-from ccatkidlib.rfsoc_io import header
+from ccatkidlib.log import header
 from ccatkidlib.analysis.core.data import Data
 from ccatkidlib.analysis.core.timestream import Timestream
 from ccatkidlib.analysis.core.vna import VNA
@@ -62,15 +63,17 @@ class Detector:
         properties  (pl.DataFrame): Polars dataframe with detector properties
     '''
 
-    def __init__(self, 
+    def __init__(self,
                  com_to: str,
-                 analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
+                 cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
                  dets: int | list[int] = -1,
                  noise_tones: int | list[int] | None = None,
                  cable_delay: float | None = None,
                  stream: Timestream | None = None, stream_path: str | pathlib.PosixPath | list[str] | list[pathlib.PosixPath] | None = None, stream_timestamp: int | str | None = None,
                  targ: Target | None = None, targ_path: str | pathlib.PosixPath | None = None, targ_timestamp: int | str | None = None,
                  vna: VNA | None = None, vna_path: str | pathlib.PosixPath | None = None, vna_timestamp: int | str | None = None,
+                 analysis_cfg: dict | None = None,
+                 viz_cfg: dict | None = None,
                  **kwargs):
         '''
         Constructor for Detector. Creates *ccatkidlib* data objects (``VNA``, ``Target``, ``Timsetream``)
@@ -78,11 +81,11 @@ class Detector:
         Note:
             - A Detector object can be initialized without a ``Timestream`` object but must **always** have a ``Target`` object.
             - If only the information to load a timestream is provided, an attempt will be made to find the target sweep file corresponding to the timestream
-        
+
         Args:
             com_to (str): Drone that took the data. In form *'\<board>.\<drone>'*
             analysis_cfg (str, optional): Path to analysis configuration file. Defaults to analysis configuration file in *ccatkidlib/ccatkidlib/analysis*
-            dets (int | list[int], optional): Which detectors to load; -1 to load all detectors. Defaults to -1 
+            dets (int | list[int], optional): Which detectors to load; -1 to load all detectors. Defaults to -1
             noise_tones (int | list[int] | None, optional): Indicies of noise tones (tones not placed on detectors). Defaults to *None*
             cable_delay (float | None, optional): Cable delay of full network. Defaults to *None*
 
@@ -103,15 +106,19 @@ class Detector:
             data_dir (str, optional): Directory where data is stored
             date (str, optional): Date data was taken
             sess_id (str, optional): ccatkidlib session ID of data
-        
+
         '''
+
+        self.analysis_cfg, self.viz_cfg = io.load_config(cfg_path)
+        if analysis_cfg is not None: self.analysis_cfg = analysis_cfg
+        if viz_cfg is not None: self.viz_cfg = viz_cfg
 
         # Create Timestream, Target, and VNA data objects based provided arguments
         # ------------------------------------------------------------------------
-        if not isinstance(stream, Timestream): stream = Detector._load_data(Timestream, com_to, analysis_cfg, dets, noise_tones, stream_timestamp, stream_path, **kwargs)
-        if not isinstance(targ, Target): targ = Detector._load_data(Target, com_to, analysis_cfg, dets, noise_tones, targ_timestamp, targ_path, **kwargs)
-        if not isinstance(vna, VNA): vna = Detector._load_data(VNA, com_to, analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
-   
+        if not isinstance(stream, Timestream): stream = Detector._load_data(Timestream, com_to, self.analysis_cfg, dets, noise_tones, stream_timestamp, stream_path, **kwargs)
+        if not isinstance(targ, Target): targ = Detector._load_data(Target, com_to, self.analysis_cfg, dets, noise_tones, targ_timestamp, targ_path, **kwargs)
+        if not isinstance(vna, VNA): vna = Detector._load_data(VNA, com_to, self.analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
+
         # Must have a sweep to do meaningful data analysis
         # ------------------------------------------------
         if not isinstance(targ, Target):
@@ -120,55 +127,46 @@ class Detector:
                 vna_path, targ_path = pair.get_sweep(stream.data_path[0], **kwargs)
 
                 # Load found sweep
-                if  Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
-                if Path(targ_path).exists(): targ = Detector._load_data(Target, com_to, analysis_cfg, dets, noise_tones, targ_timestamp, targ_path, **kwargs)
+                if  Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, self.analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
+                if Path(targ_path).exists(): targ = Detector._load_data(Target, com_to, self.analysis_cfg, dets, noise_tones, targ_timestamp, targ_path, **kwargs)
 
                 if not isinstance(targ, Target): # and not isinstance(vna, VNA):
                     error = 'Failed to find target sweep associated with timestream. If there is no target sweep, create a Timestream object instead.'
-                    rfsoc_io.send_msg('CRITICAL', error)
+                    log.log('CRITICAL', error)
                     raise RuntimeError(error)
 
             else: # Error of no sweep or timestream provided
                 error = 'A timestream, target sweep or both need to be specified!'
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise RuntimeError(error)
         else:
             self.tones = targ.tones
-            if vna is None: 
+            if vna is None:
                 vna_path, _ = pair.get_sweep(targ.data_path[0], **kwargs)
-                if Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
+                if Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, self.analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
 
         self.bid, self.drid = com_to.split('.')
-        self.analysis_cfg, self.viz_cfg = rfsoc_io.load_config(analysis_cfg)
-        
-        self.save_fig = self.viz_cfg['save']['save_fig']
-        self.overwrite = self.viz_cfg['save']['overwrite']
-        self.save_fmt = self.viz_cfg['save']['save_fmt']
-        self.figs_per_file = self.viz_cfg['save']['figs_per_file']
 
         self.stream = stream
         self.targ = targ
         self.vna = vna
 
+        self.timestamp = self.stream.timestamp if self.stream is not None else self.targ.timestamp
+
         # Create internal attributes corresponding to lazily loaded attributes
         # --------------------------------------------------------------------
         self._cable_delay = cable_delay
-        self._properties_df = self.targ.comb
+        self._properties_df = None
 
-        # Create directory for saving figures
-        # -----------------------------------
-        if self.stream is not None:
-            self.timestamp = self.stream.timestamp
-            name = 'stream_detector'
-        else:
-            self.timestamp = self.targ.timestamp
-            name = 'targ_detector'
-
-        self.timestamp = self.stream.timestamp if self.stream is not None else self.targ.timestamp
-        save_dir = Path(self.targ.save_dir).parent
-        dir_name = f'{name}_{self.timestamp}'
-        self.save_dir = save_dir / dir_name
-        rfsoc_io.create_dir(self.save_dir)
+        log_dir = io.add_dir('log', 
+                             str(self.targ.data_path[0]), 
+                             save_root = self.analysis_cfg['io']['file_logging']['logging_root_dir'],
+                             data_root = self.targ.root_dir,
+                             sub_dirs=[""])
+        log.setup_logging(Path(log_dir) / self.analysis_cfg['io']['file_logging']['logging_fname'], 
+                          self.analysis_cfg['io']['file_logging']['detector_level'], 
+                          self.analysis_cfg['io']['terminal_logging']['detector_level'],
+                          name='analysis.detector')
 
     #==========================#
     # Lazily Loaded Attributes #
@@ -177,26 +175,30 @@ class Detector:
     @property
     def properties(self) -> pl.DataFrame:
         '''
-        
+
         '''
         def _merge_properties(new_properties_df: pl.DataFrame) -> None:
             '''
             Merge two ``properties`` Polars DataFrames
-            
+
             Args:
                 new_properties_df (pl.DataFrame):
             '''
             shared_cols = (set(self._properties_df.columns) & set(new_properties_df.columns)) - {'det'}
             self._properties_df = ccat_df.coalesce_join(self._properties_df, new_properties_df, 'det', shared_cols)
-        
-        if self.targ._properties_df is not None: _merge_properties(self.targ.properties)
-        if self.stream is not None and self.stream._properties_df is not None: _merge_properties(self.stream.properties)
-        
+
+        if isinstance(self._properties_df, pl.LazyFrame): 
+            self._properties_df = self._properties_df.collect()
+        elif self._properties_df is None:
+            self._properties_df = self.targ.comb
+        if self.targ.properties is not None: _merge_properties(self.targ._properties_df)
+        if self.stream is not None and self.stream.properties is not None: _merge_properties(self.stream._properties_df)
+
         return self._properties_df
-    
+
     @properties.setter
     def properties(self, value):
-        if isinstance(value, pl.DataFrame):
+        if isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._properties_df = value
 
     @property
@@ -204,9 +206,9 @@ class Detector:
         self._cable_delay = self.vna.cable_delay if self._cable_delay is None and isinstance(self.vna, VNA) else self._cable_delay
         if not isinstance(self._cable_delay, Iterable):
             self._properties_df = self.properties.with_columns(pl.lit(self._cable_delay).alias('network_cable_delay'))
-            # Get cable delays for individual detectors using target sweep data. The target sweep cable delays tend to be too large so average with the overall network cable delay 
+            # Get cable delays for individual detectors using target sweep data. The target sweep cable delays tend to be too large so average with the overall network cable delay
             #self.targ._properties = {det: {'det_cable_delay': 0.4*delay + 0.6*self._cable_delay} for det, delay in self.targ.cable_delay.items()}
-            
+
             # Replace cable delays that are far from the overall network cable delay with the network cable delay
             #threshold = pl.lit(100) # TODO: Make this accessible
             #self._properties_df = (self.properties.lazy()#.with_columns(pl.when((pl.col('det_cable_delay') - self._cable_delay).abs() > threshold)
@@ -216,6 +218,34 @@ class Detector:
             #                                            .with_columns(pl.lit(self._cable_delay).alias('network_cable_delay'))
             #                                            .collect())
         return self._cable_delay
+
+    @cached_property
+    def fig_dir(self) -> str:
+        '''
+        Directory where figures should be saved. Create if it does not already exist.
+        '''
+
+        return io.add_dir('fig',
+                          str(self.targ.data_path[0]),
+                          save_root = self.viz_cfg['save']['fig_root_dir'],
+                          data_root = self.targ.root_dir,
+                          sub_dirs = ['detector'],
+                          timestamp = str(self.timestamp))
+
+    @cached_property
+    def pickle_dir(self) -> str:
+        '''
+        Directory where pickle files should be saved. Create if it does not already exist.
+        '''
+
+        pickle_dir =  io.add_dir('pickle',
+                                 str(self.targ.data_path[0]),
+                                 save_root = self.analysis_cfg['io']['pickle']['pickle_root_dir'],
+                                 data_root = self.targ.root_dir,
+                                 sub_dirs = ['detector'],
+                                 timestamp = str(self.timestamp))
+        io.create_dir(Path(pickle_dir) / 'dataframe')
+        return pickle_dir
 
     @cached_property
     def fit_dir(self):
@@ -228,7 +258,7 @@ class Detector:
     def get_properties(self,
                        col_name: str | list[str] = '.*',
                        include: int | list[int] | None = None,
-                       exclude: int | list[int] | None = None, 
+                       exclude: int | list[int] | None = None,
                        strict: bool = False):
         ''' Get the specified data columns and rows from the ``properties`` Polars DataFrame
 
@@ -237,20 +267,20 @@ class Detector:
             include (int | list[int] | None, optional): Defaults to *None*
             exclude (int | list[int] | None, optional): Defaults to *None*
             strict (bool, optional): Defaults to *False*
-        
+
         '''
         return ccat_df.get_properties(self, col_name = col_name, include=include, exclude=exclude, strict=strict)
 
     # Fitting
     # -------
-    def complex_fit(self, 
-                    nonlinear: bool = False, 
-                    asymm: bool = False, 
-                    fix_cable: bool = False, 
+    def complex_fit(self,
+                    nonlinear: bool = False,
+                    asymm: bool = False,
+                    fix_cable: bool = False,
                     fix_thetaQ: bool = False,
-                    include: int | list[int] | None = None, 
-                    exclude: int | list[int] | None = None, 
-                    recalc: bool = False, 
+                    include: int | list[int] | None = None,
+                    exclude: int | list[int] | None = None,
+                    recalc: bool = False,
                     max_workers: int = 1,
                     ex = None) -> pl.DataFrame:
         '''
@@ -264,14 +294,14 @@ class Detector:
         Returns:
             return (pl.DataFrame): Polars DataFrame with fit I and Q data
         '''
-        
+
         if not self.fit_dir in sys.path: sys.path.append(self.fit_dir)
         import resonator_model_v3
         globals()['resonator_model_v3'] = resonator_model_v3
-        
+
         col_name = ['f', 'I', 'Q', 'complex_fit']
-        
-        self.properties # Load properties 
+
+        self.properties # Load properties
         args = [[self, nonlinear, asymm, fix_cable, fix_thetaQ, ccat_mp.check_max_workers(max_workers), ex]]
         self.targ.transform(Detector.calc_complex_fit, *args, include=include, exclude=exclude, recalc = recalc, col_name = col_name, batch_size=len(self.tones))
         self.targ.data = self.targ._unnest('struct_' + col_name[-1])
@@ -281,27 +311,27 @@ class Detector:
                                           .with_columns(((pl.col(f'{col_name[-1]}_Q_e_real')/(pl.col(f'{col_name[-1]}_Q_e_real')**2 + pl.col(f'{col_name[-1]}_Q_e_imag')**2))**-1).alias(f'{col_name[-1]}_Q_c')) # Calculate Q_c
                                           .with_columns([((1/pl.col(f'{col_name[-1]}_Q') - 1/pl.col(f'{col_name[-1]}_Q_c'))**-1).alias(f'{col_name[-1]}_Q_i'), # Calculate Q_i
                                                          (-1e9*pl.col(f'{col_name[-1]}_delay')).alias(f'{col_name[-1]}_delay_ns')]) # Convert cable delay to nanoseconds
-                                          .collect()) 
+                                          .collect())
 
         return self.targ.get_data(col_name=[f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}'], include=include, exclude=exclude, strict=True)
 
-    def phase_fit(self, 
-                  prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 
-                  circle_fit_col: str = 'circle_fit_unwind_rotate', 
-                  nonlinear: bool = False, 
-                  method: str = 'least_squares', 
+    def phase_fit(self,
+                  prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate',
+                  circle_fit_col: str = 'circle_fit_unwind_rotate',
+                  nonlinear: bool = False,
+                  method: str = 'least_squares',
                   params: lmfit.Parameters = None,
                   window: float = 1,
-                  include: int | list[int] | None = None, 
-                  exclude: int | list[int] | None = None, 
-                  recalc: bool = False, 
+                  include: int | list[int] | None = None,
+                  exclude: int | list[int] | None = None,
+                  recalc: bool = False,
                   max_workers: int = 1,
                   ex=None) -> pl.DataFrame:
-        ''' 
-        Fit target sweep using phase data (*arctan(Q/I)*)
-        
         '''
-        
+        Fit target sweep using phase data (*arctan(Q/I)*)
+
+        '''
+
         col_name = ['f', 'I', 'Q', 'phase', 'phase_fit']
 
         if isinstance(prefix, str): prefix = [prefix]
@@ -311,14 +341,14 @@ class Detector:
         if not isinstance(nonlinear, Iterable) or not len(nonlinear) == num_prefix: nonlinear = [nonlinear]*num_prefix
         if not isinstance(window, Iterable) or not len(window) == num_prefix: window = [window]*num_prefix
         if isinstance(circle_fit_col, str) or not len(circle_fit_col) == num_prefix: circle_fit_col = [circle_fit_col]*num_prefix
-        
+
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [col_name[0]] + [f"{pre}{'_' if pre else ''}{name}" for name in col_name[1:-1]] + [col_name[-1]]
-        
+
         radii = [self.get_properties(col_name = f'{col}_R', include=include, exclude=exclude, strict=True).to_numpy().T[1] for col in circle_fit_col]
         args = [[self, pre, radius, nonlin, method, param, win, ccat_mp.check_max_workers(max_workers), ex] for pre, radius, nonlin, param, win in zip(prefix, radii, nonlinear, params, window)]
-        self.targ.transform([Detector.calc_phase_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))        
+        self.targ.transform([Detector.calc_phase_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
 
         # Calculate Q_c, Q_i, and nonlinearity parameter 'a'
@@ -328,23 +358,23 @@ class Detector:
                                                              (pl.col(f'{col_name[-1]}_{pre}_Qr')*(pl.col(f'{circle}_center_mag') + pl.col(f'{col_name[-1]}_{pre}_R'))/(2*pl.col(f'{col_name[-1]}_{pre}_R'))).alias(f'{col_name[-1]}_{pre}_Q_c')])
                                               .with_columns(((1/pl.col(f'{col_name[-1]}_{pre}_Qr') - 1/pl.col(f'{col_name[-1]}_{pre}_Q_c'))**-1).alias(f'{col_name[-1]}_{pre}_Q_i'))
                                               .collect())
-        
+
         return self.targ.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
-    def IQ_circle_fit(self, 
-                      prefix: str | list[str] = 'unwind_rotate', 
-                      bounds = None, 
-                      loss: str = 'soft_l1', 
-                      f_scale: float = 1, 
+    def IQ_circle_fit(self,
+                      prefix: str | list[str] = 'unwind_rotate',
+                      bounds = None,
+                      loss: str = 'soft_l1',
+                      f_scale: float = 1,
                       method: str = 'trf',
-                      include: int | list[int] | None = None, 
-                      exclude: int | list[int] | None = None, 
-                      recalc: bool = False, 
+                      include: int | list[int] | None = None,
+                      exclude: int | list[int] | None = None,
+                      recalc: bool = False,
                       max_workers=1,
                       ex=None) -> pl.DataFrame:
         '''
         Fit the target sweep circle in the IQ plane
-        
+
         '''
 
         col_name = ['I', 'Q', 'circle_fit']
@@ -355,22 +385,22 @@ class Detector:
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
-        
+
         self.properties # load properties
         args = [[self, pre, bounds, loss, f_scale, method, ccat_mp.check_max_workers(max_workers), ex] for pre in prefix]
-        self.targ.transform([Detector.calc_IQ_circle_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))        
+        self.targ.transform([Detector.calc_IQ_circle_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.targ.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
     # IQ transformations
     # ------------------
 
-    def IQ_unwind(self, 
+    def IQ_unwind(self,
                   prefix: str | list[str] = '',
                   data: str = 'both',
-                  delay_col: str = 'network_cable_delay', 
-                  include: int | list[int] | None = None, 
-                  exclude: int | list[int] | None = None, 
+                  delay_col: str = 'network_cable_delay',
+                  include: int | list[int] | None = None,
+                  exclude: int | list[int] | None = None,
                   recalc: bool = False) -> list[pl.DataFrame]:
         '''
         Remove cable delay from target sweep and/or timestream I & Q data
@@ -392,7 +422,7 @@ class Detector:
         data_objs, data_types = self._get_data_obj(data)
         if not data_objs:
             error = f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
 
         # Ensure that the cable delay has been calculated
@@ -409,25 +439,25 @@ class Detector:
                                                           [f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[2]}" for pre in prefix]), include=include, exclude=exclude, strict=True))
         return unwind_dfs
 
-    def IQ_norm(self, 
-                prefix: str | list[str] = '', 
-                data: str = 'both', 
-                norm_col: str = 'cable_complex_fit', 
-                include: int | list[int] | None = None, 
-                exclude: int | list[int] | None = None, 
+    def IQ_norm(self,
+                prefix: str | list[str] = '',
+                data: str = 'both',
+                norm_col: str = 'cable_complex_fit',
+                include: int | list[int] | None = None,
+                exclude: int | list[int] | None = None,
                 recalc: bool = False) -> list[pl.DataFrame]:
         '''
         Divide out cable baseline from target sweep and/or timestream I & Q data
-        
+
         '''
-        
+
         col_name = ['f', 'I', 'Q', 'norm']
         if isinstance(prefix, str): prefix = [prefix]
-        
+
         data_objs, data_types = self._get_data_obj(data)
         if not data_objs:
             error = f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
 
         tone_freqs = self.get_properties('tone_freqs', include=include, exclude=exclude, strict=True)
@@ -453,19 +483,19 @@ class Detector:
                                                         [f"{col_name[-1]}_scale_{pre}{'_' if pre else ''}{col_name[2]}" for pre in prefix]), include=include, exclude=exclude))
         return norm_dfs
 
-    def IQ_trim(self, 
-                prefix: str | list[str] = '', 
-                window: float | list[float] = 1.5, 
+    def IQ_trim(self,
+                prefix: str | list[str] = '',
+                window: float | list[float] = 1.5,
                 use_fit: bool = False,
                 f_0_col: str = 'complex_fit_f_0',
-                Q_col: str = 'complex_fit_Q',  
+                Q_col: str = 'complex_fit_Q',
                 mean_points: int = 10,
                 mag_prefix: str = '',
-                include: int | list[int] | None = None, 
-                exclude: int | list[int] | None = None, 
+                include: int | list[int] | None = None,
+                exclude: int | list[int] | None = None,
                 recalc: bool = False) -> pl.DataFrame:
         '''
-        Trim off-resonance target sweep I & Q data 
+        Trim off-resonance target sweep I & Q data
 
         Args:
             prefix:
@@ -545,14 +575,14 @@ class Detector:
         return self.targ.get_data(col_name=([f"{col_name[-1]}_trim_{pre}{'_' if pre else ''}{col_name[0]}" for pre in prefix] +
                                             [f"{col_name[-1]}_trim_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix]), include=include, exclude=exclude, strict=True)
 
-    def IQ_circle_real(self, 
-                       prefix: str | list[str] = 'unwind_rotate', 
+    def IQ_circle_real(self,
+                       prefix: str | list[str] = 'unwind_rotate',
                        data: str = 'both',
-                       loc: str = 'origin',  
-                       circle_fit_col='circle_fit_unwind_rotate', 
-                       use_fit=True, 
-                       include: int | list[int] | None = None, 
-                       exclude: int | list[int] | None = None, 
+                       loc: str = 'origin',
+                       circle_fit_col='circle_fit_unwind_rotate',
+                       use_fit=True,
+                       include: int | list[int] | None = None,
+                       exclude: int | list[int] | None = None,
                        recalc: bool = False) -> list[pl.DataFrame]:
         '''
         Rotate and center the target sweep circle in the IQ plane onto the real axis
@@ -574,12 +604,12 @@ class Detector:
                                   f"targ_median_{prefix}{'_' if prefix else ''}{col_name[0]}",
                                   f"targ_median_{prefix}{'_' if prefix else ''}angle",
                                   f"targ_median_{prefix}{'_' if prefix else ''}mag"]
-                
+
                 # Calculate target sweep median I & Q values if not in ``properties`` DataFrame already
                 include_subset = ccat_df.check_properties(self, property_names[0], include=include, exclude=exclude, recalc=recalc)
                 if not len(include_subset) == 0:
-                    median_I_df = self.targ.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
-                    median_Q_df = self.targ.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
+                    median_I_df = self.targ.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))
+                    median_Q_df = self.targ.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))
 
                     ccat_df.add_data_to_properties(self, median_I_df, property_names[0])
                     ccat_df.add_data_to_properties(self, median_Q_df, property_names[1])
@@ -588,7 +618,7 @@ class Detector:
                                   f"{circle_fit_col}_center_Q",
                                   f"{circle_fit_col}_center_angle",
                                   f"{circle_fit_col}_center_mag"]
-            
+
             include_subset = ccat_df.check_properties(self, property_names[2], include=include, exclude=exclude, recalc=recalc)
             if not len(include_subset) == 0:
                 circle_fit_df = (self.get_properties(property_names[0:2] , include=include_subset, strict=True)
@@ -599,13 +629,13 @@ class Detector:
                 self._properties_df = ccat_df.coalesce_join(self._properties_df, circle_fit_df, on = 'det', shared_cols = shared_cols)
 
             center_angle, center_mag = self.get_properties(property_names[2:4], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
-            center_angle = np.pi - center_angle        
+            center_angle = np.pi - center_angle
             shift = center_mag + dest_I
 
         data_objs, _ = self._get_data_obj(data)
         if not data_objs:
             error = f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
 
         shift_dfs = []
@@ -616,19 +646,19 @@ class Detector:
                                                         [f"{col_name[-1]}_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix], include=include, exclude=exclude, strict=True))
         return shift_dfs
 
-    def IQ_circle_rotate(self, 
-                         prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate', 
-                         data: str = 'both', 
-                         rotation: str ='mismatch', 
+    def IQ_circle_rotate(self,
+                         prefix: str | list[str] = 'origin_shift_origin_rotate_unwind_rotate',
+                         data: str = 'both',
+                         rotation: str ='mismatch',
                          mean_points: int = 10,
-                         include: int | list[int] | None = None, 
-                         exclude: int | list[int] | None = None, 
-                         recalc: bool = False, 
+                         include: int | list[int] | None = None,
+                         exclude: int | list[int] | None = None,
+                         recalc: bool = False,
                          **kwargs) -> list[pl.DataFrame]:
         '''
         Rotate the target sweep circle in the IQ plane around its center
         '''
-        
+
         col_name = ['I', 'Q', rotation]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix=len(prefix)
@@ -644,7 +674,7 @@ class Detector:
                     Q_df = self.targ.get_data(f"{pre}{'_' if pre else ''}{col_name[1]}", include=include_subset, strict=True)
                     I_cols, Q_cols = I_df.columns, Q_df.columns
                     IQ_df = pl.concat([I_df, Q_df], how='horizontal')
-                          
+
                     mismatch_df = (IQ_df.lazy()
                                         .select(pl.all().head(mean_points).mean().name.prefix('first_'), pl.all().tail(mean_points).mean().name.prefix('last_'))
                                         .select([(pi - (pl.arctan2(pl.col(f"first_{Q_col}"), pl.col(f"first_{I_col}")) % (2*pi) +
@@ -665,7 +695,7 @@ class Detector:
                     I_cols, Q_cols = I_df.columns, Q_df.columns
                     IQ_df = pl.concat([I_df, Q_df], how='horizontal')
                     timestream_df = (IQ_df.lazy()
-                                          .select(pl.all().median()) 
+                                          .select(pl.all().median())
                                           .select([(pl.arctan2(pl.col(Q_col), pl.col(I_col)) % (2*pi)).alias(I_col.split('_')[-1]) for I_col, Q_col in zip(I_cols, Q_cols)])
                                           .collect())
                     ccat_df.add_data_to_properties(self, timestream_df, timestream_col_name)
@@ -673,34 +703,34 @@ class Detector:
                 angles[i] = timestream_angle
             else:
                 error = f"Invalid rotation '{rotation}' specified; Must be one of 'mismatch' or 'timestream'."
-                rfsoc_io.send_msg('ERROR', error)
+                log.log('ERROR', error)
                 raise ValueError(error)
-        
+
         data_objs, _ = self._get_data_obj(data)
         if not data_objs:
             error = f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
 
         rotation_dfs = []
         for data_obj in data_objs:
             data_obj.IQ_rotate(prefix=prefix, angle=angles, name=f'{col_name[-1]}', include = include, exclude=exclude, recalc=recalc)
-            rotation_dfs.append(data_obj.get_data(col_name=[f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[0]}" for pre in prefix] + 
+            rotation_dfs.append(data_obj.get_data(col_name=[f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[0]}" for pre in prefix] +
                                                            [f"{col_name[-1]}_rotate_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix], include=include, exclude=exclude, strict=True))
         return rotation_dfs
 
     def IQ_noise(self,
                  prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate',
                  use_noise_tones: bool = True,
-                 include: int | list[int] | None = None, 
-                 exclude: int | list[int] | None = None, 
+                 include: int | list[int] | None = None,
+                 exclude: int | list[int] | None = None,
                  recalc: bool = False) -> pl.DataFrame:
         '''
-        Transform timestream data to isolate readout noise. 
+        Transform timestream data to isolate readout noise.
         Will shift nearest frequency noise tone onto detector tone if ``use_noise_tones``, otherwise will rotate detector tone by ninety degrees around its center
 
         Args:
-            prefix (str | list[str]): 
+            prefix (str | list[str]):
             use_noise_tones (bool): Whether to use noise tones. Defaults to True
         '''
         def _get_medians(prefix):
@@ -708,8 +738,8 @@ class Detector:
 
             include_subset = ccat_df.check_properties(self, f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}", include=include, exclude=exclude, recalc=recalc)
             if not len(include_subset) == 0:
-                median_I_df = self.stream.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
-                median_Q_df = self.stream.get_data(f"{prefix}{'_' if prefix else ''}{col_name[1]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))   
+                median_I_df = self.stream.get_data(f"{prefix}{'_' if prefix else ''}{col_name[0]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))
+                median_Q_df = self.stream.get_data(f"{prefix}{'_' if prefix else ''}{col_name[1]}", include=include_subset, strict=True).select(pl.all().median().name.map(lambda s: s.split('_')[-1]))
 
                 ccat_df.add_data_to_properties(self, median_I_df, f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[0]}")
                 ccat_df.add_data_to_properties(self, median_Q_df, f"{med_col[0]}_{prefix}{'_' if prefix else ''}{col_name[1]}")
@@ -731,8 +761,8 @@ class Detector:
                 noise_freqs = self.get_properties('tone_freqs', include=noise_tones, strict=True).to_numpy().T[1]
                 closest_tones = (self.get_properties('tone_freqs', include=include_subset, strict=True)
                                      .lazy()
-                                     .select(['det'] + [((pl.col('tone_freqs') - freq).abs()/pl.lit(1e6)).alias(f'{tone:0{self.padding}d}') for tone, freq in zip(noise_tones, noise_freqs)]) 
-                                     .collect()       
+                                     .select(['det'] + [((pl.col('tone_freqs') - freq).abs()/pl.lit(1e6)).alias(f'{tone:0{self.padding}d}') for tone, freq in zip(noise_tones, noise_freqs)])
+                                     .collect()
                                      .unpivot(index='det', variable_name='closest_noise_tone', value_name='dist')
                                      .lazy()
                                      .with_columns(pl.col('closest_noise_tone').cast(pl.Int32))
@@ -754,9 +784,9 @@ class Detector:
             self.stream.transform([Detector.calc_noise_shift]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
             return self.stream.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] +
                                                  [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
-        else: 
+        else:
             col_name += ['noise_rotate']
-        
+
             for pre in prefix:
                 median_I, median_Q = _get_medians(pre)
 
@@ -769,15 +799,15 @@ class Detector:
 
     # Timestream conversion
     # ---------------------
-    def phase_spline(self, 
-                     prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 
-                     phase_low: float = -3.14, 
-                     phase_up: float = 3.14, 
-                     k: int = 3, 
-                     include: int | list[int] | None = None, 
-                     exclude: int | list[int] | None = None, 
-                     recalc: bool = False, 
-                     max_workers=1, 
+    def phase_spline(self,
+                     prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate',
+                     phase_low: float = -3.14,
+                     phase_up: float = 3.14,
+                     k: int = 3,
+                     include: int | list[int] | None = None,
+                     exclude: int | list[int] | None = None,
+                     recalc: bool = False,
+                     max_workers=1,
                      ex = None,
                      **kwargs) -> pl.DataFrame:
         '''Interpolate target sweep phase vs. frequency data and add interpolating splines to ``properties`` attribute
@@ -798,23 +828,23 @@ class Detector:
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [col_name[0], f"{pre}{'_' if pre else ''}{col_name[1]}", 'to_' + col_name[-2] + '_spline', f"to_{pre}{'_' if pre else ''}{col_name[-1]}_spline"]
-        
+
         self.properties
         stream_timestamp = self.stream.timestamp
         args = [[self, low, up, k, stream_timestamp, ccat_mp.check_max_workers(max_workers), ex] for low, up in zip(phase_low, phase_up)]
-        self.targ.transform([Detector.calc_phase_spline]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))   
+        self.targ.transform([Detector.calc_phase_spline]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.targ.get_data(col_name=([col_name[-1] for col_name in col_names] + [col_name[-2] for col_name in col_names]), include=include, exclude=exclude)
 
     def phase_to_f(self,
                    prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate',
-                   spline_col: str = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 
-                   phase_bounds: float = 0.2, 
-                   k: int = 3, 
-                   include: int | list[int] | None = None, 
-                   exclude: int | list[int] | None = None, 
-                   recalc: bool = False, 
-                   max_workers=1, 
+                   spline_col: str = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate',
+                   phase_bounds: float = 0.2,
+                   k: int = 3,
+                   include: int | list[int] | None = None,
+                   exclude: int | list[int] | None = None,
+                   recalc: bool = False,
+                   max_workers=1,
                    ex = None,
                    **kwargs) -> pl.DataFrame:
         '''
@@ -828,9 +858,9 @@ class Detector:
             include (int | list[int] | None, optional): Detector(s) for which to perform calculation
             exclude (int | list[int] | None, optional): Detector(s) for which not to perform calculation
             recalc (bool): Whether to recalculate if data is already in ``data`` DataFrame. Defaults to False
-            max_workers (int): Number of processor cores to use for calculation. Defaults to 1.         
+            max_workers (int): Number of processor cores to use for calculation. Defaults to 1.
         '''
-        
+
         col_name = ['phase', 'f']
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -849,32 +879,32 @@ class Detector:
                 ccat_df.add_data_to_properties(self, min_df, f'min_{spline_names[0]}'), ccat_df.add_data_to_properties(self, max_df, f'max_{spline_names[0]}')
             min_phase, max_phase = self.get_properties([f'min_{spline_names[0]}', f'max_{spline_names[0]}'], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
             min_phases[i], max_phases[i] = min_phase - phase_bounds, max_phase + phase_bounds
-        
+
         self.phase_spline(prefix=spline_col, phase_low = min_phases, phase_up = max_phases, k = k, include=include, exclude=exclude, recalc=recalc, max_workers=1, ex=ex, **kwargs)
         spline_dict = self.stream.spline_dict
         y_to_x_spline = [self.get_properties(col_name = f'{col}_phase_to_f_spline', include=include, exclude=exclude, strict=True).to_numpy().T[1] for col in spline_col]
         x_to_y_spline = [self.get_properties(col_name = f'f_to_{col}_phase_spline', include=include, exclude=exclude, strict=True).to_numpy().T[1] for col in spline_col]
 
-        args = [[[spline_dict[spline] for spline in y_to_x], 
-                 [spline_dict[spline] for spline in x_to_y], 
-                 ccat_mp.check_max_workers(max_workers), 
+        args = [[[spline_dict[spline] for spline in y_to_x],
+                 [spline_dict[spline] for spline in x_to_y],
+                 ccat_mp.check_max_workers(max_workers),
                  ex] for y_to_x, x_to_y in zip(y_to_x_spline, x_to_y_spline)]
         self.stream.transform([Detector.calc_phase_to_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.stream.tones))
         self.stream.data = self.stream._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.stream.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
-    
-    def frac_f(self, 
-               prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 
-               f_0: str | list[float] = 'tone_freqs', 
-               name='', 
-               include: int | list[int] | None = None, 
-               exclude: int | list[int] | None = None, 
-               recalc: bool = False, 
-               **kwargs) -> pl.DataFrame:        
+
+    def frac_f(self,
+               prefix: str | list[str] = 'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate',
+               f_0: str | list[float] = 'tone_freqs',
+               name='',
+               include: int | list[int] | None = None,
+               exclude: int | list[int] | None = None,
+               recalc: bool = False,
+               **kwargs) -> pl.DataFrame:
         '''
-        Convert timestream frequency data to fractional frequency shift 
+        Convert timestream frequency data to fractional frequency shift
         '''
-        
+
         col_name = ['f', f"{name}{'_' if name else ''}frac"]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -887,15 +917,15 @@ class Detector:
             col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
 
         args = [[f] for f in f_0]
-        self.stream.transform([Detector.calc_frac_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)        
+        self.stream.transform([Detector.calc_frac_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.stream.get_data(col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names], include=include, exclude=exclude)
 
     # High Level Analysis Methods
     # ---------------------------
 
-    def mag_min(self, 
-                include: int | list[int] | None = None, 
-                exclude: int | list[int] | None = None, 
+    def mag_min(self,
+                include: int | list[int] | None = None,
+                exclude: int | list[int] | None = None,
                 recalc: bool = False) -> list[pl.DataFrame]:
         col_name = ['f', 'mag', 'min']
         prop_names = [f'{col_name[-1]}_{col_name[1]}_{col_name[0]}', f'{col_name[-1]}_{col_name[1]}']
@@ -921,7 +951,7 @@ class Detector:
             min_df = (mag_f_df.filter((pl.col(col_name[1]) == pl.col(col_name[1]).min()).over('det'))
                               .rename({col_name[0]: prop_names[0], col_name[1]: prop_names[1]}))
             shared_cols = prop_names if prop_names[0] in self._properties_df.schema else []
-            self._properties_df = ccat_df.coalesce_join(self._properties_df, min_df, 'det', shared_cols) 
+            self._properties_df = ccat_df.coalesce_join(self._properties_df, min_df, 'det', shared_cols)
         return self.get_properties(col_name = prop_names, include=include, exclude=exclude, strict=True)
 
     def IQ_circle_center(self):
@@ -938,7 +968,7 @@ class Detector:
                     diff_savgol_k: int = 1,
                     include=None,
                     exclude=None,
-                    recalc=False, 
+                    recalc=False,
                     max_workers=1,
                     ex=None):
         '''
@@ -994,7 +1024,7 @@ class Detector:
                              .collect())
 
             max_IQ = max_IQ.join(adj_IQ, on='det', how='left')
-            
+
             # Use tone frequencies for detectors where finding the max distance frequency failed
             tone_freq_df = self.get_properties('tone_freqs', strict=True, include=include_subset)
             max_IQ = (max_IQ.join(tone_freq_df, on='det', how='right', coalesce=True)
@@ -1010,7 +1040,7 @@ class Detector:
 
         max_IQ_f = self.get_properties('max_IQ_dist_f', include=include, exclude=exclude, strict=True)
         return max_IQ_f
-    
+
     def is_bifurcated(self,
                       bifurcation_threshold=40,
                       qifurcation_threshold=50,
@@ -1024,8 +1054,8 @@ class Detector:
                       ex=None):
         '''
         Determine if a detector is bifurcated or has a high quasiparticle nonlinearity using the angle of the maximally seperated points in IQ space
-        
-        
+
+
         '''
 
 
@@ -1033,14 +1063,14 @@ class Detector:
         # Get maximally distant points in IQ space
         # ----------------------------------------
         self.IQ_max_dist(diff_savgol_window=1,
-                         trim_window=trim_window, 
-                         trim_savgol_window=trim_savgol_window, 
+                         trim_window=trim_window,
+                         trim_savgol_window=trim_savgol_window,
                          trim_savgol_k=trim_savgol_k,
                          include=include,
                          exclude=exclude,
                          recalc=recalc,
                          max_workers=max_workers,
-                         ex=ex) 
+                         ex=ex)
 
         # Fit IQ circle to get radius
         # ---------------------------
@@ -1056,21 +1086,20 @@ class Detector:
         self.mag_min(include=include, exclude=exclude, recalc=recalc)
 
         include_subset = ccat_df.check_properties(self, 'bifurcated', include=include, exclude=exclude, recalc=recalc)
-        
-        added_cols = ['bifurcated', 'qifurcated', 'sin_max_IQ_angle', 'chord_length_ratio', 'max_IQ_angle_rad', 'max_IQ_angle_deg']
+
+        added_cols = ['bifurcated', 'qifurcated', 'sin_half_max_IQ_angle', 'chord_length_ratio', 'max_IQ_angle_rad', 'max_IQ_angle_deg']
         if not len(include_subset) == 0:
-            df = self.get_properties(['max_IQ_dist', 
-                                      'max_IQ_dist_f', 
-                                      'max_IQ_dist_adj_f', 
-                                      'circle_fit_tail_trim_unwind_rotate_R', 
+            df = self.get_properties(['max_IQ_dist',
+                                      'max_IQ_dist_f',
+                                      'max_IQ_dist_adj_f',
+                                      'circle_fit_tail_trim_unwind_rotate_R',
                                       'min_mag_f'], include=include_subset, strict=True)
 
-
             bif_df = (df.lazy()
-                        .with_columns((0.5*(pl.col('max_IQ_dist')/pl.col('circle_fit_tail_trim_unwind_rotate_R'))).alias('sin_max_IQ_angle'),
+                        .with_columns((0.5*(pl.col('max_IQ_dist')/pl.col('circle_fit_tail_trim_unwind_rotate_R'))).alias('sin_half_max_IQ_angle'),
                                     (0.5*(4 - (pl.col('max_IQ_dist')/pl.col('circle_fit_tail_trim_unwind_rotate_R'))**2).sqrt()).alias('chord_length_ratio'))
-                        .with_columns((pl.col('sin_max_IQ_angle').arcsin()).alias('max_IQ_angle_rad'))
-                        .with_columns((180/np.pi*pl.col('max_IQ_angle_rad')).alias('max_IQ_angle_deg'))
+                        .with_columns((2*pl.col('sin_half_max_IQ_angle').arcsin()).alias('max_IQ_angle_rad'))
+                        .with_columns(((180/np.pi)*pl.col('max_IQ_angle_rad')).alias('max_IQ_angle_deg'))
                         .with_columns(((pl.col('max_IQ_angle_deg') >= bifurcation_threshold) & (pl.col('max_IQ_dist_adj_f') < pl.col('min_mag_f'))).alias('bifurcated'),
                                     ((pl.col('max_IQ_angle_deg') >= qifurcation_threshold) & (pl.col('max_IQ_dist_f') > pl.col('min_mag_f'))).alias('qifurcated'))
                         .select(['det'] + added_cols)
@@ -1080,7 +1109,7 @@ class Detector:
 
         bif_df = self.get_properties(['bifurcated', 'qifurcated'], include=include, exclude=exclude, strict=True)
         return bif_df
-         
+
     #==================#
     # Analysis Methods #
     #==================#
@@ -1104,14 +1133,14 @@ class Detector:
                                                    asymm=asymm[inds],
                                                    fix_cable=fix_cable[inds],
                                                    fix_thetaQ=fix_thetaQ[inds]):  (i, tones, cols) for i, (tones, inds, cols) in enumerate(zip(to_calc, calc_ind, batches))}
-                
+
                 for future in concurrent.futures.as_completed(future_to_batch):
                     i, tones, cols = future_to_batch[future]
                     f_cols = data[i][0]
                     fit_cols = future.result()
                     for tone, f_col, (_, I_col, Q_col), fit_col in zip(tones, f_cols, cols, fit_cols):
                         if isinstance(fit_col, Exception):
-                            rfsoc_io.send_msg('DEBUG', 'Fit failed for tone %s with exception: %s', tone, fit_col)
+                            log.log('DEBUG', 'Fit failed for tone %s with exception: %s', tone, fit_col)
                             best_fit, cable_fit = np.zeros(df.len()), np.zeros(df.len())
                             self.targ._properties[f'det_{tone:0{padding}d}'] = {}
                         else:
@@ -1119,22 +1148,22 @@ class Detector:
                             cable_fit = resonator_model_v3.fine_s21_model(f_col, fit_col.params, cable=True)
                             best_vals_dict = {f'{col_name[-1]}_{k}': float(v) for k, v in fit_col.best_values.items()}
                             self.targ._properties[f'det_{tone:0{padding}d}'] = best_vals_dict
-                        
+
                         results_dict[f'{col_name[-1]}_{I_col}'] = best_fit.real
                         results_dict[f'{col_name[-1]}_{Q_col}'] = best_fit.imag
                         results_dict[f'cable_{col_name[-1]}_{I_col}'] = cable_fit.real
                         results_dict[f'cable_{col_name[-1]}_{Q_col}'] = cable_fit.imag
 
             return ccat_mp.package_results(results_dict)
-            
+
         if len(args) == 7:
             self, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, ex = np.array(args)
             if tones is not None: self, max_workers, ex = self[0], int(max_workers[0]), ex[0]
         else:
             error = 'nonlinear, asymm, fix_cable, and fix_thetaQ are required arguments.'
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
-        
+
         return_col = [f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}', f'cable_{col_name[-1]}_{col_name[1]}', f'cable_{col_name[-1]}_{col_name[2]}']
         return_type = [pl.Float64, pl.Float64, pl.Float64, pl.Float64]
         expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_complex_fit, tones, col_name, schema, return_col=return_col, return_type=return_type, padding=padding, max_workers=max_workers, recalc=recalc)
@@ -1158,13 +1187,13 @@ class Detector:
                                                    params = params[inds],
                                                    R = radius[inds],
                                                    window=window[inds]):  (tones, cols) for i, (tones, inds, cols) in enumerate(zip(to_calc, calc_ind, batches))}
-                
+
                 for future in concurrent.futures.as_completed(future_to_batch):
                     tones, cols = future_to_batch[future]
                     fit_cols = future.result()
                     for tone, (_, _, _, phase_col), fit_col in zip(tones, cols, fit_cols):
                         if isinstance(fit_col, Exception):
-                            rfsoc_io.send_msg('DEBUG', 'Fit failed for tone %s with exception: %s', tone, fit_col)
+                            log.log('DEBUG', 'Fit failed for tone %s with exception: %s', tone, fit_col)
                             best_fit = np.full(df.len(), np.nan)
                             self.targ._properties[f'det_{tone:0{padding}d}'] = {}
                         else:
@@ -1177,7 +1206,7 @@ class Detector:
                             self.targ._properties[f'det_{tone:0{padding}d}'] = best_vals_dict | init_vals_dict
                         results_dict[f'{col_name[-1]}_{phase_col}'] = best_fit
             return ccat_mp.package_results(results_dict)
-            
+
         if len(args) == 9:
             self, prefix, radius, nonlinear, method, params_list, window, max_workers, ex = args
             params = np.empty(len(params_list), dtype=object)
@@ -1186,12 +1215,12 @@ class Detector:
             if tones is not None: self, prefix, max_workers, ex = self[0], prefix[0], int(max_workers[0]), ex[0]
         else:
             error = 'nonlinear, prefix, params, window, and max_workers are required arguments.'
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
-        
+
         return_col, return_type = [f'{col_name[-1]}_{col_name[-2]}'], [pl.Float64]
         expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_phase_fit, tones, col_name, schema, padding=padding, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
-        return expr 
+        return expr
 
     @staticmethod
     def calc_IQ_circle_fit(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'circle_fit']):
@@ -1214,13 +1243,13 @@ class Detector:
                                                    loss=loss[inds],
                                                    f_scale=f_scale[inds],
                                                    method=method[inds]):  (tones, cols) for i, (tones, inds, cols) in enumerate(zip(to_calc, calc_ind, batches))}
-                
+
                 for future in concurrent.futures.as_completed(future_to_batch):
                     tones, cols = future_to_batch[future]
                     fit_cols = future.result()
                     for tone, (I_col, Q_col), fit_col in zip(tones, cols, fit_cols):
                         if isinstance(fit_col, Exception):
-                            rfsoc_io.send_msg('WARNING', 'Fit failed for tone %s with exception: %s', tone, fit_col)
+                            log.log('DEBUG', 'Fit failed for tone %s with exception: %s', tone, fit_col)
                             fit_I, fit_Q = np.full(df.len(), np.nan), np.full(df.len(), np.nan)
                             self.targ._properties[f'det_{tone:0{padding}d}'] = {}
                         else:
@@ -1232,15 +1261,15 @@ class Detector:
                         results_dict[f'{col_name[-1]}_{I_col}'] = fit_I
                         results_dict[f'{col_name[-1]}_{Q_col}'] = fit_Q
             return ccat_mp.package_results(results_dict)
-            
+
         if len(args) == 8:
             self, prefix, bounds, loss, f_scale, method, max_workers, ex = np.array(args)
             if tones is not None: self, prefix, max_workers, ex = self[0], prefix[0], int(max_workers[0]), ex[0]
         else:
             error = 'self, prefix, bounds, loss, f_scale, method, and max_workers are required arguments.'
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
-        
+
         return_col, return_type = [f'{col_name[-1]}_{col_name[1]}', f'{col_name[-1]}_{col_name[2]}'], [pl.Float64, pl.Float64]
         expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_circle_fit, tones, col_name, schema, padding=padding, return_col = return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
         return expr
@@ -1255,12 +1284,12 @@ class Detector:
 
             I_shift, Q_shift = noise_med_I - tone_med_I, noise_med_Q - tone_med_Q
         else:
-            rfsoc_io.send_msg('ERROR', 'I_shift, Q_shift, tone_list, and noise_tone are required arguments.')
+            log.log('ERROR', 'I_shift, Q_shift, tone_list, and noise_tone are required arguments.')
 
         col_name = [f'{name}_{noise_tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
         I_col_noise, Q_col_noise, shift_col = col_name
         I_col_tone, Q_col_tone = f"{I_col_noise.split('_')[0]}_{tone:0{padding}d}", f"{Q_col_noise.split('_')[0]}_{tone:0{padding}d}"
-        
+
         if recalc or not (f'{shift_col}_{I_col_tone}' in schema):
             return [(pl.col(I_col_noise) - I_shift).alias(f'{shift_col}_{I_col_tone}'),
                     (pl.col(Q_col_noise) - Q_shift).alias(f'{shift_col}_{Q_col_tone}')]
@@ -1281,17 +1310,17 @@ class Detector:
                                                    k = k[inds],
                                                    y_low = phase_low[inds],
                                                    y_up = phase_up[inds]):  (i, tones) for i, (tones, inds, _) in enumerate(zip(to_calc, calc_ind, batches))}
-                
+
                 for future in concurrent.futures.as_completed(future_to_batch):
                     i, tones = future_to_batch[future]
                     f_cols, phase_cols = data[i][0], data[i][1]
                     spline_cols = future.result()
                     for tone, f_col, phase_col, spline_col in zip(tones, f_cols, phase_cols, spline_cols):
-                        property_dict = {name: 'None' for name in interp_names}    
+                        property_dict = {name: 'None' for name in interp_names}
                         spline_data = 2*[np.full(df.len(), np.nan)]
                         if isinstance(spline_col, Exception):
-                            rfsoc_io.send_msg('WARNING', 'Spline calculation for tone %s failed with exception: %s', tone, spline_col)
-                        else:                        
+                            log.log('DEBUG', 'Spline calculation for tone %s failed with exception: %s', tone, spline_col)
+                        else:
                             for i, (name, spline, data) in enumerate(zip(interp_names, spline_col, [phase_col, f_col])):
                                 if spline is not None:
                                     spline.extrapolate = False
@@ -1307,8 +1336,8 @@ class Detector:
             if tones is not None: self, stream_timestamp, max_workers, ex = self[0], stream_timestamp[0], int(max_workers[0]), ex[0]
         else:
             error = 'self, phase_low, phase_up, k, max_workers are required arguments.'
-            rfsoc_io.send_msg('ERROR', error)
-            raise ValueError(error)      
+            log.log('ERROR', error)
+            raise ValueError(error)
 
         data_col_name = [col_name[0], col_name[1], col_name[-1]]
         interp_names = [f'{col_name[1]}_{col_name[-2]}', f'{col_name[0]}_{col_name[-1]}']
@@ -1331,29 +1360,29 @@ class Detector:
                                                    data[i][0],
                                                    y_to_x_spline = y_to_x_spline[inds],
                                                    x_to_y_spline = x_to_y_spline[inds]): tones for i, (tones, inds, _) in enumerate(zip(to_calc, calc_ind, batches))}
-                
+
                 for future in concurrent.futures.as_completed(future_to_batch):
                     tones = future_to_batch[future]
                     f_cols = future.result()
                     for tone, f_col in zip(tones, f_cols):
                         if isinstance(f_col, Exception):
-                            rfsoc_io.send_msg('WARNING', 'Interpolation for tone %s failed with exception: %s', tone, f_col)
+                            log.log('DEBUG', 'Interpolation for tone %s failed with exception: %s', tone, f_col)
                             f_col = np.full(df.len(), np.nan)
                         results_dict[f'{col_name[-1]}_{tone:0{padding}d}'] = f_col
             return ccat_mp.package_results(results_dict)
-        
+
         if len(args) == 4:
             y_to_x_spline, x_to_y_spline, max_workers, ex = np.array(args)
             if tones is not None: max_workers, ex = int(max_workers[0]), ex[0]
         else:
             error = 'self, spline_col, and max_workers are required arguments.'
-            rfsoc_io.send_msg('ERROR', error)
-            raise ValueError(error) 
+            log.log('ERROR', error)
+            raise ValueError(error)
         calc_col = [f'{col_name[-1]}_{tone:0{padding}d}' for tone in tones]
         return_col, return_type = [f'{col_name[-1]}'], [pl.Float64]
         expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_phase_to_f, tones, col_name, schema, padding=padding, calc_col = calc_col, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
         return expr
-    
+
     @staticmethod
     def calc_frac_f(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['f', 'frac']):
         if tones is not None:
@@ -1366,13 +1395,13 @@ class Detector:
             f_0 = args
             if tones is not None: f_0 = f_0[0]
         else:
-            rfsoc_io.send_msg('ERROR', 'f_0 and tone_list are required arguments.')
+            log.log('ERROR', 'f_0 and tone_list are required arguments.')
 
         if recalc or not (f'{frac_f_col}_{f_col}' in schema):
             return ((pl.col(f_col) - f_0)/f_0).name.prefix(frac_f_col + '_')
         else:
             return pl.col(f'{frac_f_col}_{f_col}')
-    
+
     def properties_histogram(self, col_name, bins=None, mad_filter = True, num_mads = 10, recalc=False, **kwargs):
         ''' Calculate histogram of a detector property
 
@@ -1396,8 +1425,8 @@ class Detector:
             if mad_filter:
                 df = (df.with_columns(pl.col(col_name).median().alias('median'))
                         .with_columns((pl.col(col_name) - pl.col('median')).abs().median().alias('MAD'))
-                        .filter((pl.col(col_name) > (pl.col('median') - num_mads*pl.col('MAD'))) & (pl.col(col_name) < (pl.col('median') + num_mads*pl.col('MAD'))))) 
-            
+                        .filter((pl.col(col_name) > (pl.col('median') - num_mads*pl.col('MAD'))) & (pl.col(col_name) < (pl.col('median') + num_mads*pl.col('MAD')))))
+
             bins = df.height // 8 if bins is None else min(bins, num_tones)
             data = df[col_name].to_numpy()
 
@@ -1416,24 +1445,23 @@ class Detector:
         dynamic = kwargs['dynamic'] if 'dynamic' in kwargs else True
         by, plot_median = args
 
-        if by is None:
-            by = ['tmp']
-            df = df.with_columns(pl.lit(True).alias('tmp'))
+        if by is None: df = df.with_columns(pl.lit(True).alias('tmp'))
 
-        hist_dict = {}          
-        for *vals, counts, edges, median in df.group_by(by).agg('counts', 'edges', 'median').iter_rows():
-            hist = hv.Histogram((edges, counts), label=','.join([f'{name}={value}' if not name == 'tmp' else '' for name, value in zip(by, vals)])).relabel(group='Detector')
+        hist_dict = {}
+        for *vals, counts, edges, median in df.group_by(by if by is not None else ['tmp']).agg('counts', 'edges', 'median').iter_rows():
+            label = ','.join([f'{name}={value}' for name, value in zip(by, vals)]) if by is not None else ''
+            hist = hv.Histogram((edges, counts), label=label).relabel(group='Detector')
             if plot_median:
                 median = median[0]
                 vline = hv.VLine(median, label='Median').relabel(group='Detector')
                 spike = hv.Curve(([median, median], [0, 1]), label=f'Median: {median:0.2e}').relabel(group='Detector')
                 hist = hist*spike*vline
             hist_dict[tuple(vals)] = hist
-        
+
         hist = hv.HoloMap(hist_dict, kdims=by)
         hist.opts(*plot_opts)
 
-        if dynamic: hist = hv.util.Dynamic(hist)
+        if dynamic and by is not None: hist = hv.util.Dynamic(hist)
         return hist
 
     def properties_histogram_plot(self, col_name, plot_median=None, xlabel = '' , title='', save_fig: bool | None = None, overwrite: bool | None = None, save_name: str = None, return_fig=True, return_df=False, df = None, by=None, **kwargs):
@@ -1446,17 +1474,17 @@ class Detector:
             return (hv.Histogram | hv.Overlay): Holoviews histogram figure
         '''
 
-        if df is None: 
+        if df is None:
             df = self.properties_histogram(col_name, **kwargs)
             df = (df.rename({col: name for col, name in zip(df.columns, ['counts', 'edges'])})
                     .with_columns(pl.lit(self.properties[col_name].median()).alias('median')))
-        
+
         if not return_fig: return df, None
 
         if plot_median is None: plot_median = self.viz_cfg['static_plot']['histogram']['plot_median']
         if isinstance(by, str): by = [by]
         args = [by, plot_median]
-        
+
         cfg = self.targ.drone_cfg['det_config']
         title = title if title else rf"${cfg['detector_type']}\ {cfg['network']}$"
 
@@ -1471,14 +1499,14 @@ class Detector:
                                     fig_size=kwargs['fig_size'] if 'aspect' in kwargs else self.viz_cfg['static_plot']['histogram']['fig_size'],
                                     #facecolor=hv.Cycle(cmap),
                                     show_grid=True,
-                                    show_legend=True), 
-                    opts.Curve(#color=hv.Cycle(cmap), 
-                               linewidth=linewidth, 
+                                    show_legend=True),
+                    opts.Curve(#color=hv.Cycle(cmap),
+                               linewidth=linewidth,
                                linestyle=linestyle),
-                    opts.VLine(#color=hv.Cycle(cmap), 
-                               linewidth=linewidth, 
+                    opts.VLine(#color=hv.Cycle(cmap),
+                               linewidth=linewidth,
                                linestyle=linestyle))
-        
+
         # Create plot for immediate visualization
         # ---------------------------------------
         plot = Detector._plot_histogram(df, plot_opts, *args, **kwargs)
@@ -1499,10 +1527,10 @@ class Detector:
 
     def _get_data_obj(self, data: str):
         '''
-        Get data object (Target, Timestream, or both) corresponding to string 
+        Get data object (Target, Timestream, or both) corresponding to string
 
         data (
-        
+
         '''
         data_objs = []
         data_types = []
@@ -1513,15 +1541,15 @@ class Detector:
             data_objs.append(self.stream)
             data_types.append('stream')
         return data_objs, data_types
-    
+
     @staticmethod
     def _load_data(data_class, com_to, analysis_cfg, dets, noise_tones, timestamp, data_path, **kwargs):
         '''
-        Load *ccatkidlib* data file into VNA, Target, or Timestream data object 
+        Load *ccatkidlib* data file into VNA, Target, or Timestream data object
 
         Args:
             data_class (VNA | Target | Timestream): Class corresponding to the type of data to load. Must be one of VNA, Target, or Timestream
-            com_to (str): 
+            com_to (str):
             analysis_cfg (str): Path to analysis configuration file
             dets (int | list[int]): Subset of detectors to load
             timestamp (int | str | None): Timestamp of data file
@@ -1533,8 +1561,7 @@ class Detector:
             try:
                 data = data_class(com_to = com_to, analysis_cfg = analysis_cfg, tones = dets, noise_tones = noise_tones, timestamp = timestamp, data_path = data_path, **kwargs)
             except Exception as e:
-                print(e) # Print since logger is not loaded yet
-                rfsoc_io.send_msg('ERROR', 'Failed to load %s with exception: %s.', data_class.__name__, e)
+                log.log('ERROR', 'Failed to load %s with exception: %s.', data_class.__name__, e)
                 data = None
         return data
 
@@ -1546,11 +1573,11 @@ class Detector:
 
         if not isinstance(other, Detector):
             error = f'Cannot join with object of type {type(other)}. Must be of type Detector.'
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
 
         # Create a copy of the Detector object
-        new_data = self if in_place else copy.deepcopy(self) 
+        new_data = self if in_place else copy.deepcopy(self)
         new_data._cable_delay = _join_consts(self.cable_delay, other.cable_delay)
 
         # Join Target, Timestream, and VNA objects
@@ -1564,9 +1591,9 @@ class Detector:
             new_data.stream = self.stream.join(other.stream, in_place=in_place)
         elif bool(left_stream is None) ^ bool(right_stream is None):
             error = f'Cannot join Detector objects where one has a Timestream and the other does not. Either both or neither Detector objects must have a Timestream.'
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
-        
+
         # Join properties
         # ---------------
         left_prop, right_prop = self.properties, other.properties
@@ -1579,4 +1606,31 @@ class Detector:
     # ============= #
 
     def __str__(self):
-        return self.save_dir.stem
+        return f'detector_{self.timestamp}'
+
+    # =============================== #
+    # Define Custom Pickling Behavior #
+    # =============================== #
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        if not self.analysis_cfg['io']['pickle']['pickle_dataframes'] and (properties := self._properties_df) is not None:
+            del state['_properties_df']
+            save_path, file_count = io.increment_file(Path(self.pickle_dir) / 'dataframe',
+                                                      f'properties_',
+                                                      '.parquet',
+                                                      overwrite=self.analysis_cfg['io']['pickle']['overwrite'])
+            state['pickle_count'] = file_count
+            properties.write_parquet(save_path)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if not self.analysis_cfg['io']['pickle']['pickle_dataframes'] and getattr(self, '_properties_df', True):
+            file_name = 'properties' if (pickle_count := self.pickle_count) is None else f'properties_{pickle_count}'
+            
+            analysis_cfg, _ = io.load_config(str(Path(__file__).parents[1] / 'analysis_config.yaml'))
+            if (curr_dir := analysis_cfg['io']['pickle']['curr_pickle_root_dir']): self.analysis_cfg['io']['pickle']['pickle_root_dir'] = curr_dir
+            
+            self.properties = pl.scan_parquet(Path(self.pickle_dir) / 'dataframe' / f'{file_name}.parquet')
+

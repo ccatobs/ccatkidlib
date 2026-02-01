@@ -6,7 +6,7 @@ from functools import cached_property
 from numba import guvectorize, njit, prange, float64, int64
 
 # Local Imports
-import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.log as log
 import ccatkidlib.analysis.utils.pair as pair
 
 from ccatkidlib.utils import method_timer
@@ -22,9 +22,9 @@ class VNA(Sweep):
         cable_delay (float): Cable delay of the RF chain in nanoseconds
     '''
 
-    def __init__(self, com_to: str, analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
         kwargs['data_type'] = 'vna'
-        super().__init__(com_to, analysis_cfg, **kwargs)
+        super().__init__(com_to, cfg_path, **kwargs)
 
     #=====================#
     # Data Getter Methods #
@@ -93,7 +93,7 @@ class VNA(Sweep):
         if len(args) == 3:
             sweep_steps, threshold, stitch_percent = args
         else:
-            rfsoc_io.send_msg('ERROR', 'sweep_steps, threshold, and stitch_percent are required arguments.')
+            log.log('ERROR', 'sweep_steps, threshold, and stitch_percent are required arguments.')
             raise ValueError
 
         f_col, phase_col, stitch_col = col_name
@@ -115,7 +115,7 @@ class VNA(Sweep):
         if len(args) == 3:
             sweep_steps, stitch_percent, med_win = args
         else:
-            rfsoc_io.send_msg('ERROR', 'sweep_steps, stitch_percent, and med_win are required arguments.')
+            log.log('ERROR', 'sweep_steps, stitch_percent, and med_win are required arguments.')
             raise ValueError
 
         f_col, mag_col, stitch_col = col_name

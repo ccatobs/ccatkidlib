@@ -2,13 +2,15 @@
 Various utility functions for MKID data collection and analysis.
 '''
 
+import pytz
 import numpy as np
 from datetime import datetime
-import pytz
 from tqdm import tqdm
 from functools import wraps
-from ccatkidlib.style import Style
-import ccatkidlib.rfsoc_io as rfsoc_io
+
+import ccatkidlib.log as log
+from ccatkidlib.log import Style
+
 
 def convert_timestamp(timestamp, timezone = 'America/New_York'):
     timestamp = int(timestamp)
@@ -111,7 +113,7 @@ def method_timer(func):
         time_diff = time.time() - start_time
 
         s = Style()
-        rfsoc_io.send_msg('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
+        log.log('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper
 
@@ -126,7 +128,6 @@ def function_timer(func):
         time_diff = time.time() - start_time
 
         s = Style()
-        print(time_diff)
-        rfsoc_io.send_msg('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
+        log.log('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper

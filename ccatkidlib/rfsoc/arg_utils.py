@@ -3,12 +3,13 @@
 # Darshan Patel dp649@cornell.edu #
 #=================================#
 
-
-import ccatkidlib.rfsoc_io as rfsoc_io
-import ccatkidlib.utils as utils
 import numpy as np
 
-from ..utils import function_timer
+import ccatkidlib.io as io
+import ccatkidlib.log as log
+import ccatkidlib.utils as utils
+
+from ccatkidlib.utils import function_timer
 
 #@function_timer
 def group_args(com_to, *args):
@@ -41,13 +42,13 @@ def parse_args(R, com_to, arg):
         if len(arg) == len(com_to): # Length of argument list should match number of drones
             args = arg
         else:
-            rfsoc_io.send_msg('WARNING', f'{arg} is not a valid argument. Must be a single value or match the length of {com_to}!')
+            log.log('WARNING', f'{arg} is not a valid argument. Must be a single value or match the length of {com_to}!')
             return None # Return None if argument is invalid
     except TypeError:
         try: # Assume argument is a single value and create a list of arugments with length equal to the number of drones
             args = [arg] * len(com_to)
         except:
-            rfsoc_io.send_msg('WARNING', f'{arg} is not a valid argument. Must be a single value or match the length of {com_to}!')
+            log.log('WARNING', f'{arg} is not a valid argument. Must be a single value or match the length of {com_to}!')
             return None # Return None if argument is invalid
     return args # Return parsed argument
 
@@ -81,7 +82,7 @@ def set_drone_args(R, com_to, key, args):
     rtn_list = []
     for com, arg in zip(com_to, args):
         ind = R.drone_list.index(com) # Get index corresponding to drone in com_to
-        rtn = rfsoc_io.edit_config(R.drone_cfg[ind], key, arg) # Set config value of specified key
+        rtn = io.edit_config(R.drone_cfg[ind], key, arg) # Set config value of specified key
         rtn_list.append(rtn)
     return rtn_list
 

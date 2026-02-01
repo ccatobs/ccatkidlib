@@ -13,7 +13,7 @@ from holoviews import opts
 
 # Local Imports
 
-import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.log as log
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.viz.viz_utils as viz_utils
@@ -27,10 +27,8 @@ class Sweep(Data):
     Subclasses the general ccatkidlib Data class.
     '''
 
-    def __init__(self, com_to: str, analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
-        super().__init__(com_to, analysis_cfg, **kwargs)
-        self.save_dir = Path(self.save_dir) / f'sweep_{self.timestamp}'
-        rfsoc_io.create_dir(self.save_dir)
+    def __init__(self, com_to: str, cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+        super().__init__(com_to, cfg_path, **kwargs)
         
     #==================#
     # Plotting Methods #
@@ -128,7 +126,7 @@ class Sweep(Data):
             kwargs['groupby'] = by
         else:
             error = 'Invalid string specified for argument "grouping"! Must be either "by" or "groupby".'
-            rfsoc_io.send_msg('CRITICAL', error)
+            log.log('CRITICAL', error)
             raise ValueError(error)
 
         # Create opts for plots
@@ -241,7 +239,7 @@ class Sweep(Data):
                                    **shared_opts)
         else:
             error = 'Invalid projection specified, must be either "IQ" or "polar".'
-            rfsoc_io.send_msg('CRITICAL', error)
+            log.log('CRITICAL', error)
             raise ValueError(error)
         save_name = f"sweep_{prefix}{'_' if prefix else ''}{projection}"
 
@@ -270,7 +268,7 @@ class Sweep(Data):
     #==========================#
 
     @property
-    def data(self) -> pl.lazyframe.frame.LazyFrame:
+    def data(self) -> pl.DataFrame:
         if self._data is None:
             data = {'sample': [], 'f': [], 'I': [], 'Q': []}
             fs, s21z = np.load(self.data_path[0], mmap_mode='r')
@@ -278,14 +276,16 @@ class Sweep(Data):
 
             data['sample'], data['f'], data['I'], data['Q'] = range(len(fs)), fs.real, I, Q
             self._data = pl.DataFrame(data)
+        elif isinstance(self._data, pl.LazyFrame): 
+            self._data = self._data.collect()
         return self._data
 
     @data.setter
-    def data(self, value: pl.lazyframe.frame.LazyFrame | None): 
-        if value is None or isinstance(value, pl.dataframe.frame.DataFrame): 
+    def data(self, value: pl.LazyFrame | None): 
+        if value is None or isinstance(value, (pl.DataFrame, pl.LazyFrame)): 
             self._data = value
         else:
-            rfsoc_io.send_msg('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
+            log.log('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
 
     @cached_property
     def det_f(self) -> np.ndarray:
@@ -310,7 +310,7 @@ class Sweep(Data):
                 det_f = np.real(np.load(f_path))
             except:
                 error = f'Failed to load detector frequencies file {det_f}.'
-                rfsoc_io.send_msg('ERROR', error)
+                log.log('ERROR', error)
                 raise FileNotFoundError(error)
         return det_f
     

@@ -1,6 +1,5 @@
 import polars as pl
-
-import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.log as log
 
 from typing import Callable, TypeAlias, Any
 
@@ -13,7 +12,7 @@ def parse_tones(func_include: ExprFunction, func_exclude: ExprFunction, func_all
         '''
         
         if include is not None and exclude is not None:
-            rfsoc_io.send_msg('ERROR', "Can't include and exclude tones. Must specify one or the other.")
+            log.log('ERROR', "Can't include and exclude tones. Must specify one or the other.")
         elif include is not None:
             if isinstance(include, int): include = [include]
             return func_include(include, *args)

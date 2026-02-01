@@ -15,7 +15,8 @@ from pathlib import Path
 from tqdm import tqdm
 
 # Local Imports
-import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.io as io
+import ccatkidlib.log as log
 
 def get_sess_dir(sess_id, data_dir: str = '**', date: str = '**', root_data_dir: str = '/') -> str:
     root_data_dir = Path(root_data_dir)
@@ -67,7 +68,7 @@ def get_config(path: str | pathlib.PosixPath, all_cfg: bool = False) -> list[str
         list[str]: List of config file paths (io_cfg, drone_cfg(s), and ext_cfg) associated with the specified data file
     '''
 
-    timestamp = rfsoc_io.get_timestamp(path) # Get timestamp of data file
+    timestamp = io.get_timestamp(path) # Get timestamp of data file
 
     if not timestamp == -1: # Make sure a valid data file is passed
         data_names = ['vna', 'targ', 'timestream'] # Directory names of main three data file types
@@ -95,13 +96,13 @@ def get_config(path: str | pathlib.PosixPath, all_cfg: bool = False) -> list[str
             # Check config directory for matching config files
             # ------------------------------------------------
             cfg_path = Path(*parts)
-            io_cfg = rfsoc_io.get_most_recent_file(cfg_path.parent, '*io*.yaml', time_past = np.inf) # Get io config file
+            io_cfg = io.get_most_recent_file(cfg_path.parent, '*io*.yaml', time_past = np.inf) # Get io config file
             if io_cfg.exists(): # If io config exists, then config directory is correct
                 if all_cfg: cfg_path = cfg_path.parent # If all_cfg, change to parent directory so that configs for all drones are found
                 cfg_files = sorted(cfg_path.rglob(f'*{timestamp}*.yaml')) 
                 cfgs = [io_cfg] + cfg_files
                 if not all_cfg: # Find ext config if all_cfg is False (since it is not in the drone config directory)
-                    ext_cfg = rfsoc_io.get_most_recent_file(cfg_path.parent, f'*{timestamp}*.yaml', time_past = np.inf) 
+                    ext_cfg = io.get_most_recent_file(cfg_path.parent, f'*{timestamp}*.yaml', time_past = np.inf) 
                     cfgs += [ext_cfg]
                 return list(map(str, cfgs)) # Return found config files
         return [] # Return an empty list if none of the searched config directories contain config files matching data file
@@ -109,7 +110,7 @@ def get_config(path: str | pathlib.PosixPath, all_cfg: bool = False) -> list[str
         return []
 
 def get_sweep(path: str | pathlib.PosixPath, **kwargs):
-    timestamp = rfsoc_io.get_timestamp(path) # Get timestamp of data file
+    timestamp = io.get_timestamp(path) # Get timestamp of data file
 
     if not timestamp == -1: # Make sure a valid data file is passed
         # Get parent directory and split path into parts. Path casting is safe since already validated in get_timestamp function
@@ -138,9 +139,9 @@ def get_sweep(path: str | pathlib.PosixPath, **kwargs):
         sweeps = [None]*len(parts_list)
         for i, parts in enumerate(parts_list):
             sweep_path = Path(*parts)
-            sweeps[i] = rfsoc_io.get_most_recent_file(sweep_path, '*.npy', time_past = np.inf, time_ref = timestamp, ccatkidlib_file = True) 
+            sweeps[i] = io.get_most_recent_file(sweep_path, '*.npy', time_past = np.inf, time_ref = timestamp, ccatkidlib_file = True) 
 
-        recent_sweeps = sorted(sweeps, key = rfsoc_io.get_timestamp, reverse = True)
+        recent_sweeps = sorted(sweeps, key = io.get_timestamp, reverse = True)
         if 'targ' in recent_sweeps[0].parts:
             for sweep in recent_sweeps:
                 if 'vna' in sweep.parts:
@@ -167,5 +168,5 @@ def replace_root(path: str | pathlib.PosixPath, old_root: str, new_root: str):
     if Path(new_path).exists(): 
         return new_path
     else:
-        rfsoc_io.send_msg('ERROR', 'Could not find file %s with original root directory %s replaced with %s', new_path, old_root, new_root)
+        log.log('ERROR', 'Could not find file %s with original root directory %s replaced with %s', new_path, old_root, new_root)
         return path

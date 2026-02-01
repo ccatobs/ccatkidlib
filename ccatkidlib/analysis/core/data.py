@@ -15,13 +15,14 @@ from typing import Callable, TypeAlias, Any
 from math import ceil
 
 # Local Imports
-import ccatkidlib.rfsoc_io as rfsoc_io
+import ccatkidlib.io as io
+import ccatkidlib.log as log
 import ccatkidlib.utils as utils
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 
-from ccatkidlib.rfsoc_io import header
+from ccatkidlib.log import header
 from ccatkidlib.utils import method_timer
 
 CalcFunction: TypeAlias = Callable[[pl.Schema, Any], pl.Expr]
@@ -48,10 +49,12 @@ class Data:
 
     def __init__(self, 
                  com_to: str,
-                 analysis_cfg: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
+                 cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
                  data_type: str | None = None,
                  timestamp: int | str | None = None,
                  data_path: str | pathlib.PosixPath | list[str] | list[pathlib.PosixPath] | None = None,
+                 analysis_cfg: dict | None = None,
+                 viz_cfg: dict | None = None,
                  **kwargs):
         ''' Initialize Data object by finding data file and associated config files
 
@@ -86,19 +89,13 @@ class Data:
 
         # Load configs and initialize logger
         # ----------------------------------
-        self.analysis_cfg, self.viz_cfg = rfsoc_io.load_config(analysis_cfg)
+        self.analysis_cfg, self.viz_cfg = io.load_config(cfg_path)
+        if analysis_cfg is not None: self.analysis_cfg = analysis_cfg
+        if viz_cfg is not None: self.viz_cfg = viz_cfg
+        
         self.root_dir = self.analysis_cfg['file_paths']['root_data_dir']
         self.padding = len(str(self.analysis_cfg['tones']['max_tones']*100))
         if not self.root_dir[-1] == '/': self.root_dir += '/'
-
-        self.save_fig = self.viz_cfg['save']['save_fig']
-        self.overwrite = self.viz_cfg['save']['overwrite']
-        self.save_fmt = self.viz_cfg['save']['save_fmt']
-        self.figs_per_file = self.viz_cfg['save']['figs_per_file']
-
-        log_dir = Path(__file__).parent / '..' / '..' / 'log'
-        rfsoc_io.create_dir(log_dir) # Create log directory if it does not exist
-        #rfsoc_io.setup_logging(log_dir / 'analysis.log', self.analysis_cfg['io']['file_level'], self.analysis_cfg['io']['terminal_level'])
 
         # If full data path is None, [], or "", find data file based on timestamp and (optional) file path parts
         # ------------------------------------------------------------------------------------------------------
@@ -106,7 +103,7 @@ class Data:
             if data_type is None or timestamp is None:
                 error = ("Both the data type ('vna', 'targ', or 'timestream') and the timestamp must be provided "
                          "or the full data path needs to be specified.")
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise ValueError(error)
 
             data_dir = '**'
@@ -130,13 +127,13 @@ class Data:
             self.data_path = data_path if isinstance(data_path, Iterable) and not isinstance(data_path, str) else [data_path]
             if not all((isinstance(path, str) or isinstance(path, pathlib.PosixPath)) for path in self.data_path):
                 error = 'All data paths must be of type str or pathlib.PosixPath!'
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise ValueError(error)
 
-            self.timestamp = rfsoc_io.get_timestamp(self.data_path[0])
-            if not all(rfsoc_io.get_timestamp(path) == self.timestamp for path in self.data_path):
+            self.timestamp = io.get_timestamp(self.data_path[0])
+            if not all(io.get_timestamp(path) == self.timestamp for path in self.data_path):
                 error = 'All data paths must have the same timestamp!'
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise ValueError(error)              
 
         # Check that data path(s) exist
@@ -146,16 +143,26 @@ class Data:
             path = Path(path)
             if not path.exists():
                 error = f'Could not find {data_type} file for board {self.bid}, drone {self.drid} with timestamp {timestamp}! Check that all optional file path segments are correct!'
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise FileNotFoundError(error)
             elif not path.suffix == ftype:
                 error = f'All data files must have the same file type!'
-                rfsoc_io.send_msg('CRITICAL', error)
+                log.log('CRITICAL', error)
                 raise ValueError(error)
 
         # Get io, ext, and drone configs associated with the sweep data file
         # ------------------------------------------------------------------
         self._configs = pair.get_config(self.data_path[0], all_cfg=False)
+
+        log_dir = io.add_dir('log', 
+                             str(self.data_path[0]), 
+                             save_root = self.analysis_cfg['io']['file_logging']['logging_root_dir'],
+                             data_root = self.root_dir,
+                             sub_dirs=[""])
+        log.setup_logging(Path(log_dir) / self.analysis_cfg['io']['file_logging']['logging_fname'], 
+                          self.analysis_cfg['io']['file_logging']['data_level'], 
+                          self.analysis_cfg['io']['terminal_logging']['data_level'],
+                          name='analysis.data')
 
     #=====================#
     # Data Getter Methods #
@@ -256,7 +263,7 @@ class Data:
         if self.tones is not None:
             return self.get_data(col_name = '.*', include=include, exclude=exclude)
         else:
-            rfsoc_io.send_msg('ERROR', "Cannot load individual tone data when self.tones is None.")
+            log.log('ERROR', "Cannot load individual tone data when self.tones is None.")
             return None
 
     def I(self, 
@@ -548,7 +555,7 @@ class Data:
                         args[i] = [a[slice_left:slice_right] if isinstance(a, Iterable) and not isinstance(a, str) else [a]*(slice_right-slice_left) for a in f_arg]
                     except IndexError: 
                         args[i] = [[None]*(slice_right-slice_left) for _ in range(len(f_arg))]
-                        rfsoc_io.send_msg('WARNING', 'More tones than arguments specified. Ensure that each tone has a corresponding argument.')
+                        log.log('WARNING', 'More tones than arguments specified. Ensure that each tone has a corresponding argument.')
 
                 for batch, arg  in zip(batches, args):
                     exp = func(schema, *arg, tones=batch, padding=self.padding, recalc=recalc, col_name = name)
@@ -599,7 +606,7 @@ class Data:
                 if num_funcs == 1:
                     arg_list = [arg_list]
                 else:
-                    rfsoc_io.send_msg('ERROR', error)
+                    log.log('ERROR', error)
             return arg_list
 
         if callable(funcs): funcs = [funcs]
@@ -669,7 +676,7 @@ class Data:
             dB = args[0]
             if tones is not None: dB = dB[0]
         else:
-            rfsoc_io.send_msg('ERROR', 'dB is a required argument.')
+            log.log('ERROR', 'dB is a required argument.')
 
         if recalc or not (mag_col in schema):
             mag_expr = (pl.col(I_col)**2 + pl.col(Q_col)**2).sqrt()
@@ -690,7 +697,7 @@ class Data:
             angle = args[0]
             if tones is not None: angle = angle[0]
         else:
-            rfsoc_io.send_msg('ERROR', 'angle is a required argument.')
+            log.log('ERROR', 'angle is a required argument.')
         if recalc or not (f'{rotate_col}_{I_col}' in schema):
             return [(pl.col(I_col)*pl.lit(angle).cos() - pl.col(Q_col)*pl.lit(angle).sin()).alias(f'{rotate_col}_{I_col}'),
                     (pl.col(I_col)*pl.lit(angle).sin() + pl.col(Q_col)*pl.lit(angle).cos()).alias(f'{rotate_col}_{Q_col}')]
@@ -709,7 +716,7 @@ class Data:
             I_shift, Q_shift = args
             if tones is not None: I_shift, Q_shift = I_shift[0], Q_shift[0]
         else:
-            rfsoc_io.send_msg('ERROR', 'I_shift and Q_shift are required arguments.')
+            log.log('ERROR', 'I_shift and Q_shift are required arguments.')
 
         if recalc or not (f'{shift_col}_{I_col}' in schema):
             return [(pl.col(I_col) + I_shift).name.prefix(shift_col + '_'),
@@ -729,7 +736,7 @@ class Data:
             scale = args[0]
             if tones is not None: scale = scale[0]
         else:
-            rfsoc_io.send_msg('ERROR', 'scale is a required argument.')
+            log.log('ERROR', 'scale is a required argument.')
 
         if recalc or not (f'{scale_col}_{I_col}' in schema):
             return (pl.col([I_col, Q_col]) * scale).name.prefix(f'{scale_col}_')
@@ -747,7 +754,7 @@ class Data:
             lower_bound, upper_bound = args
             if tones is not None: lower_bound, upper_bound = lower_bound[0], upper_bound[0]
         else:
-            rfsoc_io.send_msg('ERROR', 'lower_bound, upper_bound, and tone_list are required arguments.')
+            log.log('ERROR', 'lower_bound, upper_bound, and tone_list are required arguments.')
 
         if recalc or not (f'{trim_col}_{I_col}' in schema):
             return [pl.when(pl.col(sample_col).is_between(pl.lit(lower_bound), pl.lit(upper_bound), closed='none'))
@@ -791,7 +798,7 @@ class Data:
                     filtered_cols = future.result()
                     for tone, col, filtered_col in zip(tones, cols, filtered_cols):
                         if isinstance(filtered_col, Exception):
-                            rfsoc_io.send_msg('WARNING', 'Savgol filter for tone %s failed with exception: %s', tone, filtered_col)
+                            log.log('WARNING', 'Savgol filter for tone %s failed with exception: %s', tone, filtered_col)
                             filtered_col = np.full(df.len(), np.nan)
                         results_dict[f'{col_name[-1]}_{col[0]}'] = filtered_col
             return ccat_mp.package_results(results_dict)
@@ -802,7 +809,7 @@ class Data:
             if tones is not None: max_workers, ex = int(max_workers[0]), ex[0]
             col_name[-1] = f'{col_name[-1]}{deriv[0]}'
         else:
-            rfsoc_io.send_msg('ERROR', 'window, k, deriv, and max_workers are required arguments.')
+            log.log('ERROR', 'window, k, deriv, and max_workers are required arguments.')
 
         return_col, return_type = [f'{col_name[-1]}_{col_name[-2]}'], [pl.Float64]
         expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_calc_savgol, tones, col_name, schema, padding=padding, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
@@ -839,25 +846,31 @@ class Data:
         return original_root
 
     @cached_property
-    def save_dir(self) -> str:
+    def fig_dir(self) -> str:
         '''
         Directory where figures should be saved. Create if it does not already exist.
         '''
-        save_root_dir = self.viz_cfg['save']['save_root_dir']
-        if not save_root_dir[-1] == '/': save_root_dir += '/'
 
-        data_path = str(self.data_path[0])
+        return io.add_dir('fig', 
+                          str(self.data_path[0]), 
+                          save_root = self.viz_cfg['save']['fig_root_dir'],
+                          data_root = self.root_dir,
+                          timestamp = str(self.timestamp))
+    
+    @cached_property
+    def pickle_dir(self) -> str:
+        '''
+        Directory where pickle files should be saved. Create if it does not already exist.
+        '''
 
-        for data_type in ('/vna/', '/targ/', '/timestream/'): 
-            save_dir = data_path.replace(data_type, '/fig/', 1)
-            if not save_dir == data_path: break
+        pickle_dir = io.add_dir('pickle', 
+                                str(self.data_path[0]), 
+                                save_root = self.analysis_cfg['io']['pickle']['pickle_root_dir'],
+                                data_root = self.root_dir,
+                                timestamp = str(self.timestamp))
+        io.create_dir(Path(pickle_dir) / 'dataframe')
+        return pickle_dir
 
-        save_dir = Path(save_dir).parent
-        save_dir = str(save_dir).strip().replace(self.original_root, save_root_dir)
-        rfsoc_io.create_dir(save_dir)
-
-        return save_dir
-        
     @cached_property
     def comb(self) -> pl.DataFrame:
         '''
@@ -975,7 +988,7 @@ class Data:
         cfg = {}
         for i, config_path in enumerate(self._configs):
             if id in str(config_path):
-                cfg = rfsoc_io.load_config(config_path)
+                cfg = io.load_config(config_path)
                 self._configs.pop(i)
                 break
         return cfg
@@ -1011,11 +1024,11 @@ class Data:
 
         if not isinstance(other, Data):
             error = f'Cannot join with object of type {type(other)}. Must be of type Data.'
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise ValueError(error)
         elif self.tones is None or other.tones is None:
             error = f'Both Data objects must have tones not equal to None.'
-            rfsoc_io.send_msg('ERROR', error)
+            log.log('ERROR', error)
             raise NotImplementedError(error)
 
         # Create a copy of the Data object
@@ -1061,8 +1074,31 @@ class Data:
 
         return new_data
 
+    # ------------------------------- #
+    # Define Custom Pickling Behavior #
+    # ------------------------------- #
 
-                                
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        if not self.analysis_cfg['io']['pickle']['pickle_dataframes'] and (data := self._data) is not None:
+            del state['_data']
+            save_path, file_count = io.increment_file(Path(self.pickle_dir) / 'dataframe',
+                                                      f'data_', 
+                                                      '.parquet',
+                                                      overwrite=self.analysis_cfg['io']['pickle']['overwrite'])
+            state['pickle_count'] = file_count
+            data.write_parquet(save_path)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if not self.analysis_cfg['io']['pickle']['pickle_dataframes'] and getattr(self, '_data', True):
+            file_name = 'data' if (pickle_count := self.pickle_count) is None else f'data_{pickle_count}'
+
+            analysis_cfg, _ = io.load_config(str(Path(__file__).parents[1] / 'analysis_config.yaml'))
+            if (curr_dir := analysis_cfg['io']['pickle']['curr_pickle_root_dir']): self.analysis_cfg['io']['pickle']['pickle_root_dir'] = curr_dir
+
+            self.data = pl.scan_parquet(Path(self.pickle_dir) / 'dataframe' / f'{file_name}.parquet')
 
 
 
