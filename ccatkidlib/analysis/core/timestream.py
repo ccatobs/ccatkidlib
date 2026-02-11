@@ -34,8 +34,6 @@ import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 from ccatkidlib.analysis.core.data import Data
-from ccatkidlib.utils import method_timer
-
 
 class Timestream(Data):
     '''Class representing a timestream taken with a radio frequency system on a chip (RFSoC)
@@ -152,13 +150,14 @@ class Timestream(Data):
              grouping: str = 'groupby',
              include: int | list[int] | None = None, 
              exclude: int | list[int] | None = None, 
-             unpivot_x=True,
-             return_fig = True,
-             return_df = False,
              plot_opts = None,
+             filter_exprs = [],
+             unpivot_x=True,
+             return_df = False,
              save_fig: bool | None = None,
              overwrite: bool | None = None,
              save_name: str = None,
+             return_fig = True,
              df: pl.DataFrame | None = None,
              by: str | list[str] | None = None,
              **kwargs):
@@ -172,7 +171,7 @@ class Timestream(Data):
             df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude, unpivot_x=unpivot_x)
             col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns
             df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
-
+            if filter_exprs: df = df.filter(filter_exprs)
         if not return_fig: return df, by
 
         # Set default hvplot key word arguments
@@ -471,22 +470,6 @@ class Timestream(Data):
     # Data Getter Methods #
     #=====================#
 
-    def fft(self, prefix: str | list[str] = '', col_name: str = 'phase', sampling_freq=None, include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False) -> pl.dataframe.frame.DataFrame:        
-        col_name = [col_name, 'fft']
-        f_col = f'{col_name[-1]}_f'
-        if sampling_freq is None: sampling_freq = self.sampling_freq
-        if recalc or not f_col in self.data.schema: self.data = self.data.with_columns(pl.Series(np.fft.fftshift(np.fft.fftfreq(self.data.height, d=1/sampling_freq))).alias(f_col))
-
-        if isinstance(prefix, str): prefix = [prefix]
-        num_prefix = len(prefix)
-
-        col_names = [[]]*num_prefix
-        for i, pre in enumerate(prefix):
-            data_name = f"{pre}{'_' if pre else ''}{col_name[0]}"
-            col_names[i] = ['t', data_name, f'{col_name[-1]}_{data_name}']
-        self.transform([Timestream.calc_fft]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
-        return self.get_data(col_name=[f_col] + [col_name[-1] for col_name in col_names], include=include, exclude=exclude)
-
     def psd(self,
             prefix: str | list[str] = '',
             col_name: str = 'phase',
@@ -516,7 +499,7 @@ class Timestream(Data):
             col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}"] + col_name[1:]
 
         args = [[sampling_freq, height, win, npseg, dtrend, avg, ccat_mp.check_max_workers(max_workers), ex] for win, npseg, dtrend, avg in zip(window, nperseg, detrend, average)]
-        self.transform([Timestream.calc_psd]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
+        self.transform([Timestream._calc_psd]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         self.data = self._unnest([f'struct_{col_name[-1]}' for col_name in col_names])
         return self.get_data(col_name = [f'{col_name[-2]}_{col_name[0]}' for col_name in col_names] + 
                                         [f'{col_name[-1]}_{col_name[0]}' for col_name in col_names], include=include, exclude=exclude)
@@ -526,24 +509,8 @@ class Timestream(Data):
     #==================#
 
     @staticmethod
-    def calc_fft(schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['t', '', 'fft']):
-        def _fft(data):
-            return np.abs(np.fft.fftshift(np.fft.fft(data)))
-        
-        if tones is not None:
-            tone = tones[0]
-            col_name = [col_name[0]] + [f'{name}_{tone:0{padding}d}' for name in col_name[1:]]
-
-        t_col, data_col, fft_col = col_name
-
-        if recalc or not (fft_col in schema):
-            return pl.col(data_col).map_batches(_fft, return_dtype=pl.Float64).alias(fft_col)
-        else:
-            return pl.col(fft_col)
-
-    @staticmethod
-    def calc_psd(schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'psd_f', 'psd']):
-        def _calc_psd(df):
+    def _calc_psd(schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'psd_f', 'psd']):
+        def _mp_psd(df):
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
 
             results_dict = {}
@@ -579,7 +546,7 @@ class Timestream(Data):
 
         calc_col = [f'{col_name[-1]}_{col_name[0]}_{tone:0{padding}d}' for tone in tones]
         return_col, return_type = [f'{col_name[-2]}_{col_name[0]}', f'{col_name[-1]}_{col_name[0]}'], [pl.Float64, pl.Float64]
-        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_calc_psd, tones, [col_name[0], col_name[-1]], schema, padding=padding, return_col=return_col, return_type=return_type, calc_col = calc_col, max_workers=max_workers, recalc=recalc)
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_mp_psd, tones, [col_name[0], col_name[-1]], schema, padding=padding, return_col=return_col, return_type=return_type, calc_col = calc_col, max_workers=max_workers, recalc=recalc)
         return expr
 
     #==========================#

@@ -46,13 +46,14 @@ class Sweep(Data):
                                label='Data',
                                **kwargs).relabel(group='Sweep')
 
-        kwargs['marker'], kwargs['ms'], kwargs['linewidth'] = tone_marker, tone_ms, 0
+        kwargs.pop('ms'), kwargs.pop('linewidth')
+        kwargs['marker'], kwargs['s'] = tone_marker, tone_ms**2
 
         tone = (df.filter(pl.col('tone'))
-                  .hvplot.line(x=x_dim,
-                               y=y_dim,
-                               label='Tone',
-                               **kwargs)).relabel(group='Sweep')
+                  .hvplot.scatter(x=x_dim,
+                                  y=y_dim,
+                                  label='Tone',
+                                  **kwargs)).relabel(group='Sweep')
         plot = sweep*tone
         if 'area_sample' in df.schema:
             if df.schema['area_sample'] == pl.List: df = df.explode('area_sample')
@@ -76,12 +77,13 @@ class Sweep(Data):
              grouping: str = 'groupby',
              include: int | list[int] | None = None, 
              exclude: int | list[int] | None = None, 
-             return_fig = True,
+             plot_opts = None,
+             filter_exprs = [],
              return_df = False,
              save_fig: bool | None = None,
              overwrite: bool | None = None,
              save_name: str = None,
-             plot_opts = None,
+             return_fig = True,
              df: pl.DataFrame | None = None,
              by: str | list[str] | None = None,
              area_df: pl.DataFrame | None = None,
@@ -100,6 +102,7 @@ class Sweep(Data):
             df, by = self._get_plot_df(col_dict, x_prefix = x_prefix, y_prefix = y_prefix, include = include, exclude = exclude)
             col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns    
             df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
+            if filter_exprs: df = df.filter(filter_exprs)
 
             tone_sample = int((self.drone_cfg['tones']['sweep_steps']-1)/2)
             df = (df.with_columns(pl.when(pl.col(col_dict['sample']) == tone_sample)
@@ -140,13 +143,9 @@ class Sweep(Data):
                                     fig_size = kwargs.pop('fig_size') if 'fig_size' in kwargs else self.viz_cfg['static_plot']['sweep']['fig_size'])
         curve_opts = opts.Curve(show_legend=False)
         area_opts = opts.Area(alpha = kwargs.pop('area_alpha') if 'area_alpha' in kwargs else self.viz_cfg['static_plot']['sweep']['area_alpha'])
-        data_opts = opts.Curve('Sweep.Data')
-        tone_opts = opts.Curve('Sweep.Tone')
         all_opts = [overlay_opts,
                     curve_opts,
-                    area_opts,
-                    data_opts,
-                    tone_opts]
+                    area_opts]
         if plot_opts is not None: all_opts += plot_opts if isinstance(plot_opts, Iterable) else [plot_opts]
         
         # Create plot for immediate visualization
@@ -204,7 +203,7 @@ class Sweep(Data):
 
         return rtn
 
-    def IQ_plot(self, prefix: str = '', projection='IQ', max_IQ_sliver = False, grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+    def IQ_plot(self, prefix: str = '', projection='IQ', max_IQ_sliver = False, grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, y_prefix=None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
         shared_opts = {'padding': 0.1}
         area_df = None
         if projection == 'IQ':
@@ -248,7 +247,7 @@ class Sweep(Data):
         rtn = self.plot(x_dim=x_dim,
                         y_dim=y_dim,
                         x_prefix=prefix, 
-                        y_prefix=prefix, 
+                        y_prefix=prefix if y_prefix is None else y_prefix, 
                         grouping=grouping, 
                         include=include, 
                         exclude=exclude, 
@@ -306,7 +305,7 @@ class Sweep(Data):
             det_f = np.real(det_f)
         else:
             try:
-                f_path = pair.replace_root(det_f, self.original_root, self.root_dir)
+                f_path = pair.replace_root(det_f, self._original_root, self._root_dir)
                 det_f = np.real(np.load(f_path))
             except:
                 error = f'Failed to load detector frequencies file {det_f}.'

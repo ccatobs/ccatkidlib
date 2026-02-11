@@ -6,6 +6,7 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 from tqdm import tqdm
+from holoviews import opts
 
 from functools import cached_property
 
@@ -70,8 +71,8 @@ class Network:
         if analysis_cfg is not None: self.analysis_cfg = analysis_cfg
         if viz_cfg is not None: self.viz_cfg = viz_cfg
 
-        self.root_dir = self.analysis_cfg['file_paths']['root_data_dir']
-        if not self.root_dir[-1] == '/': self.root_dir += '/'
+        self._root_dir = self.analysis_cfg['file_paths']['root_data_dir']
+        if not self._root_dir[-1] == '/': self._root_dir += '/'
         if not isinstance(detectors, Iterable) or len(detectors) == 0:
             if not sess_ids:
                 error = 'Must either provide a list of Detector objects or specify session ID(s) of the data to load.'
@@ -86,7 +87,7 @@ class Network:
             dates = ['**']
             for key, value in kwargs.items():
                 if key == 'root_data_dir':
-                    self.root_dir = value
+                    self._root_dir = value
                 elif key == 'data_dir':
                     data_dir = value
                 elif key == 'date':
@@ -97,7 +98,7 @@ class Network:
             sess_paths = []
             for sess_id in sess_ids:
                 for date in dates:
-                    sess_dir = pair.get_sess_dir(sess_id, data_dir = data_dir, root_data_dir = self.root_dir, date = date)
+                    sess_dir = pair.get_sess_dir(sess_id, data_dir = data_dir, root_data_dir = self._root_dir, date = date)
                     if Path(sess_dir).exists():
                         sess_paths.append(Path(sess_dir))
                         break            
@@ -109,13 +110,13 @@ class Network:
             detector_types = []
             detector_timestamps = []
             if include_targs:
-                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, self.targs, self.analysis_cfg, dets, noise_tones, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, self.targs, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, cable_delay)
                 detectors += det_objs
                 detector_types += det_types
                 detector_timestamps += det_timestamps
 
             if include_streams:
-                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, self.streams, self.analysis_cfg, dets, noise_tones, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, self.streams, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, cable_delay)
                 detectors += det_objs
                 detector_types += det_types
                 detector_timestamps += det_timestamps
@@ -142,7 +143,7 @@ class Network:
         log_dir = io.add_dir('log', 
                              str(targ.data_path[0]), 
                              save_root = self.analysis_cfg['io']['file_logging']['logging_root_dir'],
-                             data_root = targ.root_dir,
+                             data_root = targ._root_dir,
                              sub_dirs=[""])
         log.setup_logging(Path(log_dir) / self.analysis_cfg['io']['file_logging']['logging_fname'], 
                     self.analysis_cfg['io']['file_logging']['network_level'], 
@@ -163,7 +164,7 @@ class Network:
         return io.add_dir('fig', 
                           str(targ.data_path[0]), 
                           save_root = self.viz_cfg['save']['fig_root_dir'],
-                          data_root = targ.root_dir,
+                          data_root = targ._root_dir,
                           sub_dirs = ['network'],
                           timestamp = str(self.timestamp))
 
@@ -176,7 +177,7 @@ class Network:
         pickle_dir = io.add_dir('pickle', 
                                 str(targ.data_path[0]), 
                                 save_root = self.analysis_cfg['io']['pickle']['pickle_root_dir'],
-                                data_root = targ.root_dir,
+                                data_root = targ._root_dir,
                                 sub_dirs = ['network'],
                                 timestamp = str(self.timestamp))
         return pickle_dir
@@ -236,7 +237,7 @@ class Network:
 
         return fig
     
-    def plot(self, func, data_type, *args, data_cols = [], return_df = True, save_fig: bool | None = None, overwrite: bool | None = None, save_name: str = None, overlay_cols: str | list[str] = None, **kwargs):
+    def plot(self, func, data_type, *args, data_cols = [], filter_exprs = [], return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, save_name: str = None, overlay_cols: str | list[str] = None, **kwargs):
         '''
         
 
@@ -277,9 +278,23 @@ class Network:
         if bys[0] is not None: by_cols += [bys[0]]
         kwargs['return_df'], kwargs['return_fig'] = False, True
 
-        plot_opts = []
+        if filter_exprs: plot_df = plot_df.filter(filter_exprs)
+
+        cmap = kwargs['cmap'] if 'cmap' in kwargs else self.viz_cfg['static_plot']['histogram']['cmap']
+        try:
+            colors = hv.Cycle(cmap) 
+        except ValueError:
+            num_colors = plot_df.select(overlay_cols).unique().height
+            colors = viz_utils.cycle_cmap(cmap, num_colors)
+
+        plot_opts = [opts.Curve(color=colors),
+                     opts.Histogram(facecolor=colors),
+                     opts.VLine(color=colors),
+                     opts.Scatter(color=colors),
+                     opts.Area(facecolor=colors)]
 
         plot_args = [plot_func, by_cols, overlay_cols, args]
+        if overlay_cols: plot_df = plot_df.sort(overlay_cols)
         
         # Create plot for immediate visualization
         # ---------------------------------------
@@ -301,7 +316,7 @@ class Network:
     # Helper Methods #
     #================#
 
-    def _create_detectors(self, det_type, com_to, path_dict, analysis_cfg, dets, noise_tones, cable_delay):
+    def _create_detectors(self, det_type, com_to, path_dict, cfg_path, analysis_cfg, viz_cfg, dets, noise_tones, cable_delay):
         '''
         '''
         def _create_sweep(sweep_path, sweep_dict, sweep_class, dets):
@@ -310,7 +325,7 @@ class Network:
             if Path(sweep_path).exists():
                 sweep = sweep_dict[str(sweep_path)]
                 if sweep is None:
-                    sweep = sweep_class(com_to = com_to, analysis_cfg = analysis_cfg, data_path = sweep_path, tones=dets, noise_tones=noise_tones)
+                    sweep = sweep_class(com_to = com_to, cfg_path=cfg_path, analysis_cfg = analysis_cfg, viz_cfg=viz_cfg, data_path = sweep_path, tones=dets, noise_tones=noise_tones)
                     sweep_dict[sweep_path] = sweep
             else:
                 sweep = None
@@ -332,7 +347,7 @@ class Network:
             vna = _create_sweep(vna_path, self.vnas, VNA, None)
             targ = _create_sweep(targ_path, self.targs, Target, dets)
             
-            detector = Detector(com_to=com_to, analysis_cfg=analysis_cfg, dets=dets, noise_tones=noise_tones, cable_delay=cable_delay, targ=targ, vna=vna, stream_path=stream_path)
+            detector = Detector(com_to=com_to, cfg_path=cfg_path, analysis_cfg=analysis_cfg, viz_cfg=viz_cfg, dets=dets, noise_tones=noise_tones, cable_delay=cable_delay, targ=targ, vna=vna, stream_path=stream_path)
 
             detectors[i] = detector
             detector_types[i] = det_type

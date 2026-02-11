@@ -9,7 +9,6 @@ from numba import guvectorize, njit, prange, float64, int64
 import ccatkidlib.log as log
 import ccatkidlib.analysis.utils.pair as pair
 
-from ccatkidlib.utils import method_timer
 from ccatkidlib.analysis.core.sweep import Sweep
 from ccatkidlib.analysis.fit.fit import linear_fit
 
@@ -54,7 +53,7 @@ class VNA(Sweep):
 
         args = [[sweep_steps, threshold, stitch_percent]]
         col_name = ['f', phase_name, 'stitch_phase']
-        self.transform(VNA.calc_stitch_phase, *args, include=None, exclude=None, recalc = recalc, col_name = col_name)
+        self.transform(VNA._calc_stitch_phase, *args, include=None, exclude=None, recalc = recalc, col_name = col_name)
         return self.get_data(col_name=col_name[-1])
 
     def stitch_mag(self, stitch_percent: float = 10.0, med_win: int = 3, recalc: bool = False) -> pl.lazyframe.frame.LazyFrame:
@@ -81,7 +80,7 @@ class VNA(Sweep):
 
         args = [[sweep_steps, stitch_percent, med_win]]
         col_name = ['f', mag_name, 'stitch_mag']
-        self.transform(VNA.calc_stitch_mag, *args, include=None, exclude=None, recalc = recalc, col_name = col_name)
+        self.transform(VNA._calc_stitch_mag, *args, include=None, exclude=None, recalc = recalc, col_name = col_name)
         return self.get_data(col_name=col_name[-1])
 
     #==================#
@@ -89,7 +88,7 @@ class VNA(Sweep):
     #==================#
 
     @staticmethod
-    def calc_stitch_phase(schema, *args, tones = None, recalc: bool = False, col_name = ['f', 'phase', 'stitch_phase']):
+    def _calc_stitch_phase(schema, *args, tones = None, recalc: bool = False, col_name = ['f', 'phase', 'stitch_phase']):
         if len(args) == 3:
             sweep_steps, threshold, stitch_percent = args
         else:
@@ -100,18 +99,17 @@ class VNA(Sweep):
 
         if recalc or not (stitch_col in schema):
             return (pl.struct([f_col, phase_col])
-                     .map_batches(lambda arrs: stitch_phase(
-                        arrs.struct.field(f_col),
-                        arrs.struct.field(phase_col),
-                        int(sweep_steps),
-                        float(threshold),
-                        float(stitch_percent)
-                        ), return_dtype=pl.Float64).alias(stitch_col))
+                     .map_batches(lambda arrs: stitch_phase(arrs.struct.field(f_col),
+                                                            arrs.struct.field(phase_col),
+                                                            int(sweep_steps),
+                                                            float(threshold),
+                                                            float(stitch_percent)
+                                                            ), return_dtype=pl.Float64).alias(stitch_col))
         else:
             return pl.col(stitch_col)
 
     @staticmethod
-    def calc_stitch_mag(schema, *args, tones = None, recalc: bool = False, col_name = ['f', 'mag', 'stitch_mag']):
+    def _calc_stitch_mag(schema, *args, tones = None, recalc: bool = False, col_name = ['f', 'mag', 'stitch_mag']):
         if len(args) == 3:
             sweep_steps, stitch_percent, med_win = args
         else:
@@ -122,13 +120,12 @@ class VNA(Sweep):
 
         if recalc or not (stitch_col in schema):
             return (pl.struct([f_col, mag_col])
-                    .map_batches(lambda arrs: stitch_mag(
-                        arrs.struct.field(f_col),
-                        arrs.struct.field(mag_col),
-                        int(sweep_steps),
-                        float(stitch_percent),
-                        int(med_win)
-                        ), return_dtype=pl.Float64).alias(stitch_col))
+                    .map_batches(lambda arrs: stitch_mag(arrs.struct.field(f_col),
+                                                         arrs.struct.field(mag_col),
+                                                         int(sweep_steps),
+                                                         float(stitch_percent),
+                                                         int(med_win)
+                                                         ), return_dtype=pl.Float64).alias(stitch_col))
         else:
             return pl.col(stitch_col)
 

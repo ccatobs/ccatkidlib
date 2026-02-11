@@ -28,7 +28,14 @@ version_tuple: VERSION_TUPLE
 commit_id: COMMIT_ID
 __commit_id__: COMMIT_ID
 
+<<<<<<< Updated upstream
 __version__ = version = '0.1.dev101+gffc595ce7.d20251124'
 __version_tuple__ = version_tuple = (0, 1, 'dev101', 'gffc595ce7.d20251124')
 
 __commit_id__ = commit_id = 'gffc595ce7'
+=======
+__version__ = version = '0.1.dev109+g44a311661.d20260107'
+__version_tuple__ = version_tuple = (0, 1, 'dev109', 'g44a311661.d20260107')
+
+__commit_id__ = commit_id = 'g44a311661'
+>>>>>>> Stashed changes

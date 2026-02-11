@@ -1,13 +1,10 @@
-#=================================#
-# io.py               2025 #
-# Darshan Patel dp649@cornell.edu #
-#=================================#
+'''
+Library of helper functions for general directory/file IO operations as well as communication and IO with |RFSoC| boards.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
 
 '''
-Library of helper functions for general file and directory read/write operations as well as logging.
-'''
 
-# Import Python modules
 import os
 import sys
 import ast
@@ -18,11 +15,10 @@ import numpy as np
 
 from pathlib import Path
 from tqdm import tqdm
+from typing import Any, Literal
 from fabric import Connection, Config
 from jinja2 import Environment, FileSystemLoader
 
-# Local imports
-from ccatkidlib.utils import function_timer
 import ccatkidlib.utils as utils
 import ccatkidlib.log as log
 
@@ -32,15 +28,15 @@ import ccatkidlib.log as log
 
 def create_tree(com_to: list[str], curr_date: str, sess_id: int, data_dir: str) -> tuple[list[str], list[str], list[str], list[str]]:
     '''
-    Create file tree for storage of timestream, sweep, and other (e.g., config) data.
+    Create file tree for storage of sweep, timestream, comb, and configuration files
 
     Args:
-        com_to (list[str]) : List of drones to create directories for
-        curr_date    (str) : Current date
-        sess_id      (int) : ID of observing session
-        data_dir     (str) : Where to create directory tree
+        com_to: List of |RFSoC| drones to create directories for
+        curr_date: Current date
+        sess_id: Session ID of measurement
+        data_dir: Directory in which to create file tree
     Returns:
-        tuple[list[str], list[str], list[str], list[str]]: Config directories, target directories, timestream directories, and VNA sweep directories in that order.
+        Tuple of */config* directories, */target* directories, */timestream* directories, and */vna* directories in that order.
     '''
     data_dir = Path(data_dir)
 
@@ -86,59 +82,53 @@ def create_tree(com_to: list[str], curr_date: str, sess_id: int, data_dir: str) 
 
     return config_dirs, targ_dirs, timestream_dirs, vna_dirs
 
-def create_tmp(com_to: list[str], tmp_dir: str) -> list[str]:
+def create_dir(dir: str) -> None:
     '''
-    Create *ccatkidlib* tmp directory and files
+    Create directory at the specified path. Will not overwrite if it already exists.
 
     Args:
-        com_to (list[str]): _description_
-        tmp_dir (str): _description_
-    '''
-    tmp_dir = Path(tmp_dir)
-    create_dir(tmp_dir) # Create tmp directory if it does not exist
+        dir: Path of directory to be created
 
-    noise_files = ['invalid/path']*len(com_to)
-    for i, com in enumerate(com_to):
-        board, drone = com.split('.')
-        com_str = f'{board}_{drone}'
-
-        noise_file = tmp_dir / f'noise_tones_{com_str}.npy'
-        if not (noise_file).exists(): np.save(noise_file, [])
-        noise_files[i] = str(noise_file)
-    return noise_files
-
-def create_dir(dir_path: str) -> None:
-    '''
-    Create directory at the specified path.
-
-    Parameters:
-        dir_path (str) : Path of the directory that is to be created
+    Raises:
+        FileNotFoundError: If an invalid ``dir`` is specified
+        PermissionError: If specified ``dir`` does not have suitable write permissions to be created
     '''
 
     # Attempt to make the directory
     try:
-        dir_path = Path(dir_path)
+        dir = Path(dir)
         # Check if directory already exists, if not make directory
-        if not dir_path.exists():
-            dir_path.mkdir(parents = True, exist_ok = False)
-            log.log('DEBUG', "The directory '%s' was successfully created!", dir_path)
+        if not dir.exists():
+            dir.mkdir(parents = True, exist_ok = False)
+            log.log('DEBUG', "The directory '%s' was successfully created!", dir)
         else:
-            log.log('DEBUG', "The directory '%s' already exists! Directory was not overwritten.", dir_path)
+            log.log('DEBUG', "The directory '%s' already exists! Directory was not overwritten.", dir)
     except FileNotFoundError:
-        log.log('ERROR', "The directory '%s' could not be created! Ensure that the file path is valid!", dir_path)
-        raise FileNotFoundError(f"The directory '{dir_path}' could not be created! Ensure that the file path is valid!")
+        log.log('ERROR', "The directory '%s' could not be created! Ensure that the file path is valid!", dir)
+        raise FileNotFoundError(f"The directory '{dir}' could not be created! Ensure that the file path is valid!")
     except PermissionError:
-        log.log('ERROR', f"The directory '%s' could not be created! Ensure that the parent directory has suitable write permissions!", dir_path)
-        raise PermissionError(f"The directory '{dir_path}' could not be created! Ensure that the parent directory has suitable write permissions!")
+        log.log('ERROR', "The directory '%s' could not be created! Ensure that the parent directory has suitable write permissions!", dir)
+        raise PermissionError(f"The directory '{dir}' could not be created! Ensure that the parent directory has suitable write permissions!")
 
 def add_dir(dir_name: str, 
             data_dir: str, 
             save_root: str | None = None,
             data_root: str | None = None,
             sub_dirs: list[str] = [],
-            timestamp: str | None = None):
+            timestamp: str | None = None) -> str:
     '''
-    Add a new directory to a pre-existing ccatkidlib data file tree
+    Add a new directory within/mimicing a pre-existing *ccatkidlib* file tree. The directory will be created in the already existing
+    file tree structure if ``save_root`` is not specified, otherwise it will mimic the already existing structure within the specified ``save_root`` directory.
+
+    Args:
+        dir_name: Name of directory to add
+        data_dir: Data directory of *ccatkidlib* file tree
+        save_root: Root data directory where new directory should be created
+        data_root: Root data directory of *ccatkidlib* file tree
+        sub_dirs: Sub-directories to create within new directory. If no sub-directories specified, will mimic the sub-directories of the already existing file tree.
+        timestamp: Unix timestamp. If specified, will create a directory with the timestamp as the name within the specified ``sub_dirs`` (at the deepest level).
+    Returns:
+        Path of the newly added directory
     
     '''
     if not dir_name[-1] == '/': dir_name += '/'
@@ -160,21 +150,45 @@ def add_dir(dir_name: str,
     create_dir(add_dir)
     return str(add_dir)
 
+def create_noise_files(com_to: list[str], tmp_dir: str) -> list[str]:
+    '''
+    Create *ccatkidlib* */tmp* directory and populate with empty noise |tone| files.
+    Will not overwrite if directory or noise tone files already exist.
+
+    Args:
+        com_to: List of drones for which to create noise tone files
+        tmp_dir: Temporary directory where noise tone files should be created
+    Returns:
+        List of noise tone file paths in order of ``com_to``
+    '''
+    tmp_dir = Path(tmp_dir)
+    create_dir(tmp_dir) # Create tmp directory if it does not exist
+
+    noise_files = ['invalid/path']*len(com_to)
+    for i, com in enumerate(com_to):
+        board, drone = com.split('.')
+        com_str = f'{board}_{drone}'
+
+        noise_file = tmp_dir / f'noise_tones_{com_str}.npy'
+        if not (noise_file).exists(): np.save(noise_file, [])
+        noise_files[i] = str(noise_file)
+    return noise_files
+
 #=====================#
 # Config IO Functions #
 #=====================#
 
-def load_config(config):
+def load_config(cfg_path: str) -> dict | list[dict]:
     '''
-    Load config file.
+    Load configuration file from specified ``cfg_path``
 
-    Parameters:
-        config (str) : File path of config file to load
+    Args:
+        cfg_path: File path of configuration file to load
     Returns:
-        cfg   (dict) : List of dictionaries loaded from config file
+        Loaded configuration file or list of loaded configuration files if ``cfg_path`` contains more than one
     '''
-    cfg_path = Path(config)
-    if not cfg_path.exists(): raise FileNotFoundError(f"Could not find config file: {config}!") # Raise error if config file does not exist
+    cfg_path = Path(cfg_path)
+    if not cfg_path.exists(): raise FileNotFoundError(f"Could not find config file: '{cfg_path}'") # Raise error if config file does not exist
 
     env = Environment(loader = FileSystemLoader(f"{str(cfg_path.parent)}"))
     template = env.get_template(f"{cfg_path.name}")
@@ -189,42 +203,34 @@ def load_config(config):
     else:
         return cfg
 
-def save_config(cfg_path, cfg_dic, save = True):
+def save_config(cfg_path: str, cfg: dict, save: bool = True) -> dict:
     '''
-    Save configuration file.
+    Save ``cfg`` configuration file to the specified ``cfg_path``
 
-    Parameters:
-        cfg_path (str) : File path where the config file should be saved
-        cfg_dic (dict) : Dictionary to save as config file
-        save    (bool) : Whether to save config file
+    Args:
+        cfg_path: File path where the configuration file should be saved
+        cfg: Configuration file to save
+        save: Whether to save configuration file 
     Returns:
-        cfg_dic (dict) : Returns dictionary that was saved to config file
+        Configuration file that was saved
     '''
     if save:
-        # Save config file
         with open(cfg_path, 'w') as config:
-            yaml.safe_dump(cfg_dic, config, sort_keys=False, default_flow_style=None)
-        
-        log.log('DEBUG', f"Saved configuration file: '{cfg_path}'!")
-        #log.log('DEBUG', f'Configuration file contents: {cfg_dic}')
+            yaml.safe_dump(cfg, config, sort_keys=False, default_flow_style=None)
+        log.log('DEBUG', f"Saved configuration file: '{cfg_path}'")
+    return cfg
 
-        # Load new config file
-        with open(cfg_path, 'r') as config:
-            return yaml.safe_load(config)
-    else:
-        return cfg_dic
-
-def edit_config(cfg, key, value, append = False):
+def edit_config(cfg: dict, key: str, value: Any, append: bool = False) -> bool:
     '''
-    Update key in specified configuration file with the specified value.
+    Update ``key`` in ``cfg`` configuration file with the specified ``value``.
 
-    Parameters:
-        cfg    (dict) : Configuration file to update
-        key     (str) : Key that should be updated
-        value   (Any) : Value with which to update key
-        append (bool) : Whether to append a new key, value pair to config file if key is not found
+    Args:
+        cfg: Configuration file to update
+        key: Key that should be updated
+        value: Value with which to update ``key``
+        append: Whether to add a new ``key``, ``value`` pair to configuration file if ``key`` is not found
     Returns:
-        done   (bool) : True if key was successfully created or updated.
+        done: **True** if key was successfully updated or created, otherwise **False**
     '''
     # Edit config file dictionary
     # ---------------------------
@@ -246,22 +252,23 @@ def edit_config(cfg, key, value, append = False):
 # File IO Functions #
 #===================#
 
-#@function_timer
-def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = None, ccatkidlib_file: bool = False):
+def get_most_recent_file(dir: str, file_identifier: str | list[str] = '*', time_past: float = 60*60, time_ref: float | None = None, ccatkidlib_file: bool = False) -> str:
     '''
-    Fetch the most recent file in a directory with the desired file identifier.
+    Fetch the most recent file in the ``dir`` directory
 
-    Parameters:
-        path            (Path) : Directory in which the file is located 
-        file_identifier (str) : Substring included in the file name
-        time_past     (float) : How far in the past to look for files (in seconds)
+    Args:
+        dir: Directory from which to get most recent file
+        file_identifier: List of sub-strings to use for identifying/filtering files. A file will be identified as valid if it contains any of the sub-strings in the list. 
+        time_past: How old the file can be in seconds. Files older than ``time_past`` will be ignored.
+        time_ref: Unix time to reference creation time of files against for determining if file is too old/new. 
+        ccatkidlib_file: Whether or not the files in ``dir`` are *ccatkidlib* data files. If **True**, will use the timestamp in the file name as the creation time.
     Returns:
-        file            (str) : File path of most recent file (returns "invalid/path" if no valid files found)
+        File path of the most recent file if a vaild file is found, otherwise returns *"invalid/path"*
     '''
     if time_ref is None: time_ref = time.time()
 
     try:
-        path = Path(path)
+        path = Path(dir)
         # Attempt to get most recent file in directory using glob
         if isinstance(file_identifier, str): file_identifier = [file_identifier]
 
@@ -294,16 +301,17 @@ def get_most_recent_file(path, file_identifier, time_past = 60*60, time_ref = No
         else:
             raise Exception("No files found within specified time range!")
     except Exception as e:
-        log.log('DEBUG', f"Failed to fetch most recent file in '{path}' with identifier '{file_identifier}' with Exception:\n{e}")
+        log.log('DEBUG', f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}' with Exception:\n{e}")
         return Path("invalid/path")
 
 def get_timestamp(path: str) -> int:
-    '''Extract the timestamp from a ccatkidlib file name.
+    '''
+    Extract the timestamp from a *ccatkidlib* data file name.
 
     Args:
-        path (str | pathlib.PosixPath): Path of the file
+        path: Path of the *ccatkidlib* data file
     Returns:
-        int: Timestamp of the file. -1 if no valid timestamp is found
+        Timestamp of the file or -1 if no valid timestamp can be determined
     '''
 
     try: # Check that the passed path is a string or Path object
@@ -322,26 +330,44 @@ def get_timestamp(path: str) -> int:
         log.log('ERROR', 'Failed to determine timestamp of file %s with Exception %s', path, e)
         return -1
 
-def get_creation_time(file_path):
+def get_creation_time(path: str) -> float:
     '''
-    Get the creation time of a file. Helper method for get_most_recent_file()
+    Get the creation time of a file.
 
-    Parameters:
-        file_path (str) : Path of the file of which to get creation time
+    Note:
+        The time reported is the *ctime* of the file, which usually corresponds to the creation time of the file.
+        The *ctime* can, however, change with certain file modifications so care must be taken when interpreting the time reported.
+
+    Args:
+        path: Path of the file to get creation time of 
     Returns:
-        creation_time (float): Creation time of file (returns -1 if creation time could not be determined)
+        Creation time of file or -1 if creation time could not be determined
     '''
     try:
-        file = Path(file_path)
+        file = Path(path)
         # Get creation time of file
         creation_time = file.stat().st_ctime
-        log.log('DEBUG', f"Creation time of file '{file_path}' is {creation_time}.")
+        log.log('DEBUG', f"Creation time of file '{path}' is {creation_time}.")
         return creation_time
     except:
-        log.log('DEBUG', f"Error getting creation time of file: '{file_path}'")
+        log.log('DEBUG', f"Error getting creation time of file: '{path}'")
         return -1
 
-def get_array(src_path, dest_path, action = 'cp', load = True, timestamp = False):
+def get_array(src_path: str, dest_path: str, action: Literal['cp', 'mv'] = 'cp', load: bool = True, timestamp: bool = False) -> np.ndarray | str | None:
+    '''
+    Copy or move a *NumPy* array and load its contents
+    
+    Args:
+        src_path: Path of the *NumPy* array
+        dest_path: Destination path where the *NumPy* array should be copied or moved. If path does not include a file name, the same file name will be used.
+        action: Whether to copy **'cp'** or move **'mv'** the *NumPy* array
+        load: Whether to load and return the contents of the *NumPy* array
+        timestamp: Whether to remove timestamp from *NumPy* array file name (Use **False** if no timestamp)
+    Returns:
+        Loaded *NumPy* array if ``load`` is **True** otherwise the file path where the *NumPy* array was copied or moved to. 
+        Returns **None** if failed to copy/move/load *NumPy* array
+
+    '''
     # Convert path objects to str
     src_path = str(src_path)
     dest_path = str(dest_path)
@@ -377,18 +403,43 @@ def get_array(src_path, dest_path, action = 'cp', load = True, timestamp = False
         loaded_array = None
     return loaded_array
 
-def increment_file(dir_path, file_prefix, file_suffix, overwrite=False):
+def increment_file(dir: str, file_prefix: str, file_suffix: str, overwrite: bool = False) -> tuple[str, int | None]:
+    '''
+    Increment the file count in a file name. Used when saving files to prevent overwriting files with duplicate names.
+    
+    Args:
+        dir: Directory where file will be saved
+        file_prefix: Sub-string of the file name before the file count
+        file_suffix: Sub-string of the file name after the file count
+        overwrite: Whether overwriting files is allowed. Will not add file count to file name if **True**
+    Returns:
+        The new file name with file count included and the file count of the file.
+        If overwrite is **True**, will return **None** instead of the file count 
+    '''
+
     if overwrite:
-        return Path(dir_path) / f'{file_prefix[:-1]}{file_suffix}', None
+        return Path(dir) / f'{file_prefix[:-1]}{file_suffix}', None
     else:
         file_count = 0
-        full_path = Path(dir_path) / f'{file_prefix}{file_count}{file_suffix}' 
+        full_path = Path(dir) / f'{file_prefix}{file_count}{file_suffix}' 
         while full_path.exists(): 
             file_count += 1
-            full_path = Path(dir_path) / f'{file_prefix}{file_count}{file_suffix}'
+            full_path = Path(dir) / f'{file_prefix}{file_count}{file_suffix}'
         return full_path, file_count
 
-def combine_npy(files, num, com = None, fname_out = None):
+def combine_npy(files: list[str], num: int, com: str | None = None, fname_out: dict | None = None) -> list[str]:
+    '''
+    Combine *NumPy* into **NpzFile** zipped archive files.
+
+    Args:
+        files: List of *NumPy* files to combine
+        num: Number of **NpzFile** files to create
+        com: 
+        fname_out: 
+    Returns:
+        File names of the **NpzFile** files that were created
+    '''
+
     files = list(files)
     num_zipped = len(files)/num 
     num_zipped = int(num_zipped) if num_zipped == int(num_zipped) else int(num_zipped) + 1
@@ -410,37 +461,40 @@ def combine_npy(files, num, com = None, fname_out = None):
 # Remote IO Functions #
 #=====================#
 
-def get_connection(ip, ssh_key):
+def get_connection(ip: str, ssh_key: str) -> Connection:
     '''
-    Create Fabric Connection to RFSoC board with specified IP address. 
+    Create *Fabric* **Connection** object to the |RFSoC| board with the specified ``ip`` address
 
-    Parameters:
-        ip      (str) : IP address to connect to
-        ssh_key (str) : File path of private ssh key
+    .. important::
+        This function requires a SSH key pair to exist between the local machine and the |RFSoC| board for passwordless login
+
+    Args:
+        ip: IP address of |RFSoC| board
+        ssh_key: File path of private SSH key corresponding to public key on the |RFSoC| board
     Returns:
-        connection (Connection) : Fabric Connection object to specified IP address
+        *Fabric* **Connection** object to specified |RFSoC| board
     '''
 
     # Get Fabric Connection to RFSoC board
     connect = Connection(f'xilinx@{ip}', connect_kwargs = {'key_filename': ssh_key})
-    log.log('DEBUG', f'Created Fabric Connection to {ip}.')
+    log.log('DEBUG', f'Created Fabric Connection object to {ip}.')
     return connect
 
-#@function_timer
-def get_array_board(c, ip, ssh_key, remote_path, local_path, load = True, timestamp = False):
+def get_array_board(c: Connection, ip: str, ssh_key: str, remote_path: str, local_path: str, load: bool = True, timestamp: bool = False) -> np.ndarray | str | None:
     '''
-    Load numpy array from RFSoC board.
+    Load *NumPy* array from |RFSoC| board
 
     Parameters:
-        c    (Connection) : Fabric Connection object of RFSoC board
-        ip          (str) : IP address of RFSoC board
-        ssh_key     (str) : Path to private ssh key
-        remote_path (str) : Path of numpy array on RFSoC board
-        local_path  (str) : Local file path where numpy array should be copied
-        load       (bool) : Whether to load and return the contents of the numpy array
-        timestamp  (bool) : Whether to remove the timestamp from numpy array file name (False if no timestamp)
+        c: *Fabric* **Connection** object of |RFSoC| board
+        ip: IP address of |RFSoC| board
+        ssh_key: File path of private SSH key corresponding to public key on the |RFSoC| board
+        remote_path: File path of *NumPy* array on |RFSoC| board
+        local_path: Path on local machine where *NumPy* array should be copied. If it does not contain a file name, the same file name will be used as that on the |RFSoC| board
+        load: Whether to load and return the contents of the *NumPy* array
+        timestamp: Whether to remove timestamp from *NumPy* array file name (Use **False** if no timestamp)
     Returns:
-        array (ndarray | str) : Loaded numpy array or file path of array if not loaded
+        Loaded *NumPy* array if ``load`` is **True** otherwise the file path on the local machine where *NumPy* array was copied to. 
+        Returns **None** if failed to copy/load *NumPy* array
     '''
     # Convert path objects to str
     remote_path = str(remote_path)
@@ -478,21 +532,22 @@ def get_array_board(c, ip, ssh_key, remote_path, local_path, load = True, timest
         loaded_array = None
     return loaded_array
 
-#@function_timer
-def save_array_board(ip, ssh_key, path, saved_array, tmp_dir):
+def save_array_board(ip: str, ssh_key: str, path: str, array: np.ndarray, tmp_dir: str) -> str | None:
     '''
-    Save numpy array to RFSoC board.
+    Save *NumPy* array to |RFSoC| board
 
-    Parameters:
-        c        (Connection) : Fabric Connection object of RFSoC board
-        path            (str) : File path where numpy array should be saved on RFSoC board
-        saved_array (ndarray) : Numpy array to save to RFSoC board
+    Args:
+        ip: IP address of |RFSoC| board
+        ssh_key: File path of private SSH key corresponding to public key on the |RFSoC| board
+        path: File path where *NumPy* array should be saved on |RFSoC| board
+        array: *NumPy* array to save to |RFSoC| board
+        tmp_dir: Temporary directory where *NumPy* array is saved on local machine before copying to |RFSoC| board
     Returns:
-        result          (str) : Standard out of save command
+        Returns output string of *rsync* command if successful, otherwise returns **None**
     ''' 
 
     save_path = Path(tmp_dir) / Path(path).name
-    np.save(save_path, saved_array)
+    np.save(save_path, array)
 
     # Define command for saving numpy array to RFSoC board
     cmd = ['rsync', '-a', '--no-times', '--inplace', '-e', f"ssh -i {ssh_key}", f'{save_path}', f'xilinx@{ip}:{path}']
@@ -506,18 +561,17 @@ def save_array_board(ip, ssh_key, path, saved_array, tmp_dir):
     log.log('DEBUG', f"Saved array to '{path}'.")
     return result
 
-#@function_timer
-def get_most_recent_file_board(c: Connection, dir: str, file_identifier: str = "*", time_past: int = 60*60):
+def get_most_recent_file_board(c: Connection, dir: str, file_identifier: str = "*", time_past: float = 60*60) -> str:
     '''
-    Get most recent file in specified directory on RFSoC board.
+    Get most recent file in specified ``dir`` directory on |RFSoC| board
 
     Args:
-        c (Connection): Fabric Connection object of RFSoC board. Can be created using ``get_connection`` function
-        dir (str): Directory in which the file is located
-        file_identifier (str, optional): Substring included in the file name. Defaults to wildcard: *"\*"*
-        time_past (int, optional): How old the file can be in seconds. Files older than ``time_past`` will be ignored. Defaults to 3600 seconds
+        c: *Fabric* **Connection** object of |RFSoC| board
+        dir: Directory from which to get most recent file from
+        file_identifier: Sub-string used to identify/filter files
+        time_past: How old the file can be in seconds. Files older than ``time_past`` will be ignored.
     Returns:
-        return (str): File path of most recent file. Returns *"invalid/path"* if no valid file found
+        File path of the most recent file if valid file exists otherwise returns *"invalid/path"*
     '''
 
     # Define command string for finding most recent file, use find to get most recent file
@@ -540,13 +594,13 @@ def get_most_recent_file_board(c: Connection, dir: str, file_identifier: str = "
 
 def path_exists(c: Connection, path: str) -> bool:
     '''
-    Check if specified path exists on RFSoC board.
+    Check if specified ``path`` exists on |RFSoC| board.
 
     Args:
-        c (Connection): Fabric Connection object of RFSoC board. Can be created using ``get_connection`` function
-        path (str | pathlib.PosixPath): File path to check existence of
+        c: *Fabric* **Connection** object of |RFSoC| board
+        path: Path to check existence of
     Returns:
-        return (bool): Whether the file path exists
+        **True** if ``path`` exists, otherwise **False**
     '''
 
     path = str(path) # Convert path objects to str

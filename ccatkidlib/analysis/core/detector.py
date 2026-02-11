@@ -115,9 +115,9 @@ class Detector:
 
         # Create Timestream, Target, and VNA data objects based provided arguments
         # ------------------------------------------------------------------------
-        if not isinstance(stream, Timestream): stream = Detector._load_data(Timestream, com_to, self.analysis_cfg, dets, noise_tones, stream_timestamp, stream_path, **kwargs)
-        if not isinstance(targ, Target): targ = Detector._load_data(Target, com_to, self.analysis_cfg, dets, noise_tones, targ_timestamp, targ_path, **kwargs)
-        if not isinstance(vna, VNA): vna = Detector._load_data(VNA, com_to, self.analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
+        if not isinstance(stream, Timestream): stream = Detector._load_data(Timestream, com_to, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, stream_timestamp, stream_path, **kwargs)
+        if not isinstance(targ, Target): targ = Detector._load_data(Target, com_to, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, targ_timestamp, targ_path, **kwargs)
+        if not isinstance(vna, VNA): vna = Detector._load_data(VNA, com_to, cfg_path, self.analysis_cfg, self.viz_cfg, None, None, vna_timestamp, vna_path, **kwargs)
 
         # Must have a sweep to do meaningful data analysis
         # ------------------------------------------------
@@ -127,8 +127,8 @@ class Detector:
                 vna_path, targ_path = pair.get_sweep(stream.data_path[0], **kwargs)
 
                 # Load found sweep
-                if  Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, self.analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
-                if Path(targ_path).exists(): targ = Detector._load_data(Target, com_to, self.analysis_cfg, dets, noise_tones, targ_timestamp, targ_path, **kwargs)
+                if Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, cfg_path, self.analysis_cfg, self.viz_cfg, None, None, vna_timestamp, vna_path, **kwargs)
+                if Path(targ_path).exists(): targ = Detector._load_data(Target, com_to, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, targ_timestamp, targ_path, **kwargs)
 
                 if not isinstance(targ, Target): # and not isinstance(vna, VNA):
                     error = 'Failed to find target sweep associated with timestream. If there is no target sweep, create a Timestream object instead.'
@@ -143,7 +143,7 @@ class Detector:
             self.tones = targ.tones
             if vna is None:
                 vna_path, _ = pair.get_sweep(targ.data_path[0], **kwargs)
-                if Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, self.analysis_cfg, None, None, vna_timestamp, vna_path, **kwargs)
+                if Path(vna_path).exists(): vna = Detector._load_data(VNA, com_to, cfg_path, self.analysis_cfg, self.viz_cfg, None, None, vna_timestamp, vna_path, **kwargs)
 
         self.bid, self.drid = com_to.split('.')
 
@@ -161,7 +161,7 @@ class Detector:
         log_dir = io.add_dir('log', 
                              str(self.targ.data_path[0]), 
                              save_root = self.analysis_cfg['io']['file_logging']['logging_root_dir'],
-                             data_root = self.targ.root_dir,
+                             data_root = self.targ._root_dir,
                              sub_dirs=[""])
         log.setup_logging(Path(log_dir) / self.analysis_cfg['io']['file_logging']['logging_fname'], 
                           self.analysis_cfg['io']['file_logging']['detector_level'], 
@@ -228,7 +228,7 @@ class Detector:
         return io.add_dir('fig',
                           str(self.targ.data_path[0]),
                           save_root = self.viz_cfg['save']['fig_root_dir'],
-                          data_root = self.targ.root_dir,
+                          data_root = self.targ._root_dir,
                           sub_dirs = ['detector'],
                           timestamp = str(self.timestamp))
 
@@ -241,7 +241,7 @@ class Detector:
         pickle_dir =  io.add_dir('pickle',
                                  str(self.targ.data_path[0]),
                                  save_root = self.analysis_cfg['io']['pickle']['pickle_root_dir'],
-                                 data_root = self.targ.root_dir,
+                                 data_root = self.targ._root_dir,
                                  sub_dirs = ['detector'],
                                  timestamp = str(self.timestamp))
         io.create_dir(Path(pickle_dir) / 'dataframe')
@@ -303,7 +303,7 @@ class Detector:
 
         self.properties # Load properties
         args = [[self, nonlinear, asymm, fix_cable, fix_thetaQ, ccat_mp.check_max_workers(max_workers), ex]]
-        self.targ.transform(Detector.calc_complex_fit, *args, include=include, exclude=exclude, recalc = recalc, col_name = col_name, batch_size=len(self.tones))
+        self.targ.transform(Detector.calc_complex_fit, *args, include=include, exclude=exclude, recalc = recalc, col_name = col_name)
         self.targ.data = self.targ._unnest('struct_' + col_name[-1])
 
         # Calculate Q_c and Q_i. Convert cable delay into nanaseconds
@@ -348,7 +348,7 @@ class Detector:
 
         radii = [self.get_properties(col_name = f'{col}_R', include=include, exclude=exclude, strict=True).to_numpy().T[1] for col in circle_fit_col]
         args = [[self, pre, radius, nonlin, method, param, win, ccat_mp.check_max_workers(max_workers), ex] for pre, radius, nonlin, param, win in zip(prefix, radii, nonlinear, params, window)]
-        self.targ.transform([Detector.calc_phase_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
+        self.targ.transform([Detector.calc_phase_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
 
         # Calculate Q_c, Q_i, and nonlinearity parameter 'a'
@@ -388,7 +388,7 @@ class Detector:
 
         self.properties # load properties
         args = [[self, pre, bounds, loss, f_scale, method, ccat_mp.check_max_workers(max_workers), ex] for pre in prefix]
-        self.targ.transform([Detector.calc_IQ_circle_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
+        self.targ.transform([Detector.calc_IQ_circle_fit]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.targ.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
@@ -571,7 +571,7 @@ class Detector:
         for pre, win in zip(prefix, window):
             lower_bound = (HM_mid - (HM_mid - HM_low)*win).astype(int)
             upper_bound = (HM_mid + (HM_high - HM_mid)*win).astype(int)
-            self.targ.IQ_trim(prefix=pre, lower_bound = lower_bound, upper_bound=upper_bound, name=col_name[-1], include = include, exclude=exclude, recalc=recalc)
+            self.targ.IQ_trim(prefix=pre, lower_index = lower_bound, upper_index=upper_bound, name=col_name[-1], include = include, exclude=exclude, recalc=recalc)
         return self.targ.get_data(col_name=([f"{col_name[-1]}_trim_{pre}{'_' if pre else ''}{col_name[0]}" for pre in prefix] +
                                             [f"{col_name[-1]}_trim_{pre}{'_' if pre else ''}{col_name[1]}" for pre in prefix]), include=include, exclude=exclude, strict=True)
 
@@ -761,7 +761,7 @@ class Detector:
                 noise_freqs = self.get_properties('tone_freqs', include=noise_tones, strict=True).to_numpy().T[1]
                 closest_tones = (self.get_properties('tone_freqs', include=include_subset, strict=True)
                                      .lazy()
-                                     .select(['det'] + [((pl.col('tone_freqs') - freq).abs()/pl.lit(1e6)).alias(f'{tone:0{self.padding}d}') for tone, freq in zip(noise_tones, noise_freqs)])
+                                     .select(['det'] + [((pl.col('tone_freqs') - freq).abs()/pl.lit(1e6)).alias(f'{tone:0{self.stream.padding}d}') for tone, freq in zip(noise_tones, noise_freqs)])
                                      .collect()
                                      .unpivot(index='det', variable_name='closest_noise_tone', value_name='dist')
                                      .lazy()
@@ -832,7 +832,7 @@ class Detector:
         self.properties
         stream_timestamp = self.stream.timestamp
         args = [[self, low, up, k, stream_timestamp, ccat_mp.check_max_workers(max_workers), ex] for low, up in zip(phase_low, phase_up)]
-        self.targ.transform([Detector.calc_phase_spline]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
+        self.targ.transform([Detector.calc_phase_spline]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         self.targ.data = self.targ._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.targ.get_data(col_name=([col_name[-1] for col_name in col_names] + [col_name[-2] for col_name in col_names]), include=include, exclude=exclude)
 
@@ -889,7 +889,7 @@ class Detector:
                  [spline_dict[spline] for spline in x_to_y],
                  ccat_mp.check_max_workers(max_workers),
                  ex] for y_to_x, x_to_y in zip(y_to_x_spline, x_to_y_spline)]
-        self.stream.transform([Detector.calc_phase_to_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.stream.tones))
+        self.stream.transform([Detector.calc_phase_to_f]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         self.stream.data = self.stream._unnest(['struct_' + col_name[-1] for col_name in col_names])
         return self.stream.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
@@ -1276,25 +1276,28 @@ class Detector:
 
     @staticmethod
     def calc_noise_shift(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'noise']):
-        if tones is not None:
-            tone = tones[0]
-        if len(args) == 5:
-            tone_med_I, tone_med_Q, noise_med_I, noise_med_Q, noise_tone = args
-            if tones is not None: tone_med_I, tone_med_Q, noise_med_I, noise_med_Q, noise_tone = tone_med_I[0], tone_med_Q[0], noise_med_I[0], noise_med_Q[0], noise_tone[0]
+        if tones is None:
+            error = 'ERROR HERE'
+            log.log('ERROR', error, name='analysis.detector')
+            raise RuntimeError(error)
+        
+        if not len(args) == 5: log.log('ERROR', "'tone_med_I', 'tone_med_Q', 'noise_med_I', 'noise_med_Q', and 'noise_tone' are required arguments")
+        tone_med_Is, tone_med_Qs, noise_med_Is, noise_med_Qs, noise_tones = np.array(args)
+        I_shifts, Q_shifts = noise_med_Is - tone_med_Is, noise_med_Qs - tone_med_Qs
 
-            I_shift, Q_shift = noise_med_I - tone_med_I, noise_med_Q - tone_med_Q
-        else:
-            log.log('ERROR', 'I_shift, Q_shift, tone_list, and noise_tone are required arguments.')
+        col_names = [[f'{name}_{noise_tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]] for noise_tone in noise_tones]
 
-        col_name = [f'{name}_{noise_tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
-        I_col_noise, Q_col_noise, shift_col = col_name
-        I_col_tone, Q_col_tone = f"{I_col_noise.split('_')[0]}_{tone:0{padding}d}", f"{Q_col_noise.split('_')[0]}_{tone:0{padding}d}"
+        exprs = []
+        for i, (col_name, tone, I_shift, Q_shift) in enumerate(zip(col_names, tones, I_shifts, Q_shifts)):
+            I_col_noise, Q_col_noise, shift_col = col_name
+            I_col_tone, Q_col_tone = f"{I_col_noise.split('_')[0]}_{tone:0{padding}d}", f"{Q_col_noise.split('_')[0]}_{tone:0{padding}d}"
 
-        if recalc or not (f'{shift_col}_{I_col_tone}' in schema):
-            return [(pl.col(I_col_noise) - I_shift).alias(f'{shift_col}_{I_col_tone}'),
-                    (pl.col(Q_col_noise) - Q_shift).alias(f'{shift_col}_{Q_col_tone}')]
-        else:
-            return pl.col(f'{shift_col}_{I_col_tone}')
+            if recalc or not (f'{shift_col}_{I_col_tone}' in schema):
+                exprs += [(pl.col(I_col_noise) - I_shift).alias(f'{shift_col}_{I_col_tone}'),
+                          (pl.col(Q_col_noise) - Q_shift).alias(f'{shift_col}_{Q_col_tone}')]
+            else:
+                exprs.append(pl.col(f'{shift_col}_{I_col_tone}'))
+        return exprs
 
     @staticmethod
     def calc_phase_spline(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['f', 'phase', 'to_f', 'to_phase']):
@@ -1385,24 +1388,22 @@ class Detector:
 
     @staticmethod
     def calc_frac_f(schema, *args, tones: list[int], padding: int = 4, recalc: bool = False, col_name = ['f', 'frac']):
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
+        if not len(args) == 1: log.log('ERROR', "'f_0' is a required argument")
+        f_0s = args[0]
 
-        f_col, frac_f_col = col_name
+        col_names = [[f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]] for tone in tones] if tones is not None else [col_name]
 
-        if len(args) == 1:
-            f_0 = args
-            if tones is not None: f_0 = f_0[0]
-        else:
-            log.log('ERROR', 'f_0 and tone_list are required arguments.')
+        exprs = [None]*len(col_names)
+        for i, (col_name, f_0) in enumerate(zip(col_names, f_0s)):
+            f_col, frac_f_col = col_name
 
-        if recalc or not (f'{frac_f_col}_{f_col}' in schema):
-            return ((pl.col(f_col) - f_0)/f_0).name.prefix(frac_f_col + '_')
-        else:
-            return pl.col(f'{frac_f_col}_{f_col}')
+            if recalc or not (f'{frac_f_col}_{f_col}' in schema):
+                exprs[i] = ((pl.col(f_col) - f_0)/f_0).name.prefix(frac_f_col + '_')
+            else:
+                exprs[i] = pl.col(f'{frac_f_col}_{f_col}')
+        return exprs
 
-    def properties_histogram(self, col_name, bins=None, mad_filter = True, num_mads = 10, recalc=False, **kwargs):
+    def properties_histogram(self, col_name, bins=None, mad_filter = True, num_mads = 10, filter_exprs = [], recalc=False, **kwargs):
         ''' Calculate histogram of a detector property
 
         Args:
@@ -1421,12 +1422,13 @@ class Detector:
         if recalc or not (hist_col_name[0] in properties.schema):
             num_tones = properties.height
             df = properties.select(col_name).filter(~pl.col(col_name).is_nan()) # Filter out NaN values
+            if filter_exprs: df = df.filter(filter_exprs)
 
             if mad_filter:
                 df = (df.with_columns(pl.col(col_name).median().alias('median'))
                         .with_columns((pl.col(col_name) - pl.col('median')).abs().median().alias('MAD'))
                         .filter((pl.col(col_name) > (pl.col('median') - num_mads*pl.col('MAD'))) & (pl.col(col_name) < (pl.col('median') + num_mads*pl.col('MAD')))))
-
+    
             bins = df.height // 8 if bins is None else min(bins, num_tones)
             data = df[col_name].to_numpy()
 
@@ -1464,7 +1466,7 @@ class Detector:
         if dynamic and by is not None: hist = hv.util.Dynamic(hist)
         return hist
 
-    def properties_histogram_plot(self, col_name, plot_median=None, xlabel = '' , title='', save_fig: bool | None = None, overwrite: bool | None = None, save_name: str = None, return_fig=True, return_df=False, df = None, by=None, **kwargs):
+    def properties_histogram_plot(self, col_name, plot_median=None, xlabel = '' , title='', filter_exprs = [], save_fig: bool | None = None, overwrite: bool | None = None, save_name: str = None, return_fig=True, return_df=False, df = None, by=None, **kwargs):
         ''' Plot histogram of a detector property
 
         Args:
@@ -1478,7 +1480,7 @@ class Detector:
             df = self.properties_histogram(col_name, **kwargs)
             df = (df.rename({col: name for col, name in zip(df.columns, ['counts', 'edges'])})
                     .with_columns(pl.lit(self.properties[col_name].median()).alias('median')))
-
+            if filter_exprs: df = df.filter(filter_exprs)
         if not return_fig: return df, None
 
         if plot_median is None: plot_median = self.viz_cfg['static_plot']['histogram']['plot_median']
@@ -1488,23 +1490,18 @@ class Detector:
         cfg = self.targ.drone_cfg['det_config']
         title = title if title else rf"${cfg['detector_type']}\ {cfg['network']}$"
 
-        cmap = kwargs['cmap'] if 'cmap' in kwargs else self.viz_cfg['static_plot']['histogram']['cmap']
         linewidth = kwargs['linewidth'] if 'linewidth' in kwargs else self.viz_cfg['static_plot']['histogram']['linewidth']
         linestyle = kwargs['linestyle'] if 'linestyle' in kwargs else self.viz_cfg['static_plot']['histogram']['linestyle']
-
         plot_opts = (opts.Histogram(xlabel=xlabel if xlabel else col_name,
                                     ylabel='Count',
                                     title=title,
                                     aspect=kwargs['aspect'] if 'aspect' in kwargs else self.viz_cfg['static_plot']['histogram']['aspect'],
                                     fig_size=kwargs['fig_size'] if 'aspect' in kwargs else self.viz_cfg['static_plot']['histogram']['fig_size'],
-                                    #facecolor=hv.Cycle(cmap),
                                     show_grid=True,
                                     show_legend=True),
-                    opts.Curve(#color=hv.Cycle(cmap),
-                               linewidth=linewidth,
+                    opts.Curve(linewidth=linewidth,
                                linestyle=linestyle),
-                    opts.VLine(#color=hv.Cycle(cmap),
-                               linewidth=linewidth,
+                    opts.VLine(linewidth=linewidth,
                                linestyle=linestyle))
 
         # Create plot for immediate visualization
@@ -1543,7 +1540,7 @@ class Detector:
         return data_objs, data_types
 
     @staticmethod
-    def _load_data(data_class, com_to, analysis_cfg, dets, noise_tones, timestamp, data_path, **kwargs):
+    def _load_data(data_class, com_to, cfg_path, analysis_cfg, viz_cfg, dets, noise_tones, timestamp, data_path, **kwargs):
         '''
         Load *ccatkidlib* data file into VNA, Target, or Timestream data object
 
@@ -1559,7 +1556,7 @@ class Detector:
         data = None
         if data_path is not None or timestamp is not None:
             try:
-                data = data_class(com_to = com_to, analysis_cfg = analysis_cfg, tones = dets, noise_tones = noise_tones, timestamp = timestamp, data_path = data_path, **kwargs)
+                data = data_class(com_to = com_to, cfg_path = cfg_path, analysis_cfg = analysis_cfg, viz_cfg = viz_cfg, tones = dets, noise_tones = noise_tones, timestamp = timestamp, data_path = data_path, **kwargs)
             except Exception as e:
                 log.log('ERROR', 'Failed to load %s with exception: %s.', data_class.__name__, e)
                 data = None

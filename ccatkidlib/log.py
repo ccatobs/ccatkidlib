@@ -1,30 +1,47 @@
-import collections
-import logging
+'''
+Library for standardized console and terminal logging across module
 
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+
+'''
+
+import sys
+import time
+import logging
+import collections
 import tqdm.contrib.logging as tqdm_logging
 
+from tqdm import tqdm
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass, field
 from functools import partial, partialmethod, wraps
-from tqdm import tqdm
 
-def setup_logging(log_path, file_level, terminal_level, max_file_size = 100, name = __name__):
+from typing import Literal, Callable, Any
+
+Level = Literal['PCS', 'DEBUG', 'TIMER', 'INFO', 'HEADER', 'WARNING', 'ERROR', 'CRITICAL']
+
+def setup_logging(log_path: str, 
+                  file_level: str, terminal_level: str, 
+                  max_file_size: int = 100, 
+                  name: str = __name__) -> None:
     '''
-    Setup logger and logger config.
+    Setup levels and handlers for logger of the specified ``name``
 
     Args:
-        log_path  (str) : File path of the logger including log name
-        level     (str) : Level at which to log (messages below this level are ignored)
-        name      (str) : Name of the logger
+        log_path: Path of file that logger should log to
+        file_level: Level at which to log messages to log file
+        terminal_level: Level at which to log messages to terminal
+        max_file_size: Maximum size of log file in Megabytes. If exceeded, a new log file will be created.
+        name: Name of logger
     '''
 
-    def _addLevel(name, num):
+    def _addLevel(name: str, num: int) -> None:
         '''
-        Adds a custom logging level to the logger.
+        Add a custom logging level to the logger
 
-        Parameters:
-            num  (int): Logging level
-            name (str): Name of logging level
+        Args:
+            name: Name of the custom level
+            num: Log level of the custom level
         '''
         
         # Convert passed name to lowercase 
@@ -88,16 +105,15 @@ def setup_logging(log_path, file_level, terminal_level, max_file_size = 100, nam
     # Test logging/confirm successful logger setup
     log('DEBUG', "Successfully initialized logger: %s", name, name = name)
 
-def log(level: str, msg: str, *args, name: str = __name__) -> None:
+def log(level: Level, msg: str, *args, name: str = __name__) -> None:
     '''
-    Log message and print message to terminal. 
+    Log message to logger of the specified ``name`` with custom formatting
 
     Args:
-        level (str) : Level of message at which to log (One of: 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
-        msg   (str) : Message to log
-        *args: Additional arguments to the ``logger.log`` method for message formatting
-
-        name  (str, optional) : Name of logger
+        level: Level of message at which to log
+        msg: Message to log
+        args: Positional arguments to pass to ``logger.log`` method for *print-f* style message formatting
+        name: Name of logger
     '''
     # Get logger
     logger = logging.getLogger(name)
@@ -106,57 +122,102 @@ def log(level: str, msg: str, *args, name: str = __name__) -> None:
     # -------------------
     try:
         log_level = logging.getLevelName(level)
-        style = Style()
 
-        msg = f'{style.log_begin(level, getattr(style, level))} {msg}'
+        msg = f'{Style.style_level(level)} {msg}'
         logger.log(log_level, msg, *args) if not len(args) == 0 else logger.log(log_level, msg)
     except Exception as e:
         # Log error message
         logger.log(logging.ERROR, 'Failed to log message %s with error %s!', msg, e)
 
-def wait(t_sec: float, desc: str = "") -> None:
+def wait(t: float, desc: str = "", interval: float = 0.1) -> None:
     '''
-    Wait for ``t_sec`` seconds with a progress bar
+    Sleep for ``t`` seconds with a *tqdm* progress bar. This is done by monitoring the difference between the current and start time every ``interval`` seconds.
 
-    Parameters:
-        t_sec (int) : Number of seconds to wait
-        desc (str, optional): Description to add to progress bar. Defaults to ""
+    Args:
+        t: Number of seconds to sleep
+        desc: Description to add to progress bar
+        interval: Number of seconds to sleep before checking the difference between the current and start time
     '''    
 
-    start_time = time.time()
     time_diff = 0
-
-    with tqdm(total=t_sec, colour='BLUE', desc = f"{Style().log_begin('WAIT', Style.WAIT)} {desc}") as pbar:
-        while time_diff < t_sec:
+    start_time = time.time()
+    with tqdm(total=t, colour='BLUE', desc = f"{Style.style_level('WAIT')} {desc}") as pbar:
+        while time_diff < t:
             pbar.update(int(time_diff - pbar.n))
-            time.sleep(0.1)
+            time.sleep(interval)
             time_diff = time.time() - start_time
-        pbar.update(t_sec - pbar.n)
+        pbar.update(t - pbar.n)
 
-def header(func):
+def header(method: Callable) -> Any:
     '''
-    Decorator for wrapping rfsoc_daq methods. Provides error handling and logs HEADER and FOOTER messages.
+    Decorator that logs **HEADER** and **FOOTER** messages and implements error handling for the wrapped method
 
-    Parameters:
-        func (func): Function to decorate    
+    Args:
+        method: Method to decorate  
+    Returns:
+        The return of ``method`` if executed successfully otherwise **None**
     '''
-    @wraps(func) # Help calls on func will print help message of func instead of help message of header
+    @wraps(method) # Needed for help() calls on ``method`` to print help string of ``method`` instead of help string of header
     def _wrapper(self, *args, **kwargs):
-        name = func.__name__ # Get method name
-        fmt = Style().func_name(name) # Add style to function name
+        name = method.__name__ 
+        fmt = Style.style_name(name)
 
         # Try to execute func
         # -------------------
         try:
             log.log('HEADER', "Executing %s...", fmt)
-            rtn = func(self, *args, **kwargs)
-            log.log('FOOTER', "%s executed successfully!", fmt)
+            rtn = method(self, *args, **kwargs)
+            log.log('FOOTER', "%s executed successfully", fmt)
             return rtn
         except Exception as e:
             import traceback 
-            # Print error traceback if func failed to execute and exit out of program
-            log.log('CRITICAL', "TERMINATING PROGRAM -- %s failed to execute with error:\n%s", fmt, traceback.format_exc())
-            sys.exit()
+            log.log('ERROR', "Method %s failed to execute with error:\n%s", fmt, traceback.format_exc())
+            return None
+    return _wrapper
+
+def method_timer(method: Callable) -> Any:
+    '''
+    Decorator that logs method execution time
+    
+    Args:
+        method: Method to decorate
+    Returns:
+        The return of ``method``
+    '''
+
+    @wraps(method)
+    def _wrapper(self, *args, **kwargs):
+        import time
+        name = method.__name__
+
+        start_time = time.time()
+        rtn = method(self, *args, **kwargs)
+        time_diff = time.time() - start_time
+
+        log.log('TIMER', f'Method {Style.style_name(name)} executed in {time_diff} seconds.')
+        return rtn
+    return _wrapper
+
+def function_timer(func: Callable) -> Any:   
+    '''
+    Decorator that logs function execution time
+    
+    Args:
+        func: Function to decorate
+    Returns:
+        The return of ``func``
+    '''
+    @wraps(func)
+    def _wrapper(*args, **kwargs):
+        import time
+        name = func.__name__
+
+        start_time = time.time()
+        rtn = func(*args, **kwargs)
+        time_diff = time.time() - start_time
+
+        log.log('TIMER', f'Method {Style.style_name(name)} executed in {time_diff} seconds.')
+        return rtn
     return _wrapper
 
 @dataclass
@@ -180,33 +241,28 @@ class Style:
     WAIT:     str = '\033[94;7m' 
     TIMER:    str = '\033[96;7m'
 
-    # Create stack for changing header/footer colors
-    HEADER_STACK: collections.deque = field(default_factory=collections.deque)
-
     # Style Properties
     LONGEST_DESC: int = 8
     
-    def log_begin(self, level, style):
-        return f'{style}{level:>{self.LONGEST_DESC}} {self.DEFAULT}|'
+    def style_level(level: str) -> str:
+        '''
+        Apply style to specified log ``level``
+        
+        Args:
+            level: Log level to applying styling to
+        Returns:
+            String with styling applied to log level
+        '''
 
-    def func_name(self, name):
-        return f'{self.ITALICS}{name}{self.DEFAULT}'
+        return f'{getattr(Style, level)}{level:>{Style.LONGEST_DESC}} {Style.DEFAULT}|'
 
-    def __getattribute__(self, name):
-        try:
-            if name == 'HEADER':
-                curr_header = super().__getattribute__("HEADER")
-                self.HEADER_STACK.append(curr_header)
-
-                styles = curr_header.split(';')
-                color = styles[-1][:-1]
-                Style.HEADER = f"{';'.join(styles[:-1])};{int(color)-1}m"
-                return curr_header
-            elif name == 'FOOTER':
-                curr_footer = self.HEADER_STACK.pop()
-                Style.HEADER = curr_footer
-                return curr_footer
-        except Exception as e:
-            #print(e)
-            pass
-        return super().__getattribute__(name)
+    def style_name(name: str) -> str:
+        '''
+        Apply italics style to specified function/method ``name``
+        
+        Args:
+            name: Function/method name to apply styling to
+        Returns:
+            String with styling applied to function/method name
+        '''
+        return f'{Style.ITALICS}{name}{Style.DEFAULT}'

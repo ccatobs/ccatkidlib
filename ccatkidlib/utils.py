@@ -1,44 +1,32 @@
 '''
-Various utility functions for MKID data collection and analysis.
+General utility functions
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
 '''
 
-import pytz
-import numpy as np
-from datetime import datetime
-from tqdm import tqdm
-from functools import wraps
+from typing import Any
 
-import ccatkidlib.log as log
-from ccatkidlib.log import Style
-
-
-def convert_timestamp(timestamp, timezone = 'America/New_York'):
-    timestamp = int(timestamp)
-    return datetime.fromtimestamp(timestamp, pytz.timezone(timezone)).strftime("%Y-%m-%d %H:%M:%S")
-
-def arr_to_list(arr):
-    if isinstance(arr, np.ndarray): arr = arr.tolist()
-    return arr
-
-def dict_get(dic, keys):
+def dict_get(dic: dict, keys: str | list[str]) -> Any | None:
     '''
-    Get value from dictionary using provided dictionary keys.
+    Fetch value from a nested dictionary corresponding to the last key specified in ``keys``. 
+    An attempt will be made to reduce the dictionary using the ``keys`` in order until the final key is found or a **KeyError** is encountered.
+    If a **KeyError** is encountered, the reduced dictionary will be recursively searched for the final key.
 
-    Parameters:
-        dic: Dictionary to pull value from
-        keys: Dictionary keys
+    Args:
+        dic: Dictionary to get value from
+        keys: List of dictionary keys (in dictionary nesting order)
     Returns:
-        value: Value corresponding to dictionary keys (returns None if invalid key is encountered)
+        Value of ``dic`` corresponding to the final key in ``keys`` or **None** if final key is not found
     '''
 
-    def _dict_get_r(dic, key):
+    def _dict_get_r(dic: dict, key: str) -> tuple[bool, Any]:
         '''
         Recursively get value in dictionary using specified key.
         Assumes key is unique, otherwise gets first matching key.
 
-        Parameters:
-            cfg (dict): Dictionary to get value from
-            key (str): Entry in dictionary to retrieve
+        Args:
+            dic: Dictionary to get value from
+            key: Entry in dictionary to retrieve
         '''
 
         done = False
@@ -62,24 +50,28 @@ def dict_get(dic, keys):
     done, value = _dict_get_r(dic, keys[-1])
     return value if done else None
 
-def dict_set(dic, keys, value):
+def dict_set(dic: dict, keys: str | list[str], value: Any) -> bool:
     '''
-    Set value in dictionary using provided dictionary keys.
+    Set value of the last key specified in ``keys`` in the specified dictionary. 
+    An attempt will be made to reduce the dictionary using the ``keys`` in order until the final key is found or a **KeyError** is encountered.
+    If a **KeyError** is encountered, the reduced dictionary will be recursively searched for the final key.
 
-    Parameters:
+    Args:
         dic: Dictionary to set value in
-        keys: Dictionary keys
+        keys: List of dictionary keys (in dictionary nesting order)
+        value: Value to set 
     Returns:
-        value: Value corresponding to dictionary keys (returns False if invalid key is encountered)
+        **True** if final key in ``keys`` was successfully set with the specified ``value`` otherwise **False**
     '''
-    def _dict_set_r(dic, key, value):
+
+    def _dict_set_r(dic: dict, key: str, value: Any) -> bool:
         '''
         Recursively edit value in dictionary using specified key.
         Assumes key is unique, otherwise edits first matching key.
 
-        Parameters:
-            cfg (dict): Dictionary to edit
-            key (str): Entry in dictionary to be edited
+        Args:
+            dic: Dictionary to edit
+            key: Entry in dictionary to be edited
             value: Value to replace current value in dictionary
         '''
         
@@ -101,33 +93,3 @@ def dict_set(dic, keys, value):
         except KeyError:
             return False
     return _dict_set_r(dic, keys[-1], value)
-
-def method_timer(func):
-    @wraps(func)
-    def _wrapper(self, *args, **kwargs):
-        import time
-        name = func.__name__
-
-        start_time = time.time()
-        rtn = func(self, *args, **kwargs)
-        time_diff = time.time() - start_time
-
-        s = Style()
-        log.log('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
-        return rtn
-    return _wrapper
-
-def function_timer(func):
-    @wraps(func)
-    def _wrapper(*args, **kwargs):
-        import time
-        name = func.__name__
-
-        start_time = time.time()
-        rtn = func(*args, **kwargs)
-        time_diff = time.time() - start_time
-
-        s = Style()
-        log.log('TIMER', f'Method {s.func_name(name)} executed in {time_diff} seconds.')
-        return rtn
-    return _wrapper

@@ -9,8 +9,6 @@ import ccatkidlib.io as io
 import ccatkidlib.log as log
 import ccatkidlib.utils as utils
 
-from ccatkidlib.utils import function_timer
-
 #@function_timer
 def group_args(com_to, *args):
     arg_list = []

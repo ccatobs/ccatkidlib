@@ -1,19 +1,9 @@
-""" Module used for data acquisition with a radio frequency system on a chip (RFSoC)
+""" 
+This library defines the ``R`` Class used for controlling and taking data with 
+Xilinx ZCU111 `Radio Frequency System on a Chip <https://www.amd.com/en/products/adaptive-socs-and-fpgas/evaluation-boards/zcu111.html>`_ (|RFSoC|) boards. 
+The data acquisition methods are tailored for frequency-division multiplexed readout of microwave resonators: kinetic inductance detectors (|KID|) in particular.
 
-This module defines the ``R`` Class used for controlling and taking data with 
-Xilinx ZCU111 radio frequency systems on a chip (RFSoCs). The data acquisition
-methods are tailored for frequency-division multiplexed readout of microwave
-resonators: kinetic inductance detectors (KIDs) in particular.
-
-Authors:
-    - Darshan Patel <dp649@cornell.edu>
-
-Example:
-    The RFSoC control object is initialized as:
-        $ RC = R()
-
-.. _Xilinx ZCU111 RFSoC:
-   https://www.amd.com/en/products/adaptive-socs-and-fpgas/evaluation-boards/zcu111.html
+.. codeauthor:: Darshan Patel <dp649@cornell.edu> 
 """
 
 # Import Python modules
@@ -45,7 +35,7 @@ import ccatkidlib.rfsoc.arg_utils as autils
 
 if mp.get_start_method(allow_none=True) is None: mp.set_start_method('fork')
 class R:
-    ''' Class for controlling and taking data with a radio frequency system on a chip (RFSoC)
+    ''' Class for data acquisition with |RFSoC| boards
 
     Attributes:
         curr_date (str): Date of measurement
@@ -90,7 +80,7 @@ class R:
         sense_attens (dict): Current sense attenuations of each drone. Used by rfsoc-controller OCS agent
     '''
 
-    @utils.method_timer
+    @log.method_timer
     def __init__(self, cfg_path: str = f"{Path(__file__).parent}/system_config.yaml", init_boards: bool | None = None, init_drones: bool | None = None, **kwargs) -> None:
         '''
         Constructor for R. Creates directories for data storage, configures logger, initializes RFSoC boards/drones, and starts RFSoC OCS agent.
@@ -150,7 +140,7 @@ class R:
         # ------------------
         new_dir_paths = io.create_tree(self.drone_list, self.curr_date, self.sess_id, self.data_dir) # Create file directory structure for saving data
         self.config_dirs, self.targ_dirs, self.timestream_dirs, self.vna_dirs = new_dir_paths
-        self.noise_files = io.create_tmp(self.drone_list, self.tmp_dir) # Create tmp directory and noise tone files
+        self.noise_files = io.create_noise_files(self.drone_list, self.tmp_dir) # Create tmp directory and noise tone files
 
         # Setup logger
         self.log_dir = self.config_dirs[0].parent
@@ -318,7 +308,7 @@ class R:
         self.g3_dir = Path(self.io_cfg['file_paths']['g3_dir'])
 
     @header
-    @utils.method_timer
+    @log.method_timer
     def setup_boards(self, **kwargs) -> None:
         '''
         (Re)initialize RFSoC boards one at time
@@ -454,7 +444,7 @@ class R:
         # Log the currently running drones at INFO level if a change was made otherwise log to DEBUG
         log.log('INFO' if wait else 'DEBUG' , f"Drones {sorted(running_drones)} are currently running!")
 
-    @utils.method_timer
+    @log.method_timer
     def set_NCLO(self, NCLO: int | list[int] | None = None, **kwargs) -> list[float]:
         '''
         Set the numerically controlled local oscillator (NCLO) frequencies for each drone
@@ -529,7 +519,7 @@ class R:
         return NCLOs
 
     @header
-    @utils.method_timer
+    @log.method_timer
     def set_atten(self, drive: float | list[float] | None = None, sense: float | list[float] | None = None, **kwargs) -> tuple[list[float], list[float]]:
         '''
         Set drive/sense attenuations of frontend attenuators connected to RFSoC board
@@ -668,7 +658,7 @@ class R:
     #===========================#
 
     @header
-    @utils.method_timer
+    @log.method_timer
     def get_stats(self, space: bool = False, temps: bool = False, ADC_rms: bool = True, **kwargs) -> tuple[list[float], tuple[list[float], list[float]], list[float]]:
         '''
         Get RFSoC storage space, temperatures, and RMS power at drone analog-to-digital converters (ADCs).
@@ -958,7 +948,7 @@ class R:
     # Data Acquisition Methods #
     #==========================#
     @header
-    @utils.method_timer
+    @log.method_timer
     def take_vna_sweep(self, **kwargs) -> list[str]:
         '''
         Take a vector network analyzer (VNA) style sweep covering the full 512 MHz available bandwidth
@@ -976,7 +966,7 @@ class R:
         Returns:
             return (list[str]): List of VNA sweep file paths
         '''
-        @utils.function_timer
+        @log.function_timer
         def _write_vna_comb(com: str, *args, **kwargs):
             '''
             Internal function for writing new VNA combs in parallel
@@ -991,7 +981,7 @@ class R:
             log.log('PCS', f'{rtn.session}')
             return rtn
 
-        @utils.function_timer
+        @log.function_timer
         def _take_vna_sweep(com: str, *args, **kwargs):
             '''
             Internal function for taking VNA sweeps in parallel
@@ -1056,7 +1046,7 @@ class R:
             return vna_files
 
     @header
-    @utils.method_timer
+    @log.method_timer
     def take_target_sweep(self, **kwargs) -> list[str]:
         '''
         Take a vector network analyzer (VNA) style sweep with a specified set of tones.
@@ -1144,7 +1134,7 @@ class R:
             return targ_files
 
     @header
-    @utils.method_timer
+    @log.method_timer
     def take_timestream(self, t_sec: float, **kwargs) -> list[str]:
         '''
         Take timestream data with a specified set of tones
@@ -1435,7 +1425,7 @@ class R:
     #================#
 
     @header
-    @utils.method_timer
+    @log.method_timer
     def write_config_comb(self, **kwargs):
         '''
         Write a custom set of radio frequency tones (comb)
@@ -1505,7 +1495,7 @@ class R:
         return rtn
 
     @header
-    @utils.method_timer
+    @log.method_timer
     def find_detectors(self, new_sweep: bool = True, **kwargs):
         '''
         Find detectors using a VNA sweep
@@ -1732,7 +1722,7 @@ class R:
         return found_nums, vna_files
 
     @header
-    @utils.method_timer
+    @log.method_timer
     def tune_tone_placement(self, new_sweep: bool = True, **kwargs):
         '''
         Find detectors using a target sweep
@@ -2095,6 +2085,10 @@ class R:
 
         import alcove_base
 
+        def _arr_to_list(arr):
+            if isinstance(arr, np.ndarray): arr = arr.tolist()
+            return arr
+
         def _check_comb(key, value):
             # Check if the tone frequencies are within the bandwidth of the RFSoC
             if len(value) > 1024: value = value[:1024]
@@ -2117,7 +2111,7 @@ class R:
 
         def _reset_comb(ip, ssh_key, comb_dict):
             for key, value in comb_dict.items():
-                io.save_array_board(ip, ssh_key, value['path'], utils.arr_to_list(value['comb']), self.tmp_dir)
+                io.save_array_board(ip, ssh_key, value['path'], _arr_to_list(value['comb']), self.tmp_dir)
 
             # Return unmodified comb
             return comb_dict['tone_freqs']['comb'], comb_dict['tone_powers']['comb'], comb_dict['tone_phis']['comb']
@@ -2132,7 +2126,7 @@ class R:
 
         def _write_new_comb(ip, ssh_key, comb_dict, key, comb):
             comb_dict[key]['num_tones'] = len(comb)
-            io.save_array_board(ip, ssh_key, comb_dict[key]['path'], utils.arr_to_list(comb), self.tmp_dir)
+            io.save_array_board(ip, ssh_key, comb_dict[key]['path'], _arr_to_list(comb), self.tmp_dir)
             comb_dict[key]['new_comb'] = comb
             return comb_dict
 
@@ -2289,7 +2283,7 @@ class R:
                         tone_phis = phis
 
                 # Save phi comb and power comb (if necessary)
-                io.save_array_board(bip, ssh_key, phi_path, utils.arr_to_list(tone_phis), self.tmp_dir)
+                io.save_array_board(bip, ssh_key, phi_path, _arr_to_list(tone_phis), self.tmp_dir)
             else:
                 tone_phis = comb_dict['tone_phis']['new_comb']
                 best_peak = _comb_peak(tone_freqs_bb, tone_powers, tone_phis)
@@ -2299,19 +2293,19 @@ class R:
                 log.log('WARNING', f"The custom comb has points(s) with output power {best_peak} which exceeds the maximum DAC power of {max_power}! Rescaling to lower tone power.")
                 tone_powers *= max_power/best_peak
 
-            if gen_amps or rescale_power: io.save_array_board(bip, ssh_key, amp_path, utils.arr_to_list(tone_powers), self.tmp_dir)
+            if gen_amps or rescale_power: io.save_array_board(bip, ssh_key, amp_path, _arr_to_list(tone_powers), self.tmp_dir)
             log.log('INFO', f"Saved custom comb for drone {com}!")
 
             # Edit comb saved in drone config files
             # -------------------------------------
             # Frequency comb
-            io.edit_config(self.drone_cfg[ind], ['tones', 'tone_freqs'], utils.arr_to_list(tone_freqs))
+            io.edit_config(self.drone_cfg[ind], ['tones', 'tone_freqs'], _arr_to_list(tone_freqs))
 
             # Amplitude comb
-            io.edit_config(self.drone_cfg[ind], ['tones', 'tone_powers'], utils.arr_to_list(tone_powers))
+            io.edit_config(self.drone_cfg[ind], ['tones', 'tone_powers'], _arr_to_list(tone_powers))
 
             # Phase comb
-            io.edit_config(self.drone_cfg[ind], ['tones', 'tone_phis'], utils.arr_to_list(tone_phis))
+            io.edit_config(self.drone_cfg[ind], ['tones', 'tone_phis'], _arr_to_list(tone_phis))
 
             # Number of tones
             io.edit_config(self.drone_cfg[ind], ['tones', 'num_tones'], int(tone_num))
@@ -2386,7 +2380,7 @@ class R:
         # Return loaded frequency, amplitude, and phase arrays
         return *tuple(combs),
 
-    #@utils.method_timer
+    #@log.method_timer
     def _save_curr_comb(self, com, name, **kwargs):
         '''
         Save current comb files to data directory and add their file paths to drone config files.

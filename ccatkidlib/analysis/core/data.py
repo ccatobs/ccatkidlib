@@ -1,18 +1,27 @@
-import pathlib
+'''
+This library defines the ``Data`` base class which represents a raw |RFSoC| data product produced using the *ccatkidlib* data acquisition library.
+The ``Data`` class implements attributes/methods that are universal between all types of |RFSoC| data products 
+and should be sub-classed to handle functionality (e.g., data loading) that differs between different data products (e.g., frequency sweep vs. time-ordered).
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+
+'''
+from __future__ import annotations
+
+import re
+import copy
 import numpy as np
 import polars as pl
 import concurrent.futures
-import time
-import pathlib
-import re
-import copy
 
+from math import ceil
 from pathlib import Path
 from scipy.signal import savgol_filter
+
 from functools import cached_property
+from abc import abstractmethod
 from collections.abc import Iterable
-from typing import Callable, TypeAlias, Any
-from math import ceil
+from typing import Callable, TypeAlias, Any, Literal, TYPE_CHECKING
 
 # Local Imports
 import ccatkidlib.io as io
@@ -22,62 +31,60 @@ import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 
-from ccatkidlib.log import header
-from ccatkidlib.utils import method_timer
+if TYPE_CHECKING:
+    from concurrent.futures import ProcessPoolExecutor
 
-CalcFunction: TypeAlias = Callable[[pl.Schema, Any], pl.Expr]
+CalcFunction: TypeAlias = Callable[[pl.Schema, Any], pl.Expr | list[pl.Expr]]
 
 class Data:
-    '''Class representing a raw RFSoC output data product (VNA sweep, target sweep, or timestream)
+    '''Class representing a raw |RFSoC| data product produced using the *ccatkidlib* data acquisition library
 
     Attributes:
-        bid  (str): RFSoC board that took the data
-        drid (str): RFSoC drone that took the data
+        bid  (str): |RFSoC| board that took the data
+        drid (str): |RFSoC| |drone| that took the data
 
-        tones (int | list[int], optional): Which tones are loaded for target sweep and timestream data. Defaults to None
-        data_path (pathlib.PosixPath): Path to data file
-        data (polars.DataFrame): Polars DataFrame with loaded data
+        tones (list[int] | None): List of tones that are loaded. **None** for data products with data not split into individual tones
+        padding (int): Number of digits of the tone suffix in ``data`` **DataFrame** column names. For example, the tone suffix for tone 7 would be 007 for a ``padding`` of three
+        data_path (Path): **Path** to data file
         timestamp (int): Timestamp of data file
 
-        io_cfg    (dict): Loaded IO config
-        ext_cfg   (dict): Loaded external config
-        drone_cfg (dict): Loaded drone config
-
-        comb (pl.DataFrame): Polars DataFrame with tone frequencies, powers, and phases
-        num_tones (int): Number of tones used to take data
+        analysis_cfg (dict): Loaded analysis config
+        viz_cfg      (dict): Loaded visualization config
     '''
 
     def __init__(self, 
                  com_to: str,
                  cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'),
-                 data_type: str | None = None,
+                 data_type: Literal['vna', 'targ', 'timestream'] | None = None,
                  timestamp: int | str | None = None,
-                 data_path: str | pathlib.PosixPath | list[str] | list[pathlib.PosixPath] | None = None,
+                 data_path: str | Path | list[str] | list[Path] | None = None,
                  analysis_cfg: dict | None = None,
                  viz_cfg: dict | None = None,
                  **kwargs):
-        ''' Initialize Data object by finding data file and associated config files
+        ''' 
+        Initialize **Data** object by finding |RFSoC| data file(s) and associated configuration files.
+        Neither the |RFSoC| data file(s) nor the configuration files are loaded during initialization; it is only verified that the files exist. 
 
-        Note:
-            Either the full data path must be provided via the ``data_path`` key word argument or
-            both the timestamp and data type must be provided via the ``data_type`` and ``timestamp`` key word arguments respectively
+        .. important::
+            Either the full path(s) of the |RFSoC| data file(s) must be provided via the ``data_path`` keyword argument or
+            **both** the ``timestamp`` and ``data_type`` must be provided. All other segments of the path are optional.
 
         Args:
-            com_to (str): Drone that took the data. In form *'\<board>.\<drone>'*
-            analysis_cfg (str, optional): Path to analysis config. Defaults to analysis config in *ccatkidlib/ccatkidlib/analysis* directory.
+            com_to: |RFSoC| |drone| that took the measuremnt
+            analysis_cfg: Path to analysis configuration file
 
-            data_type (str, optional): Type of data file. Should be one of 'vna', 'targ', 'timestream'.
-            timestamp (int | str, optional): Timestamp of data file
-            data_path (str | pathlib.PosixPath, optional): Full path to data file
+            data_type: Type of |RFSoC| measurement
+            timestamp: Timestamp of |RFSoC| data file
+            data_path: Full path to |RFSoC| data file
 
-            **kwargs: Key word arguments for finding data file. See below:
-            root_data_dir (str, optional): Root directory where data is stored. Defaults to that specified in analysis config
-            data_dir (str, optional): Directory where data is stored
-            date (str, optional): Date data was taken
-            sess_id (str, optional): ccatkidlib session ID of data
+            **kwargs**: *Key word arguments for finding RFSoC data file. See below:*
+            root_data_dir (str): Root directory of *ccatkidlib* file tree with |RFSoC| measurements. Defaults to that specified in the analysis configuration file
+            data_dir (str): Name of directory in *ccatkidlib* file tree containing data file. Will typically correspond to the name of the measurement
+            date (str): Date measurement was taken
+            sess_id (str): *ccatkidlib* session ID of measurement
         
         Raises:
-            ValueError: If multiple data files are specified with differing file types or timestamps
+            ValueError: If multiple data files are specified and they have different file extensions or timestamps
             FileNotFoundError: If any data files cannot be found 
         '''
         # Define data attributes
@@ -93,9 +100,9 @@ class Data:
         if analysis_cfg is not None: self.analysis_cfg = analysis_cfg
         if viz_cfg is not None: self.viz_cfg = viz_cfg
         
-        self.root_dir = self.analysis_cfg['file_paths']['root_data_dir']
+        self._root_dir = self.analysis_cfg['file_paths']['root_data_dir']
         self.padding = len(str(self.analysis_cfg['tones']['max_tones']*100))
-        if not self.root_dir[-1] == '/': self.root_dir += '/'
+        if not self._root_dir[-1] == '/': self._root_dir += '/'
 
         # If full data path is None, [], or "", find data file based on timestamp and (optional) file path parts
         # ------------------------------------------------------------------------------------------------------
@@ -112,7 +119,7 @@ class Data:
 
             for key, value in kwargs.items():
                 if key == 'root_data_dir':
-                    self.root_dir = value
+                    self._root_dir = value
                 elif key == 'data_dir':
                     data_dir = value
                 elif key == 'date':
@@ -121,11 +128,11 @@ class Data:
                     sess_id = value
 
             # Try to find data file using given information
-            self.data_path = pair.get_data_file(com_to, timestamp, data_type, data_dir = data_dir, date = date, sess_id = sess_id, root_data_dir=self.root_dir)
+            self.data_path = pair.get_data_file(com_to, timestamp, data_type, data_dir = data_dir, date = date, sess_id = sess_id, root_data_dir=self._root_dir)
             self.timestamp = timestamp
         else:
             self.data_path = data_path if isinstance(data_path, Iterable) and not isinstance(data_path, str) else [data_path]
-            if not all((isinstance(path, str) or isinstance(path, pathlib.PosixPath)) for path in self.data_path):
+            if not all((isinstance(path, str) or isinstance(path, Path)) for path in self.data_path):
                 error = 'All data paths must be of type str or pathlib.PosixPath!'
                 log.log('CRITICAL', error)
                 raise ValueError(error)
@@ -157,7 +164,7 @@ class Data:
         log_dir = io.add_dir('log', 
                              str(self.data_path[0]), 
                              save_root = self.analysis_cfg['io']['file_logging']['logging_root_dir'],
-                             data_root = self.root_dir,
+                             data_root = self._root_dir,
                              sub_dirs=[""])
         log.setup_logging(Path(log_dir) / self.analysis_cfg['io']['file_logging']['logging_fname'], 
                           self.analysis_cfg['io']['file_logging']['data_level'], 
@@ -172,19 +179,16 @@ class Data:
                  col_name: str | list[str] = '.*',
                  include: int | list[int] | None = None, 
                  exclude: int | list[int] | None = None, 
-                 strict=False) -> pl.DataFrame:
-        '''Get the specified data columns from the ``data`` Polars DataFrame for the specified tones
-
-        Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+                 strict: bool = False) -> pl.DataFrame:
+        '''Get the specified data columns from the ``data`` *Polars* **DataFrame**
 
         Args:
-            col_name (str | list[str], optional): List of data column names without tone number suffix (e.g., *'I'*, *'mag'*, *'phase'*). Defaults to all columns
-            include  (int | list[int], optional): List of tones to include. Defaults to *None*
-            exclude  (int | list[int], optional): List of tones to exclude. Defaults to *None*
-            strict (bool, optional): Whether the column names must match ``col_name`` exactly. If *False*, the column names can have additional prefixes **(not suffixes)**. Defaults to *False* 
+            col_name: List of data column names to get without |tone| suffix (e.g., **'mag'**, **'phase'**, etc.)
+            include: List of tones to include
+            exclude: List of tones to exclude
+            strict: Whether the data column name(s) must match ``col_name`` exactly. If **False**, data column names with prefixes *(not suffixes!)* to ``col_name`` will also be included
         Returns:
-            return (pl.DataFrame): Polars DataFrame with specified data columns
+            *Polars* **DataFrame** with specified data columns
 
         '''
         def _get_exclude(exclude):
@@ -246,40 +250,18 @@ class Data:
                              .select([pl.col(f"^{'' if strict else '.*'}{name}$") for name in col_name])
                              .collect())
 
-    def tone(self,
-             include: int | list[int] | None = None, 
-             exclude: int | list[int] | None = None) -> pl.DataFrame:
-        '''Get all of the data columns in the ``data`` Polars DataFrame for the specified tones
-
-        Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
-
-        Args:
-            include (int | list[int], optional): List of tones to include. Defaults to *None*
-            exclude (int | list[int], optional): List of tones to exclude. Defaults to *None*
-        Returns:
-            return (pl.DataFrame | None): Polars DataFrame with specified data columns or *None* if ``tones`` is *None*
-        '''
-        if self.tones is not None:
-            return self.get_data(col_name = '.*', include=include, exclude=exclude)
-        else:
-            log.log('ERROR', "Cannot load individual tone data when self.tones is None.")
-            return None
-
     def I(self, 
           prefix: str | list[str] = '', 
           include: int | list[int] | None = None, 
           exclude: int | list[int] | None = None) -> pl.DataFrame:
-        '''Get the in-phase ``I`` data for the specified tones
-
-        Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+        '''Get the in-phase |I| data
 
         Args:
-            include (int | list[int], optional): List of tones to include. Defaults to None
-            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+            prefix: Prefix(es) added to base column name **I**
+            include: List of tones to include
+            exclude: List of tones to exclude
         Returns:
-            return (pl.DataFrame): Polars DataFrame with specified data columns
+            *Polars* **DataFrame** with |I| data
 
         '''
         col_names = ['I']
@@ -292,16 +274,14 @@ class Data:
           prefix: str | list[str] = '', 
           include: int | list[int] | None = None, 
           exclude: int | list[int] | None = None) -> pl.DataFrame:
-        '''Get the quadrature ``Q`` data for the specifed tones
-
-        Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+        '''Get the quadrature |Q| data
 
         Args:
-            include (int | list[int], optional): List of tones to include. Defaults to None
-            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+            prefix: Prefix(es) added to base column name **Q**
+            include: List of tones to include
+            exclude: List of tones to exclude
         Returns:
-            return (pl.DataFrame): Polars DataFrame with specified data columns
+            *Polars* **DataFrame** with |Q| data
         '''
         col_names = ['Q']
 
@@ -314,16 +294,15 @@ class Data:
               include: int | list[int] | None = None, 
               exclude: int | list[int] | None = None, 
               recalc: bool = False) -> pl.DataFrame:
-        '''Calculate and get the phase *arctan(Q/I)* data for the specified tones.
-
-        Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+        r'''Calculate the phase :math:`\arctan{(Q/I)}` using the in-phase |I| and quadrature |Q| data
 
         Args:
-            include (int | list[int], optional): List of tones to include. Defaults to *None*
-            exclude (int | list[int], optional): List of tones to exclude. Defaults to *None*
+            prefix: Prefix(es) added to base column name **phase**
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if phase column already exists
         Returns:
-            return (pl.DataFrame): Polars DataFrame with specified data columns
+            *Polars* **DataFrame** with phase data
 
         '''
 
@@ -334,7 +313,7 @@ class Data:
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
-        self.transform([Data.calc_phase]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        self.transform([Data._calc_phase]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
     def mag(self, 
@@ -343,16 +322,16 @@ class Data:
             exclude: int | list[int] | None = None, 
             dB: bool = False, 
             recalc: bool = False) -> pl.DataFrame:
-        '''Calculate and get the magnitude *sqrt(I^2 + Q^2)* data of the specified tones
-
-        Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+        r'''Calculate the magnitude :math:`|S_{21}| = \sqrt{I^2 + Q^2}` using the in-phase |I| and quadrature |Q| data
 
         Args:
-            include (int | list[int], optional): List of tones to include. Defaults to *None*
-            exclude (int | list[int], optional): List of tones to exclude. Defaults to *None*
+            prefix: Prefix(es) added to base column name **mag**
+            include: List of tones to include
+            exclude: List of tones to exclude
+            dB: Whether to calculate magnitude in decible units. :math:`|S_{21}|_{dB} = 20\cdot\log_{10}(|S_{21}|)`
+            recalc: Whether to re-calculate if magnitude column already exists
         Returns:
-            return (pl.DataFrame): Polars DataFrame with specified data columns
+            *Polars* **DataFrame** with magnitude data
         '''
         col_name = ['I', 'Q', f"{'dB_' if dB else ''}mag"]
         if isinstance(prefix, str): prefix = [prefix]
@@ -363,19 +342,32 @@ class Data:
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
 
         args = [[dB]]*num_prefix
-        self.transform([Data.calc_mag]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        self.transform([Data._calc_mag]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[col_name[-1] for col_name in col_names], include=include, exclude=exclude)
 
     #============================#
     # General IQ Transformations #
     #============================#
 
-    def IQ_rotate(self, prefix: str | list[str] = '', angle: float | list[float] | list[list[float]] = 0, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
-        ''' Rotate the IQ data around the origin by the specified angle
+    def IQ_rotate(self, 
+                  prefix: str | list[str] = '', 
+                  angle: float | list[float] | list[list[float]] = 0, 
+                  name: str = '', 
+                  include: int | list[int] | None = None, 
+                  exclude: int | list[int] | None = None, 
+                  recalc: bool = False) -> pl.DataFrame:
+        r''' Rotate the in-phase |I| and quadrature |Q| data by ``angle`` :math:`\theta` around the origin. :math:`S_{21,\ rot} = I_{rot} + iQ_{rot} = (I + iQ)\cdot e^{i\theta}`
         
         Args:
-            prefix (str | list[str], optional): 
-            angle (float | list[float] | list[list[float]], optional): Angle by which to rotate IQ data.  Defaults to 0
+            prefix: Prefix(es) of the **I** and **Q** data columns to rotate
+            angle: Angle by which to rotate data. Can specify a list of angles for inidividual tones
+            name: Name of rotation operation. Will be prefixed to **I** and **Q** data column names
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if rotated **I** and **Q** data columns already exist
+        Returns:
+            *Polars* **DataFrame** with rotated in-phase |I| and quadrature |Q| data
+
         '''
         
         col_name = ['I', 'Q', f"{name}{'_' if name else ''}rotate"]
@@ -389,19 +381,29 @@ class Data:
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
 
         args = [[a] for a in angle]
-        self.transform([Data.calc_IQ_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        self.transform([Data._calc_IQ_rotate]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] + 
                                       [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
     
-    def IQ_scale(self, prefix: str | list[str] = '', scale: float | list[float] | list[list[float]] = 1, name: str = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
-        '''
-        Divide IQ data by the specified scale factor
-
-        Args:
-            prefix ():
-            scale (float | list[float] | list[list[float]]): Scale factor by which to divde IQ data
-            name (str): Custom name of scaling. Will be added to the column name as a prefix. Defaults to ''
+    def IQ_scale(self, 
+                 prefix: str | list[str] = '', 
+                 scale: float | list[float] | list[list[float]] = 1, 
+                 name: str = '', 
+                 include: int | list[int] | None = None, 
+                 exclude: int | list[int] | None = None, 
+                 recalc: bool = False) -> pl.DataFrame:
+        r''' Divide the in-phase |I| and quadrature |Q| data by ``scale``
         
+        Args:
+            prefix: Prefix(es) of the **I** and **Q** data columns to scale
+            scale: Factor to scale by. Can specify list of scale factors for individual tones
+            name: Name of scaling operation. Will be prefixed to **I** and **Q** data column names
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if scaled **I** and **Q** data columns already exist
+        Returns:
+            *Polars* **DataFrame** with scaled in-phase |I| and quadrature |Q| data
+
         '''
         
         col_name = ['I', 'Q', f"{name}{'_' if name else ''}scale"]
@@ -414,11 +416,33 @@ class Data:
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
 
         args = [[s] for s in scale]
-        self.transform([Data.calc_IQ_scale]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        self.transform([Data._calc_IQ_scale]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] + 
                                       [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
 
-    def IQ_shift(self, prefix: str | list[str] = '', shift_I: float = 0, shift_Q: float = 0, name = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+    def IQ_shift(self, 
+                 prefix: str | list[str] = '', 
+                 shift_I: float | list[float] | list[list[float]] = 0, 
+                 shift_Q: float | list[float] | list[list[float]] = 0, 
+                 name: str = '', 
+                 include: int | list[int] | None = None, 
+                 exclude: int | list[int] | None = None, 
+                 recalc: bool = False) -> pl.DataFrame:
+        r''' Translate the in-phase |I| data by ``shift_I`` and the quadrature |Q| data by ``shift_Q``
+        
+        Args:
+            prefix: Prefix(es) of the **I** and **Q** data columns to translate
+            shift_I: Value to translate |I| data by. Can specify list of shifts for individual tones
+            shift_Q: Value to translate |Q| data by. Can specify list of shifts for individual tones
+            name: Name of translation operation. Will be prefixed to **I** and **Q** data column names
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if translated **I** and **Q** data columns already exist
+        Returns:
+            *Polars* **DataFrame** with translated in-phase |I| and quadrature |Q| data
+
+        '''
+
         col_name = ['I', 'Q', f"{name}{'_' if name else ''}shift"]
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
@@ -431,11 +455,36 @@ class Data:
             col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]] + [col_name[-1]]
 
         args = [[I, Q] for I, Q in zip(shift_I, shift_Q)]
-        self.transform([Data.calc_IQ_shift]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        self.transform([Data._calc_IQ_shift]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] + 
                                       [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
     
-    def IQ_trim(self, prefix: str | list[str] = '', lower_bound = 0, upper_bound = -1, name='', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
+    def IQ_trim(self, 
+                prefix: str | list[str] = '', 
+                lower_index: int | list[int] | list[list[int]]= 0, 
+                upper_index: int | list[int] | list[list[int]] = -1, 
+                name: str = '', 
+                include: int | list[int] | None = None, 
+                exclude: int | list[int] | None = None, 
+                recalc: bool = False) -> pl.DataFrame:
+        '''Trim the in-phase |I| and quadrature |Q| data to only include rows (samples) between ``lower_index`` and ``upper_index`` (exclusive).
+        The trimmed data values are replaced with **None**.
+        
+        Note:
+            Standard negative indexing is supported.
+
+        Args:
+            prefix: Prefix(es) of the **I** and **Q** data columns to trim
+            lower_index: Lower index of trimming window (exclusive). Can specify list of indicies for individual tones
+            upper_index: Upper index of trimming window (exclusive). Can specify list of indicies for individual tones
+            name: Name of trimming operation. Will be prefixed to **I** and **Q** data column names
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if trimmed **I** and **Q** data columns already exist
+        Returns:
+            *Polars* **DataFrame** with trimmed in-phase |I| and quadrature |Q| data
+        '''
+        
         def _neg_indexing(bounds, df_height):
             for i, bound in enumerate(bounds): 
                 try:
@@ -451,27 +500,39 @@ class Data:
         if isinstance(prefix, str): prefix = [prefix]
         num_prefix = len(prefix)
 
-        if not isinstance(lower_bound, Iterable) or not len(lower_bound) == num_prefix: lower_bound = [lower_bound]
-        if not isinstance(upper_bound, Iterable) or not len(upper_bound) == num_prefix: upper_bound = [upper_bound]
+        if not isinstance(lower_index, Iterable) or not len(lower_index) == num_prefix: lower_index = [lower_index]
+        if not isinstance(upper_index, Iterable) or not len(upper_index) == num_prefix: upper_index = [upper_index]
 
         # Handle negative indicing
         df_height = int(self.data.height)
-        lower_bound = _neg_indexing(lower_bound, df_height)
-        upper_bound = _neg_indexing(upper_bound, df_height)
+        lower_index = _neg_indexing(lower_index, df_height)
+        upper_index = _neg_indexing(upper_index, df_height)
         
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [col_name[0]] + [f"{pre}{'_' if pre else ''}{name}" for name in col_name[1:-1]] + [col_name[-1]]
-        args = [[low, up] for low, up in zip(lower_bound, upper_bound)]
-        self.transform([Data.calc_IQ_trim]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        args = [[low, up] for low, up in zip(lower_index, upper_index)]
+        self.transform([Data._calc_IQ_trim]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names] + 
                                       [f'{col_name[-1]}_{col_name[1]}' for col_name in col_names], include=include, exclude=exclude)
     
-    def diff(self, col_name: str, prefix: str | list[str] = '', include: int | list[int] | None = None, exclude: int | list[int] | None = None, recalc: bool = False):
-        ''' Calculate the difference between adjacent elements of a specified data column
+    def diff(self, 
+             col_name: str, 
+             prefix: str | list[str] = '', 
+             include: int | list[int] | None = None, 
+             exclude: int | list[int] | None = None, 
+             recalc: bool = False) -> pl.DataFrame:
+        ''' 
+        Calculate the difference between subsequent elements in the specified data column of the ``data`` *Polars* **DataFrame** 
         
         Args:
-            col_name (str): Name of data column
+            col_name: Data column name without prefix or |tone| suffix (e.g., **mag**, **phase**, etc.)
+            prefix: Prefix(es) of data column 
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if difference data column already exists
+        Returns:
+            *Polars* **DataFrame** with difference data
         '''
         col_name = [col_name, 'diff']
         if isinstance(prefix, str): prefix = [prefix]
@@ -480,24 +541,38 @@ class Data:
         col_names = [[]]*num_prefix
         for i, pre in enumerate(prefix):
             col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
-        self.transform([Data.calc_diff]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        self.transform([Data._calc_diff]*num_prefix, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         return self.get_data(col_name=[f'{col_name[-1]}_{col_name[0]}' for col_name in col_names], include=include, exclude=exclude)
 
     def savgol(self, 
                col_name: str, 
                prefix: str | list[str] = '', 
-               window: int = 3, 
-               k: int = 1, 
-               deriv: int = 0, 
+               window: int | list[int] | list[list[int]] = 3, 
+               k: int | list[int] | list[list[int]] = 1, 
+               deriv: int | list[int] | list[list[int]] = 0, 
                include: int | list[int] | None = None, 
                exclude: int | list[int] | None = None, 
                recalc: bool = False, 
-               max_workers=1, 
-               ex=None):
-        ''' Calculate the difference between adjacent elements of a specified data column
+               max_workers: int = 1, 
+               ex: ProcessPoolExecutor | None = None) -> pl.DataFrame:
+        ''' 
+        Apply Savitzky–Golay filter to specified data column
+
+        .. seealso:: The data is filtered using *SciPy's* `savgol_filter function <https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html>`_
         
         Args:
-            col_name (str): Name of data column
+            col_name: Data column name without prefix or |tone| suffix (e.g., **mag**, **phase**, etc.)
+            prefix: Prefix(es) of data column 
+            window: The length of the filter window. Can specify a list of windows for individual tones
+            k: Order of polynomial used to fit the data. Can specify a list of orders for individual tones
+            deriv: The order of derivative to compute. Can specify a list of orders for inidividual tones
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if Savitzky–Golay filtered data column already exists
+            max_workers: Max number of CPU cores to use for multiprocessing. Only used if no ``ex`` provided.
+            ex: *concurrent.futures* **ProcessPoolExecutor** to use for multiprocessing
+        Returns:
+            *Polars* **DataFrame** with Savitzky–Golay filtered data 
         '''
         col_name = [col_name, 'savgol']
         if isinstance(prefix, str): prefix = [prefix]
@@ -511,7 +586,7 @@ class Data:
         for i, pre in enumerate(prefix):
             col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
         args = [[win, order, der, ccat_mp.check_max_workers(max_workers), ex] for win, order, der in zip(window, k, deriv)]
-        self.transform([Data.calc_savgol]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names, batch_size=len(self.tones))
+        self.transform([Data._calc_savgol]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
         self.data = self._unnest([f'struct_{col_name[-1]}{der:01d}' for col_name, der in zip(col_names, deriv)])
         return self.get_data(col_name=[f'{col_name[-1]}{der}_{col_name[0]}' for col_name, der in zip(col_names, deriv)], include=include, exclude=exclude)
 
@@ -519,52 +594,56 @@ class Data:
     # Analysis Methods #
     #==================#
 
-    def transform(self, funcs: list[CalcFunction], *funcs_args, include: int | list[int] | None = None, exclude: int | list[int] | None = None, col_name: str | list[str] = [], batch_size: int | list[int] = [], recalc: bool = False) -> pl.DataFrame:
-        '''Apply transformations specified by ``funcs`` argument to the specified tones
-
-        Mostly for internal use, but can be used externally if wanting to perform multiple transformations in parallel to increase efficiency.
+    def transform(self, 
+                  funcs: list[CalcFunction], 
+                  *funcs_args, 
+                  include: int | list[int] | None = None, 
+                  exclude: int | list[int] | None = None, 
+                  col_name: str | list[str] | list[list[str]] = [], 
+                  recalc: bool = False) -> pl.DataFrame:
+        '''
+        Apply ``funcs`` transformations to the ``col_name`` data columns in the ``data`` *Polars* **DataFrame**
 
         Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, transforms data for all tones.
+            This method is mostly intended for internal use but can be used to run multiple types of transformations
+            in a single *Polars* ``.with_columns`` call which may improve efficiency.
 
         Examples:
-            To calculate the phase and magnitude of tones 1, 5, and 7, one would run::
+            To calculate the phase and magnitude for tones 1, 5, and 7, one would run::
 
-            >>> data.transform(['calc_phase', 'calc_mag'], include=[1,5,7], col_name=[['I', 'Q'], ['I', 'Q']])
+            >>> data.transform([Data._calc_phase, Data._calc_mag], include=[1,5,7], col_name=[['I', 'Q'], ['I', 'Q']])
 
         Args:
-            funcs (list[CalcFunction]): List of transformation functions to apply to data.
-            *func_args (list[list], optional): Additional arguments to pass to funcs as a nested list. For funcs that don't take additional arguments, can specify [None].
-            include (int | list[int], optional): List of tones to include. Defaults to None
-            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+            funcs: List of transformation functions to apply to data.
+            func_args: Positional arguments to pass to transformation functions. 
+                       Must be a list of the same length as ``funcs`` with each element being the positional arguments to pass to the corresponding transformation function.
+            include: List of tones to include
+            exclude: List of tones to exclude
+            col_name: Data columns to apply transformation to
+            recalc: Whether to re-calculate if transformed data column already exists
         Returns:
-            return (pl.DataFrame): Full ``data`` Polars DataFrame including columns with the transformed data
+            Full ``data`` *Polars* **DataFrame** including transformed data columns
         '''
         
         def _get_expr(tones):
+            num_tones = len(tones)
+
             expr = []
-
-            for func, f_arg, name, size in zip(funcs, funcs_args, col_name, batch_size):
-                num_batches = ceil(len(tones) / size)
-                batches = [[]]*num_batches
-                args = [[]]*num_batches
-                for i in range(num_batches):
-                    slice_left, slice_right = i*size, (i+1)*size
-                    batches[i] = tones[slice_left:slice_right]
-                    try:
-                        args[i] = [a[slice_left:slice_right] if isinstance(a, Iterable) and not isinstance(a, str) else [a]*(slice_right-slice_left) for a in f_arg]
-                    except IndexError: 
-                        args[i] = [[None]*(slice_right-slice_left) for _ in range(len(f_arg))]
-                        log.log('WARNING', 'More tones than arguments specified. Ensure that each tone has a corresponding argument.')
-
-                for batch, arg  in zip(batches, args):
-                    exp = func(schema, *arg, tones=batch, padding=self.padding, recalc=recalc, col_name = name)
-
-                    # Handle funcs that return a list of expressions and funcs that return single expressions
-                    if isinstance(exp, Iterable):
-                        expr += exp
-                    else:
-                        expr.append(exp)
+            for func, f_arg, name in zip(funcs, funcs_args, col_name):
+                for i, arg in enumerate(f_arg):
+                    if not isinstance(arg, Iterable) or isinstance(arg, str):
+                        f_arg[i] = [arg]*num_tones
+                    elif not len(f_arg[i]) == num_tones:
+                        f_arg = [[None]*num_tones for _ in range(len(f_arg))]
+                        log.log('ERROR', 'Number of arguments and tones specified do not match')
+                        break
+                
+                exp = func(schema, *f_arg, tones=tones, padding=self.padding, recalc=recalc, col_name = name)
+                # Handle funcs that return a list of expressions and funcs that return single expressions
+                if isinstance(exp, Iterable):
+                    expr += exp
+                else:
+                    expr.append(exp)
             return expr
 
         def _include(include: list[int]) -> list[pl.Expr]:
@@ -623,166 +702,162 @@ class Data:
         # ------------------
         if isinstance(col_name, str): col_name = [col_name]
         col_name = _check_len(col_name, num_funcs, error = 'All column names used must be specified for each transformation.')
-
-        # Parse batch_size arg
-        # --------------------
-        if isinstance(batch_size, int): batch_size = [batch_size]
-        if len(batch_size) == 0:
-            batch_size = num_funcs*[1]
-        else:
-            batch_size = _check_len(batch_size, num_funcs, error =  ('When using multiple transformation functions with at least unique batch size,'
-                                                                     'batch_size must be provided for all functions.'))
         
         data = self.data.lazy()
         if self.tones is not None:
             schema = data.collect_schema()
             self.data = data.with_columns(*ccat_df.parse_tones(_include, _exclude, _all, include, exclude)).collect()
         else:
+            f_args = [[[arg] if not isinstance(arg, Iterable) or isinstance(arg, str) else arg for arg in f_arg] for f_arg in funcs_args]
             self.data = data.with_columns(*[func(data.collect_schema(), *f_arg, tones = None, recalc = recalc, col_name = name) for func, f_arg, name in zip(funcs, funcs_args, col_name)]).collect()
         return self.data
 
     @staticmethod
-    def calc_phase(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'phase']) -> pl.Expr:
+    def _calc_phase(schema: pl.Schema, 
+                   *args, tones: list[int] | None = None, 
+                   padding: int = 4, 
+                   recalc: bool = False, 
+                   col_name: list[str] = ['I', 'Q', 'phase']) -> list[pl.Expr]:
         ''' Generates pl.Expr for calculating the phase of a tone using I & Q data
 
         Args:
             schema (pl.Schema)
         '''
-        
-        
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name]
+        col_names = [[f'{name}_{tone:0{padding}d}' for name in col_name] for tone in tones] if tones is not None else [col_name]
 
-        I_col, Q_col, phase_col = col_name
+        exprs = [None]*len(col_names)
+        for i, col_name in enumerate(col_names):
+            I_col, Q_col, phase_col = col_name
 
-        if recalc or not (phase_col in schema):
-            return pl.arctan2(pl.col(Q_col), pl.col(I_col)).alias(phase_col)
-        else:
-            return pl.col(phase_col)
+            if recalc or not (phase_col in schema):
+                exprs[i] = pl.arctan2(pl.col(Q_col), pl.col(I_col)).alias(phase_col)
+            else:
+                exprs[i] = pl.col(phase_col)
+        return exprs
 
     @staticmethod
-    def calc_mag(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'mag']) -> pl.Expr:
+    def _calc_mag(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'mag']) -> list[pl.Expr]:
         ''' Generates pl.Expr for calculating the magnitude of a tone using I & Q data
         '''
-    
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name]
+
+        if not len(args) == 1: log.log('ERROR', "'dB' is a required argument")
+        dBs = args[0]    
+
+        col_names = [[f'{name}_{tone:0{padding}d}' for name in col_name] for tone in tones] if tones is not None else [col_name]
         
-        I_col, Q_col, mag_col = col_name
-
-        if len(args) == 1:
-            dB = args[0]
-            if tones is not None: dB = dB[0]
-        else:
-            log.log('ERROR', 'dB is a required argument.')
-
-        if recalc or not (mag_col in schema):
-            mag_expr = (pl.col(I_col)**2 + pl.col(Q_col)**2).sqrt()
-            if dB: mag_expr = pl.lit(20)*mag_expr.log10()
-            return mag_expr.alias(mag_col)            
-        else:
-            return pl.col(mag_col)
+        exprs = [None]*len(col_names)
+        for i, (col_name, dB) in enumerate(zip(col_names, dBs)):
+            I_col, Q_col, mag_col = col_name
+            if recalc or not (mag_col in schema):
+                mag_expr = (pl.col(I_col)**2 + pl.col(Q_col)**2).sqrt()
+                if dB: mag_expr = pl.lit(20)*mag_expr.log10()
+                exprs[i] = mag_expr.alias(mag_col)            
+            else:
+                exprs[i] = pl.col(mag_col)
+        return exprs
 
     @staticmethod
-    def calc_IQ_rotate(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'rotate']) -> pl.Expr:        
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
+    def _calc_IQ_rotate(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'rotate']) -> list[pl.Expr]:        
+        '''
+        '''
+        if not len(args) == 1: log.log('ERROR', "'angle' is a required argument")
+        angles = args[0]            
+        
+        col_names = [[f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]] for tone in tones] if tones is not None else [col_name]
 
-        I_col, Q_col, rotate_col = col_name
+        exprs = []
+        for i, (col_name, angle) in enumerate(zip(col_names, angles)):
+            I_col, Q_col, rotate_col = col_name
 
-        if len(args) == 1:
-            angle = args[0]
-            if tones is not None: angle = angle[0]
-        else:
-            log.log('ERROR', 'angle is a required argument.')
-        if recalc or not (f'{rotate_col}_{I_col}' in schema):
-            return [(pl.col(I_col)*pl.lit(angle).cos() - pl.col(Q_col)*pl.lit(angle).sin()).alias(f'{rotate_col}_{I_col}'),
-                    (pl.col(I_col)*pl.lit(angle).sin() + pl.col(Q_col)*pl.lit(angle).cos()).alias(f'{rotate_col}_{Q_col}')]
-        else:
-            return pl.col(f'{rotate_col}_{I_col}')    
-
-    @staticmethod
-    def calc_IQ_shift(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'shift']) -> pl.Expr:
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
-
-        I_col, Q_col, shift_col = col_name
-
-        if len(args) == 2:
-            I_shift, Q_shift = args
-            if tones is not None: I_shift, Q_shift = I_shift[0], Q_shift[0]
-        else:
-            log.log('ERROR', 'I_shift and Q_shift are required arguments.')
-
-        if recalc or not (f'{shift_col}_{I_col}' in schema):
-            return [(pl.col(I_col) + I_shift).name.prefix(shift_col + '_'),
-                    (pl.col(Q_col) + Q_shift).name.prefix(shift_col + '_')]
-        else:
-            return pl.col(f'{shift_col}_{I_col}')
+            if recalc or not (f'{rotate_col}_{I_col}' in schema):
+                exprs += [(pl.col(I_col)*pl.lit(angle).cos() - pl.col(Q_col)*pl.lit(angle).sin()).alias(f'{rotate_col}_{I_col}'),
+                          (pl.col(I_col)*pl.lit(angle).sin() + pl.col(Q_col)*pl.lit(angle).cos()).alias(f'{rotate_col}_{Q_col}')]
+            else:
+                exprs.append(pl.col(f'{rotate_col}_{I_col}'))
+        return exprs
 
     @staticmethod
-    def calc_IQ_scale(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'scale']) -> pl.Expr:
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
+    def _calc_IQ_shift(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'shift']) -> list[pl.Expr]:
+        '''
+        '''
+        if not len(args) == 2: log.log('ERROR', "'I_shift' and 'Q_shift' are required arguments")
+        I_shifts, Q_shifts = args
 
-        I_col, Q_col, scale_col = col_name
+        col_names = [[f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]] for tone in tones] if tones is not None else [col_name]
 
-        if len(args) == 1:
-            scale = args[0]
-            if tones is not None: scale = scale[0]
-        else:
-            log.log('ERROR', 'scale is a required argument.')
-
-        if recalc or not (f'{scale_col}_{I_col}' in schema):
-            return (pl.col([I_col, Q_col]) * scale).name.prefix(f'{scale_col}_')
-        else:
-            return pl.col(f'{scale_col}_{I_col}')
-
-    @staticmethod
-    def calc_IQ_trim(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['sample', 'I', 'Q', 'trim']) -> pl.Expr:
-        if tones is not None:
-            tone = tones[0]
-            col_name = [col_name[0]] + [f'{name}_{tone:0{padding}d}' for name in col_name[1:-1]] + [col_name[-1]]
-
-        sample_col, I_col, Q_col, trim_col = col_name
-        if len(args) == 2:
-            lower_bound, upper_bound = args
-            if tones is not None: lower_bound, upper_bound = lower_bound[0], upper_bound[0]
-        else:
-            log.log('ERROR', 'lower_bound, upper_bound, and tone_list are required arguments.')
-
-        if recalc or not (f'{trim_col}_{I_col}' in schema):
-            return [pl.when(pl.col(sample_col).is_between(pl.lit(lower_bound), pl.lit(upper_bound), closed='none'))
-                      .then(pl.col(col))
-                      .otherwise(pl.lit(None))
-                      .alias(f'{trim_col}_{col}') for col in [I_col, Q_col]]  
-        else:
-            return pl.col(f'{trim_col}_{I_col}')
+        exprs = []
+        for i, (col_name, I_shift, Q_shift) in enumerate(zip(col_names, I_shifts, Q_shifts)):
+            I_col, Q_col, shift_col = col_name
+            if recalc or not (f'{shift_col}_{I_col}' in schema):
+                exprs += [(pl.col(I_col) + I_shift).name.prefix(shift_col + '_'),
+                          (pl.col(Q_col) + Q_shift).name.prefix(shift_col + '_')]
+            else:
+                exprs.append(pl.col(f'{shift_col}_{I_col}'))
+        return exprs
 
     @staticmethod
-    def calc_diff(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'diff']) -> pl.Expr:
+    def _calc_IQ_scale(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['I', 'Q', 'scale']) -> list[pl.Expr]:
+        '''
+        '''
+        if not len(args) == 1: log.log('ERROR', "'scale' is a required argument")
+        scales = args[0]
+
+        col_names = [[f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]] for tone in tones] if tones is not None else [col_name]
+
+        exprs = [None]*len(col_names)
+        for i, (col_name, scale) in enumerate(zip(col_names, scales)):
+            I_col, Q_col, scale_col = col_name
+
+            if recalc or not (f'{scale_col}_{I_col}' in schema):
+                exprs[i] = (pl.col([I_col, Q_col]) * scale).name.prefix(f'{scale_col}_')
+            else:
+                exprs[i] = pl.col(f'{scale_col}_{I_col}')
+        return exprs
+
+    @staticmethod
+    def _calc_IQ_trim(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['sample', 'I', 'Q', 'trim']) -> list[pl.Expr]:
+        '''
+
+        '''
+
+        if not len(args) == 2: log.log('ERROR', "'lower_index' and 'upper_index' are required arguments")
+        lower_indicies, upper_indicies = args
+
+        col_names = [[col_name[0]] + [f'{name}_{tone:0{padding}d}' for name in col_name[1:-1]] + [col_name[-1]] for tone in tones] if tones is not None else [col_name]
+
+        exprs = []
+        for i, (col_name, lower_index, upper_index) in enumerate(zip(col_names, lower_indicies, upper_indicies)):    
+            sample_col, I_col, Q_col, trim_col = col_name
+
+            if recalc or not (f'{trim_col}_{I_col}' in schema):
+                exprs += [pl.when(pl.col(sample_col).is_between(pl.lit(lower_index), pl.lit(upper_index), closed='none'))
+                            .then(pl.col(col))
+                            .otherwise(pl.lit(None))
+                            .alias(f'{trim_col}_{col}') for col in [I_col, Q_col]]  
+            else:
+                exprs.append(pl.col(f'{trim_col}_{I_col}'))
+        return exprs
+
+    @staticmethod
+    def _calc_diff(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'diff']) -> list[pl.Expr]:
         ''' Generates pl.Expr for calculating difference between adjacent data points for the specified column
         Args:
             schema (pl.Schema)
         '''
-        if tones is not None:
-            tone = tones[0]
-            col_name = [f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]]
+        col_names = [[f'{name}_{tone:0{padding}d}' for name in col_name[:-1]] + [col_name[-1]] for tone in tones] if tones is not None else [col_name]
 
-        data_col, diff_col = col_name
-        if recalc or not (f'{diff_col}_{data_col}' in schema):
-            return pl.col(data_col).diff().name.prefix(f'{diff_col}_')
-        else:
-            return pl.col(f'{diff_col}_{data_col}')
-        
+        exprs = [None]*len(col_names)
+        for i, col_name in enumerate(col_names):
+            data_col, diff_col = col_name
+            if recalc or not (f'{diff_col}_{data_col}' in schema):
+                exprs[i] = pl.col(data_col).diff().name.prefix(f'{diff_col}_')
+            else:
+                exprs[i] = pl.col(f'{diff_col}_{data_col}')
+        return exprs
+            
     @staticmethod
-    def calc_savgol(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'savgol']) -> pl.Expr:
-        def _calc_savgol(df):
+    def _calc_savgol(schema: pl.Schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'savgol']) -> pl.Expr:
+        def _mp_savgol(df):
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
             results_dict = {}
             with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
@@ -812,7 +887,7 @@ class Data:
             log.log('ERROR', 'window, k, deriv, and max_workers are required arguments.')
 
         return_col, return_type = [f'{col_name[-1]}_{col_name[-2]}'], [pl.Float64]
-        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_calc_savgol, tones, col_name, schema, padding=padding, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
+        expr, to_calc, calc_ind, _, batches, batch_len = ccat_mp.create_batches(_mp_savgol, tones, col_name, schema, padding=padding, return_col=return_col, return_type=return_type, max_workers=max_workers, recalc=recalc)
         return expr
 
     #==========================#
@@ -820,53 +895,63 @@ class Data:
     #==========================#
 
     @cached_property
+    @abstractmethod
+    def data(self) -> pl.DataFrame:
+        '''
+        pl.DataFrame: *Polars* **DataFrame** with data. Load data if it is not already loaded.
+        '''
+        pass
+
+    @cached_property
     def io_cfg(self) -> dict:
+        '''dict: IO configuration file. Stores parameters related to networking, file, and logging IO operations
+        '''
         return self._load_cfg('_io_')
 
     @cached_property
     def ext_cfg(self) -> dict:
+        '''
+        dict: 'External' configuration file. Stores parameters that may change between measurements
+        and are not directly related to |RFSoC| drones
+        '''
         return self._load_cfg('_ext_')
 
     @cached_property
     def drone_cfg(self) -> dict:
+        '''
+        dict: '|Drone|' configuration file. Stores parameters that may differ between |RFSoC| drones
+        '''
         return self._load_cfg('_drone_')
 
     @cached_property
     def num_tones(self) -> int:
+        '''
+        int: Total number of tones that were used to take data
+        '''
         return self.drone_cfg.get('tones', {'num_tones': -1})['num_tones']
-        
-    @cached_property
-    def original_root(self) -> str:
-        try:
-            original_root = self.io_cfg['file_paths']['root_dir']
-        except:
-            # Fall back to using original root data directory specified in analysis config for old data files
-            original_root = self.analysis_cfg['file_paths']['original_root_data_dir']
-        if not original_root[-1] == '/': original_root += '/'
-        return original_root
 
     @cached_property
     def fig_dir(self) -> str:
         '''
-        Directory where figures should be saved. Create if it does not already exist.
+        str: Directory where figures should be saved. Create if it does not already exist.
         '''
 
         return io.add_dir('fig', 
                           str(self.data_path[0]), 
                           save_root = self.viz_cfg['save']['fig_root_dir'],
-                          data_root = self.root_dir,
+                          data_root = self._root_dir,
                           timestamp = str(self.timestamp))
     
     @cached_property
     def pickle_dir(self) -> str:
         '''
-        Directory where pickle files should be saved. Create if it does not already exist.
+        str: Directory where pickle files should be saved. Create if it does not already exist.
         '''
 
         pickle_dir = io.add_dir('pickle', 
                                 str(self.data_path[0]), 
                                 save_root = self.analysis_cfg['io']['pickle']['pickle_root_dir'],
-                                data_root = self.root_dir,
+                                data_root = self._root_dir,
                                 timestamp = str(self.timestamp))
         io.create_dir(Path(pickle_dir) / 'dataframe')
         return pickle_dir
@@ -874,7 +959,7 @@ class Data:
     @cached_property
     def comb(self) -> pl.DataFrame:
         '''
-        Load comb frequencies, powers, and phases
+        pl.DataFrame: *Polars* **DataFrame** with |tone| frequencies, powers, and phases of comb that was used to take data
         '''
         comb = {'tone_freqs': [], 'tone_powers': [], 'tone_phis': []}
         for key in comb.keys():
@@ -882,7 +967,7 @@ class Data:
             if isinstance(value, list):
                 value = np.array(value).real
             elif isinstance(value, str):
-                comb_path = pair.replace_root(value, self.original_root, self.root_dir)
+                comb_path = pair.replace_root(value, self._original_root, self._root_dir)
                 value = np.load(comb_path).real if Path(comb_path).exists() else np.zeros(self.num_tones)
             else:
                 value = np.zeros(self.num_tones)
@@ -890,6 +975,19 @@ class Data:
         comb['det'] = range(len(comb['tone_freqs'])) if self.tones is None else self.tones
         comb = pl.DataFrame(comb)
         return comb
+
+    @cached_property
+    def _original_root(self) -> str:
+        '''
+        str: Root directory where data was originally stored when it was acquired
+        '''
+        try:
+            original_root = self.io_cfg['file_paths']['root_dir']
+        except:
+            # Fall back to using original root data directory specified in analysis config for old data files
+            original_root = self.analysis_cfg['file_paths']['original_root_data_dir']
+        if not original_root[-1] == '/': original_root += '/'
+        return original_root
 
     #==========#
     # Plotting #
@@ -947,15 +1045,15 @@ class Data:
         return df
 
     def get_prefix(self, col_name: str, data_name: str) -> str:
-        ''' Get the prefix of the given column name
-
-        Assumes that the column name is of the form {prefix}_{data_name}_{tone}
+        ''' 
+        Extract the prefix from the provided column name ``col_name``. 
+        Assumes that the column name is of the format *{prefix}_{data_name}_{tone}*
 
         Args:
-            col_name (str): Full name of the column
-            data_name(str): Data that column corresponds to (e.g., 'phase' or 'f')
+            col_name: Full name of the column
+            data_name: Data type that column corresponds to (e.g., **'phase'**, **'f'**, etc.)
         Returns:
-            return (str): Prefix of the column name
+            Prefix of the column name
         '''
 
         segments = 0
@@ -993,14 +1091,15 @@ class Data:
                 break
         return cfg
 
-    def join(self, other, in_place=False):
+    def join(self, other: Data, in_place: bool = False) -> Data:
         ''' 
-        Join two Data objects together.
+        Join two ``Data`` objects into a single object
 
         Args:
-            other (Data): Data object to join with
+            other: ``Data`` object to join with
+            in_place: Whether to perform join in-place (will modify this ``Data`` object) or to create new ``Data`` object
         Returns:
-            return (Data): New Data object created from the two joined Data objects
+            A reference to this ``Data`` object if ``in_place`` is **True**, otherwise the newly created ``Data`` object 
         '''
         def _join_consts(left_const: Any | list[Any], right_const: Any | list[Any]) -> list[Any]:
             if not isinstance(left_const, list): left_const = [left_const]
