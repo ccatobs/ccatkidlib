@@ -51,7 +51,7 @@ class Timestream(Data):
         sampling_freq (float): Sampling frequency of timestream data in Hz
     '''
 
-    def __init__(self, com_to, tones: int | list[int] = -1, noise_tones: int | list[int] | None = None, start = 0, end = -1, cfg_path = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to, tones: int | list[int] = -1, noise_tones: int | list[int] | None = None, start = 0, end = -1, **kwargs):
         '''
         Constructor for Timestream. 
 
@@ -63,7 +63,7 @@ class Timestream(Data):
             analysis_cfg (str): File path of analysis configuration file. Defaults to analysis configuration file in *ccatkidlib/analysis* directory.
         '''
         kwargs['data_type'] = 'timestream'
-        super().__init__(com_to, cfg_path, **kwargs)
+        super().__init__(com_to, **kwargs)
 
         # Define list of tones
         # --------------------
@@ -562,13 +562,8 @@ class Timestream(Data):
     #==========================#
     # Internal Loading Methods #
     #==========================#
-
-    @classmethod
-    def load_frame(cls, *args, **kwargs):
-        if args and isinstance(args[0], cls):
-            return args[0]._load_frame(*args[1:], **kwargs)
     
-    def _load_frame(self, frame, start_time, time_precision, mask = None):
+    def load_frame(self, frame, start_time: float, time_precision: int = 1e8, mask: list[bool] = None) -> tuple[list[float], list[list[float]], list[list[float]]]:
         if 'packet_counts' in frame: self.packet_counts += list(frame['packet_counts'])
 
         ts = []
@@ -666,7 +661,7 @@ class Timestream(Data):
         curr_ind = 0
         for i in range(len(frames)):
             mask = masks[i]
-            t, I, Q = self.load_frame(self, frames[i], start_time, time_precision, mask = mask)
+            t, I, Q = self.load_frame(frames[i], start_time, time_precision, mask = mask)
 
             num_samps = int(np.sum(mask))
             Is[:, curr_ind:num_samps + curr_ind] = I

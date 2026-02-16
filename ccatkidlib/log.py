@@ -165,13 +165,13 @@ def header(method: Callable) -> Any:
         # Try to execute func
         # -------------------
         try:
-            log.log('HEADER', "Executing %s...", fmt)
+            log('HEADER', "Executing %s...", fmt)
             rtn = method(self, *args, **kwargs)
-            log.log('FOOTER', "%s executed successfully", fmt)
+            log('FOOTER', "%s executed successfully", fmt)
             return rtn
         except Exception as e:
             import traceback 
-            log.log('ERROR', "Method %s failed to execute with error:\n%s", fmt, traceback.format_exc())
+            log('ERROR', "Method %s failed to execute with error:\n%s", fmt, traceback.format_exc())
             return None
     return _wrapper
 
@@ -194,7 +194,7 @@ def method_timer(method: Callable) -> Any:
         rtn = method(self, *args, **kwargs)
         time_diff = time.time() - start_time
 
-        log.log('TIMER', f'Method {Style.style_name(name)} executed in {time_diff} seconds.')
+        log('TIMER', f'Method {Style.style_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper
 
@@ -216,7 +216,7 @@ def function_timer(func: Callable) -> Any:
         rtn = func(*args, **kwargs)
         time_diff = time.time() - start_time
 
-        log.log('TIMER', f'Method {Style.style_name(name)} executed in {time_diff} seconds.')
+        log('TIMER', f'Method {Style.style_name(name)} executed in {time_diff} seconds.')
         return rtn
     return _wrapper
 

@@ -40,7 +40,7 @@ class Sweep(Data):
             com_to: |RFSoC| drone that took the frequency sweep
             **kwargs**: Keyword arguments of the base **Data** class
         '''
-        super().__init__(com_to, cfg_path, **kwargs)
+        super().__init__(com_to, **kwargs)
         
     #==================#
     # Plotting Methods #

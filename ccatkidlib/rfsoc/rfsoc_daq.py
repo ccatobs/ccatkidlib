@@ -2530,10 +2530,9 @@ class R:
 
         com_arrs = [com_arr for com_arr in com_arrs if com_arr] # Remove empty com_to arrays
 
-        s = Style()
         rtn_list = [None] * len(com_arrs)
         for i, com_arr in enumerate(com_arrs):
-            log.log('DEBUG', f'Running {s.func_name(name)} for drones {com_to}!')
+            log.log('DEBUG', f'Running {Style.style_name(name)} for drones {com_to}!')
             rtn_list[i] = func(str(com_arr), *args, **kwargs)
 
         return rtn_list

@@ -24,14 +24,14 @@ class Target(Sweep):
     Subclasses Sweep.
     '''
 
-    def __init__(self, com_to: str, tones: int | list[int] | None = None, noise_tones: int | list[int] | None = None, cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, tones: int | list[int] | None = None, noise_tones: int | list[int] | None = None, **kwargs):
         '''Subclass of Sweep with additional arguments
 
         Args:
             tones (int | list[int] | None, optional): Which tones to load. None for loading all data without splitting into individual tones. -1 for all data split into individual tones. Defaults to None
         '''
         kwargs['data_type'] = 'targ'
-        super().__init__(com_to, cfg_path, **kwargs)
+        super().__init__(com_to, **kwargs)
         
         # Parse 'tone' argument specifying which tones should be loaded
         # -------------------------------------------------------------

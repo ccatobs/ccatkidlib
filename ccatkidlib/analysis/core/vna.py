@@ -21,9 +21,9 @@ class VNA(Sweep):
         cable_delay (float): Cable delay of the RF chain in nanoseconds
     '''
 
-    def __init__(self, com_to: str, cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, **kwargs):
         kwargs['data_type'] = 'vna'
-        super().__init__(com_to, cfg_path, **kwargs)
+        super().__init__(com_to, **kwargs)
 
     #=====================#
     # Data Getter Methods #
