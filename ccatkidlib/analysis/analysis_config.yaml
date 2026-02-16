@@ -24,7 +24,7 @@ io:
     data_level: 'CRITICAL' # * Terminal logging level for messages from Data objects (and subclasses)
   pickle:
     pickle_root_dir: '/mnt/md0/cooldown_202510' # Root directory where pickle files should be saved
-    curr_pickle_root_dir: '/mnt/md0/cooldown_202510' # Current path to root directory containing pickle file to load. Only necessary if pickle directory is moved.
+    curr_pickle_root_dir: '' # Current path to root directory containing pickle file to load. Only necessary if pickle directory is moved.
     pickle_dataframes: False    # Whether to pickle properties and data DataFrames or save them as seperate parquet files (Recommended: False)
     overwrite: False # Whether to overwrite already existing pickle and parquet files
 

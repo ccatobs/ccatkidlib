@@ -14,7 +14,7 @@ from multiprocessing import Process
 from functools import wraps
 from pathlib import Path
 from collections.abc import Iterable
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Any, Callable, TypeAlias, Literal, TYPE_CHECKING
 
 import ccatkidlib.io as io
 
@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from ccatkidlib.analysis.core.detector import Detector
     from ccatkidlib.analysis.core.network import Network
     from holoviews import Options
+
+Format: TypeAlias = Literal['png', 'jpeg', 'pdf']
 
 def cycle_cmap(cmap: str, num_colors: int, cmap_range: tuple[float, float] = (0, 1)) -> hv.Cycle | None:
     ''' Create *Holoviews* **Cycle** object of specified *matplotlib* color map discretized into ``num_colors`` colors
@@ -49,10 +51,13 @@ def save_fig(obj: Data | Detector | Network,
              plot_opts: list[Options], 
              *args, 
              save_fig: bool | None = None, 
+             figs_per_file: int | None = None,
              overwrite: bool | None = None, 
+             save_dir: str | Path | None = None,
              save_name: str | None = None, 
+             save_fmt: Format | None = None,
              **kwargs) -> None:
-    ''' Create a *Holoviews* figure using the specified plotting function and save figure to disk
+    r''' Create a *Holoviews* figure using the specified plotting function and save figure to disk
 
     Args:
         obj: *ccatkidlib* **Data**, **Detector**, or **Network** object
@@ -60,23 +65,26 @@ def save_fig(obj: Data | Detector | Network,
         data: Data to be passed to ``plot_func`` for creating figure
         plot_opts: List of *Holoviews* **Options** to be passed to ``plot_func`` for styling figure
         args: Positional arguments to pass to ``plot_func``
-        save_fig: Whether to save figure. Defaults to that specified in analysis configuration file
-        overwrite: Whether to overwrite figure files that already exist. Defaults to that specified in analysis configuration file
-        save_name: Save name of file. Will always append ``obj.timestamp`` to the end of file name. Defaults to that specified in analysis configuration file
+        save_fig: Whether to save figure. Defaults to that specified in viz configuration file
+        figs_per_file: Number of figures to save in a single file. Will make a :math:`\sqrt{\text{figs_per_file}} \times \sqrt{\text{figs_per_file}}` grid of figures. Defaults to that specified in viz configuration file
+        overwrite: Whether to overwrite figure files that already exist. Defaults to that specified in viz configuration file
+        save_dir: Directory where figure should be saved. Defaults to the ``fig_dir`` of ``obj``
+        save_name: Save name of file. Will always append ``obj.timestamp`` to the end of file name. Defaults to that specified in viz configuration file
+        save_fmt: Format to save figure as. Defaults to that specified in viz configuration file
         kwargs: Key word arguments to pass to ``plot_func``
     ''' 
     viz_cfg = obj.viz_cfg
 
     if save_fig is None: save_fig = viz_cfg['save']['save_fig']
+    if figs_per_file is None: figs_per_file = viz_cfg['save']['figs_per_file']
     if overwrite is None: overwrite = viz_cfg['save']['overwrite']
+    if save_dir is None: save_dir = Path(obj.fig_dir)
     if save_name is None: save_name = 'tmp'
+    if save_fmt is None: save_fmt = viz_cfg['save']['fig_fmt']
 
     save_name = save_name.replace('/', '-') # Backslashes cannot be used in filenames
 
-    figs_per_file = kwargs.pop('figs_per_file') if 'figs_per_file' in kwargs else viz_cfg['save']['figs_per_file']
-
     if save_fig:
-        save_dir, save_fmt = Path(obj.fig_dir), viz_cfg['save']['fig_fmt']
         timestamp = obj.timestamp
 
         pickle_dataframes = obj.analysis_cfg['io']['pickle']['pickle_dataframes']

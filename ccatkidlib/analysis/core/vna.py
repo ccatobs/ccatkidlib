@@ -140,7 +140,7 @@ class VNA(Sweep):
             tuple[np.ndarray, np.ndarray]: Frequencies of likely real detectors, frequencies of likely fake detectors.
         """
         
-        f, det_f = self.f().to_numpy().T[0], self.det_f
+        f, det_f = self.f().to_numpy().T[0], self.det_f.to_numpy()
         phase = self.stitch_phase().to_numpy().T[0] if stitch_phase else self.phase().to_numpy().T[0]
 
         slopes = filter_det_f(f, phase, det_f, int(win))

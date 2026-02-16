@@ -231,7 +231,7 @@ class Data:
             exprs=[]
 
             # Timestreams never have self.tones = None but **do** have columns (the time columns in particular) without tones so need to handle those seperately
-            no_tone_name = r'^(sample|t|dt|fft_f)(?:_\d+)?$'
+            no_tone_name = r'^(sample|t|dt|zt|fft_f|psd_f)(?:_\d+)?$'
             pattern = re.compile(no_tone_name) # Create regex pattern
 
             # If a specified data column is in the no_tone_name list, add it to the list of Polars Exprs without additional processing
@@ -898,20 +898,20 @@ class Data:
     @abstractmethod
     def data(self) -> pl.DataFrame:
         '''
-        pl.DataFrame: *Polars* **DataFrame** with data. Load data if it is not already loaded.
+        *Polars* **DataFrame** with data. Load data if it is not already loaded.
         '''
         pass
 
     @cached_property
     def io_cfg(self) -> dict:
-        '''dict: IO configuration file. Stores parameters related to networking, file, and logging IO operations
+        '''IO configuration file. Stores parameters related to networking, file, and logging IO operations
         '''
         return self._load_cfg('_io_')
 
     @cached_property
     def ext_cfg(self) -> dict:
         '''
-        dict: 'External' configuration file. Stores parameters that may change between measurements
+        'External' configuration file. Stores parameters that may change between measurements
         and are not directly related to |RFSoC| drones
         '''
         return self._load_cfg('_ext_')
@@ -919,21 +919,21 @@ class Data:
     @cached_property
     def drone_cfg(self) -> dict:
         '''
-        dict: '|Drone|' configuration file. Stores parameters that may differ between |RFSoC| drones
+        '|Drone|' configuration file. Stores parameters that may differ between |RFSoC| drones
         '''
         return self._load_cfg('_drone_')
 
     @cached_property
     def num_tones(self) -> int:
         '''
-        int: Total number of tones that were used to take data
+        Total number of tones that were used to take data
         '''
         return self.drone_cfg.get('tones', {'num_tones': -1})['num_tones']
 
     @cached_property
     def fig_dir(self) -> str:
         '''
-        str: Directory where figures should be saved. Create if it does not already exist.
+        Directory where figures should be saved. Create if it does not already exist.
         '''
 
         return io.add_dir('fig', 
@@ -945,7 +945,7 @@ class Data:
     @cached_property
     def pickle_dir(self) -> str:
         '''
-        str: Directory where pickle files should be saved. Create if it does not already exist.
+        Directory where pickle files should be saved. Create if it does not already exist.
         '''
 
         pickle_dir = io.add_dir('pickle', 
@@ -959,7 +959,7 @@ class Data:
     @cached_property
     def comb(self) -> pl.DataFrame:
         '''
-        pl.DataFrame: *Polars* **DataFrame** with |tone| frequencies, powers, and phases of comb that was used to take data
+        *Polars* **DataFrame** with |tone| frequencies, powers, and phases of comb that was used to take data
         '''
         comb = {'tone_freqs': [], 'tone_powers': [], 'tone_phis': []}
         for key in comb.keys():
@@ -979,7 +979,7 @@ class Data:
     @cached_property
     def _original_root(self) -> str:
         '''
-        str: Root directory where data was originally stored when it was acquired
+        Root directory where data was originally stored when it was acquired
         '''
         try:
             original_root = self.io_cfg['file_paths']['root_dir']
@@ -1020,6 +1020,10 @@ class Data:
             df = self.unpivot(df, col_dict['y'], index_cols=[col_dict['sample'], col_dict['x']])
             on += ['det']
             if include is not None or exclude is not None: by = 'det'
+        
+        if col_dict['x'] == col_dict['y']:
+            df = df.rename({col_dict['x']: f"{col_dict['x']}_x",
+                           f"{col_dict['y']}_right": f"{col_dict['y']}_y"})
 
         return df, by
 
@@ -1029,7 +1033,17 @@ class Data:
 
     def unpivot(self, df: pl.DataFrame, data_name: str, index_cols: list[str] = ['sample']) -> pl.DataFrame:
         '''
-        
+        Unpivot (wide to long) data columns in the ``df`` *Polars* **DataFrame**. The DataFrame should only contain one type of data (e.g., **'phase'**)
+        but can contain data for any number of tones. Any additional columns should be specified as ``index_cols``.
+
+        .. seealso:: Documentation of *Polars* `unpivot operation <https://docs.pola.rs/api/python/dev/reference/dataframe/api/polars.DataFrame.unpivot.html>`_
+
+        Args:
+            df: *Polars* **DataFrame** with data columns to unpivot
+            data_name: Type of data (e.g., **'phase'**, **'f'**, etc.)
+            index_cols: Additional columns in ``df`` that should not be unpivoted
+        Returns:
+            Unpivoted *Polars* **DataFrame**. The new DataFrame has a **'det'** column specifiying which tone each row corresponds to
         '''
         
         unpivot_cols = df.columns

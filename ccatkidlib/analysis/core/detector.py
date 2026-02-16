@@ -19,7 +19,7 @@ import concurrent.futures
 import lmfit
 
 from collections.abc import Iterable
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, Literal
 from pathlib import Path
 from functools import cached_property
 
@@ -43,6 +43,8 @@ from ccatkidlib.analysis.core.target import Target
 import holoviews as hv
 import hvplot.polars
 from holoviews import opts
+
+Format: TypeAlias = Literal['png', 'jpeg', 'pdf']
 
 class Detector:
     '''Class representing kinetic inductance detectors (KIDs). Used for KID analyses requiring fitting and/or multiple types of data files (e.g., timestream and target sweep data).
@@ -1466,7 +1468,23 @@ class Detector:
         if dynamic and by is not None: hist = hv.util.Dynamic(hist)
         return hist
 
-    def properties_histogram_plot(self, col_name, plot_median=None, xlabel = '' , title='', filter_exprs = [], save_fig: bool | None = None, overwrite: bool | None = None, save_name: str = None, return_fig=True, return_df=False, df = None, by=None, **kwargs):
+    def properties_histogram_plot(self, 
+                                  col_name, 
+                                  plot_median=None, 
+                                  xlabel = '' , 
+                                  title='', 
+                                  filter_exprs = [], 
+                                  save_fig: bool | None = None, 
+                                  figs_per_file: int | None = None,
+                                  overwrite: bool | None = None, 
+                                  save_dir: str | Path | None = None,
+                                  save_name: str = None, 
+                                  save_fmt: Format | None = None,
+                                  return_fig=True, 
+                                  return_df=False, 
+                                  df = None, 
+                                  by=None, 
+                                  **kwargs):
         ''' Plot histogram of a detector property
 
         Args:
@@ -1511,7 +1529,9 @@ class Detector:
         # Save plot in background
         # -----------------------
         if save_name is None: save_name = f'hist_{col_name}'
-        viz_utils.save_fig(self, Detector._plot_histogram, df, plot_opts, *args, save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
+        viz_utils.save_fig(self, Detector._plot_histogram, df, plot_opts, *args, 
+                           save_fig = save_fig, figs_per_file = figs_per_file, overwrite=overwrite, save_dir = save_dir, save_name=save_name, save_fmt = save_fmt,
+                           **kwargs)
 
         if return_df:
             return plot, df

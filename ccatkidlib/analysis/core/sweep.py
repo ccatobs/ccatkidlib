@@ -1,3 +1,7 @@
+'''
+
+'''
+
 import gc
 import sys
 import numpy as np
@@ -6,6 +10,7 @@ import polars as pl
 from pathlib import Path
 from functools import cached_property
 from collections.abc import Iterable
+from typing import TypeAlias, Literal
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 import holoviews as hv
@@ -20,14 +25,21 @@ import ccatkidlib.analysis.viz.viz_utils as viz_utils
 
 from ccatkidlib.analysis.core.data import Data
 
+Format: TypeAlias = Literal['png', 'jpeg', 'pdf']
+SweepFigure: TypeAlias = hv.Overlay | hv.HoloMap | hv.DynamicMap
+
 
 class Sweep(Data):
-    '''Class representing a sweep (VNA or target) taken using a Radio Frequency System on a Chip (RFSoC).
-
-    Subclasses the general ccatkidlib Data class.
+    '''Class representing a |RFSoC| frequency sweep taken using the *ccatkidlib* data acquisition. 
+    Sub-classes the **Data** base class to implement data loading and plotting. 
     '''
 
-    def __init__(self, com_to: str, cfg_path: str = str(Path(__file__).parents[1] / 'analysis_config.yaml'), **kwargs):
+    def __init__(self, com_to: str, **kwargs):
+        '''
+        Args:
+            com_to: |RFSoC| drone that took the frequency sweep
+            **kwargs**: Keyword arguments of the base **Data** class
+        '''
         super().__init__(com_to, cfg_path, **kwargs)
         
     #==================#
@@ -74,22 +86,55 @@ class Sweep(Data):
              y_prefix: str = '',
              xlabel: str | None = None,
              ylabel: str | None = None,
-             grouping: str = 'groupby',
+             grouping: Literal['by', 'groupby'] = 'groupby',
              include: int | list[int] | None = None, 
              exclude: int | list[int] | None = None, 
-             plot_opts = None,
-             filter_exprs = [],
-             return_df = False,
+             plot_opts: hv.Options | list[hv.Options] | None = None,
+             filter_exprs: list[pl.Expr] = [],
+             return_df: bool = False,
              save_fig: bool | None = None,
+             figs_per_file: int | None = None,
              overwrite: bool | None = None,
-             save_name: str = None,
-             return_fig = True,
+             save_dir: str | Path | None = None,
+             save_name: str | None = None,
+             save_fmt: Format | None = None,
+             return_fig: bool = True,
              df: pl.DataFrame | None = None,
              by: str | list[str] | None = None,
              area_df: pl.DataFrame | None = None,
-             **kwargs):
-        '''
-        
+             **kwargs) -> SweepFigure | tuple[SweepFigure, pl.DataFrame] | tuple[pl.DataFrame, str | None]:
+        r'''
+        Plot sweep data and tones
+
+        Args:
+            x_dim: Name of data to plot on x-axis without prefixes or |tone| suffix (e.g., **'f'**)
+            y_dim: Name of data to plot on y-axis without prefixes or |tone| suffix (e.g., **'mag'**)
+            x_prefix: Prefix of data to plot on x-axis
+            y_prefix: Prefix of data to plot on y-axis
+            xlabel: Label of x-axis
+            ylabel: Label of y-axis
+            grouping: How to handle plotting sweeps for multiple tones. 
+                      **'by'** will overlay all plots whereas **'groupby'** will allow scrubbing through sweep plots of individual tones
+            include: List of tones to plot
+            exclude: List of tones to not plot
+            plot_opts: *Holoviews* **Options** to apply to figure(s)
+            filter_exprs: List of *Polars* **Expr** to use for filtering *Polars* **DataFrame** used for plotting
+            return_df: Whether to return the *Polars* **DataFrame** that was used to create figure(s)
+            save_fig: Whether to save figure. Defaults to that specified in viz configuration file
+            figs_per_file: Number of figures to save in a single file. Will make a :math:`\sqrt{\text{figs_per_file}} \times \sqrt{\text{figs_per_file}}` grid of figures. Defaults to that specified in viz configuration file
+            overwrite: Whether to overwrite figure files that already exist. Defaults to that specified in viz configuration file
+            save_dir: Directory where figure should be saved. Defaults to ``fig_dir`` attribute
+            save_name: Save name of file. Will always append sweep ``timestamp`` to the end of file name. Defaults to that specified in viz configuration file
+            save_fmt: Format to save figure as. Defaults to that specified in viz configuration file
+            return_fig: Whether to return *Holoviews* figure
+            df: *Polars* **DataFrame** to use for creating figure(s). Must have the following columns: **'sample'**, **'det'**, ``x_dim``, ``y_dim``
+            by: List of column names to group data by
+            area_df: *Polars* **DataFrame** specifying which samples should be used to create *Holoviews* **Area** plot. 
+                     Must have a **'det'** column and a **'area_sample'** column with lists of samples to use for area plots for each tone
+            **kwargs**: Keyword arguments to supply to the *Holoviews* ``hvplot`` call(s) that create the figure(s)
+        Returns:
+            Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
+            if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         '''
         
         # Get DataFrame with data to plot
@@ -154,19 +199,44 @@ class Sweep(Data):
 
         # Save plot in background
         # -----------------------
-        viz_utils.save_fig(self, Sweep._plot, df, all_opts, *(col_dict['x'], col_dict['y']), save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
+        viz_utils.save_fig(self, Sweep._plot, df, all_opts, *(col_dict['x'], col_dict['y']), 
+                           save_fig = save_fig, figs_per_file=figs_per_file, overwrite=overwrite, save_dir = save_dir,  save_name=save_name, save_fmt = save_fmt,
+                           **kwargs)
 
         if return_df:
             return plot, df
         else:
             return plot
 
-    def mag_plot(self, prefix: str = '', grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+    def mag_plot(self, 
+                 prefix: str = '', 
+                 grouping: Literal['by', 'groupby'] = 'groupby', 
+                 include: int | list[int] | None = None, 
+                 exclude: int | list[int] | None = None, 
+                 filter_exprs: list[pl.Expr] = [],
+                 return_df: bool = False, 
+                 save_fig: bool | None = None, 
+                 **kwargs) -> SweepFigure | tuple[SweepFigure, pl.DataFrame] | tuple[pl.DataFrame, str | None]:
+        r'''
+        Plot magnitude :math:`|S_{21}| = \sqrt{I^2 + Q^2}` versus frequency data of the sweep
+
+        Args:
+            prefix: Prefix of the magnitude data 
+            grouping: How to handle plotting sweeps for multiple tones. 
+                      **'by'** will overlay all plots whereas **'groupby'** will allow scrubbing through sweep plots of individual tones
+            include: List of tones to plot
+            exclude: List of tones to not plot
+            filter_exprs: List of *Polars* **Expr** to use for filtering *Polars* **DataFrame** used for plotting
+            return_df: Whether to return the *Polars* **DataFrame** that was used to create figure(s)
+            save_fig: Whether to save figure. Defaults to that specified in viz configuration file
+            **kwargs**:
+        Returns:
+            Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
+            if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         '''
-        Plot the magnitude of the complex transmission |S_21| = \sqrt{I^2 + Q^2} of a frequency sweep
-        '''
-        xlabel, ylabel = r'$Frequency\ [Hz]$', r'$|S_{21}|$'
-        save_name = f"sweep_{prefix}{'_' if prefix else ''}mag"
+        xlabel = r'$Frequency\ [Hz]$' if not 'xlabel' in kwargs else kwargs.pop('xlabel')
+        ylabel = r'$|S_{21}|$' if not 'ylabel' in kwargs else kwargs.pop('ylabel')
+        save_name = f"sweep_{prefix}{'_' if prefix else ''}mag" if not 'save_name' in kwargs else kwargs.pop('save_name')
 
         rtn = self.plot('f', 'mag', 
                         y_prefix=prefix, 
@@ -182,12 +252,36 @@ class Sweep(Data):
                         **kwargs)
         return rtn
     
-    def phase_plot(self, prefix: str = '', grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+    def phase_plot(self, 
+                   prefix: str = '', 
+                   grouping: Literal['by', 'groupby'] = 'groupby', 
+                   include: int | list[int] | None = None, 
+                   exclude: int | list[int] | None = None, 
+                   filter_exprs: list[pl.Expr] = [],
+                   return_df: bool = False, 
+                   save_fig: bool | None = None, 
+                   **kwargs) -> SweepFigure | tuple[SweepFigure, pl.DataFrame] | tuple[pl.DataFrame, str | None]:
+        r'''
+        Plot the phase :math:`\arctan{Q/I}` versus frequency data of the sweep
+
+        Args:
+            prefix: Prefix of the phase data
+            grouping: How to handle plotting sweeps for multiple tones. 
+                      **'by'** will overlay all plots whereas **'groupby'** will allow scrubbing through sweep plots of individual tones
+            include: List of tones to plot
+            exclude: List of tones to not plot
+            filter_exprs: List of *Polars* **Expr** to use for filtering *Polars* **DataFrame** used for plotting
+            return_df: Whether to return the *Polars* **DataFrame** that was used to create figure(s)
+            save_fig: Whether to save figure. Defaults to that specified in viz configuration file
+            **kwargs**:
+
+        Returns:
+            Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
+            if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         '''
-        Plot the phase of the complex transmission \phi = \arctan{Q/I} of a frequency sweep
-        '''
-        xlabel, ylabel = r'$Frequency\ [Hz]$', r'$Phase\ [rad]$'
-        save_name = f"sweep_{prefix}{'_' if prefix else ''}phase"
+        xlabel = r'$Frequency\ [Hz]$' if not 'xlabel' in kwargs else kwargs.pop('xlabel')
+        ylabel = r'$Phase\ [rad]$' if  not 'ylabel' in kwargs else kwargs.pop('ylabel')
+        save_name = f"sweep_{prefix}{'_' if prefix else ''}phase" if not 'save_name' in kwargs else kwargs.pop('save_name')
         rtn = self.plot('f', 'phase', 
                              y_prefix=prefix, 
                              grouping=grouping, 
@@ -200,10 +294,41 @@ class Sweep(Data):
                              save_name = save_name,
                              overwrite = overwrite,
                              **kwargs)
-
         return rtn
 
-    def IQ_plot(self, prefix: str = '', projection='IQ', max_IQ_sliver = False, grouping = 'groupby', include: int | list[int] | None = None, exclude: int | list[int] | None = None, y_prefix=None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+    def IQ_plot(self, 
+                prefix: str = '', 
+                y_prefix: str | None = None, 
+                projection: Literal['IQ', 'polar'] = 'IQ', 
+                max_IQ_sliver: bool = False, 
+                grouping: Literal['by', 'groupby'] = 'groupby', 
+                include: int | list[int] | None = None, 
+                exclude: int | list[int] | None = None, 
+                filter_exprs: list[pl.Expr] = [],
+                return_df: bool = False,
+                save_fig: bool = True,
+                **kwargs) -> SweepFigure | tuple[SweepFigure, pl.DataFrame] | tuple[pl.DataFrame, str | None]:
+        r'''
+        Plot the quadrature |Q| versus the in-phase |I| data of the sweep if `projection` is **'IQ'**. 
+        If `projection` is **'polar'**, plot the magnitude :math:`|S_{21}| = \sqrt{I^2 + Q^2}` versus phase :math:`\arctan{Q/I}` data of the sweep.
+
+        Args:
+            prefix: Prefix of data to plot on the x-axis (either |I| or the phase data). Will also use as the prefix of the y-axis data if `y_prefix` not specified.
+            y_prefix: Prefix of data to plot on the y-axis (either |Q| or the magnitude data).
+            projection: Whether to plot data in polar (`projection` = **'polar'**) or cartesian (`projection` = **'IQ'**) coordinates
+            max_IQ_sliver:
+            grouping: How to handle plotting sweeps for multiple tones. 
+                      **'by'** will overlay all plots whereas **'groupby'** will allow scrubbing through sweep plots of individual tones
+            include: List of tones to plot
+            exclude: List of tones to not plot
+            filter_exprs: List of *Polars* **Expr** to use for filtering *Polars* **DataFrame** used for plotting
+            return_df: Whether to return the *Polars* **DataFrame** that was used to create figure(s)
+            save_fig: Whether to save figure. Defaults to that specified in viz configuration file
+            **kwargs**: 
+        Returns:
+            Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
+            if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
+        '''
         shared_opts = {'padding': 0.1}
         area_df = None
         if projection == 'IQ':
@@ -240,9 +365,14 @@ class Sweep(Data):
             error = 'Invalid projection specified, must be either "IQ" or "polar".'
             log.log('CRITICAL', error)
             raise ValueError(error)
-        save_name = f"sweep_{prefix}{'_' if prefix else ''}{projection}"
 
         if not 'linewidth' in kwargs: kwargs['linewidth'] = 0
+        if 'plot_opts' in kwargs: plot_opts += extra_opts if isinstance(extra_opts := kwargs.pop('plot_opts'), Iterable) else [extra_opts]
+
+
+        save_name = f"sweep_{prefix}{'_' if prefix else ''}{projection}" if not 'save_name' in kwargs else kwargs.pop('save_name')
+        if 'xlabel' in kwargs: xlabel = kwargs.pop('xlabel')
+        if 'ylabel' in kwargs: ylabel = kwargs.pop('ylabel')
         
         rtn = self.plot(x_dim=x_dim,
                         y_dim=y_dim,
@@ -257,7 +387,6 @@ class Sweep(Data):
                         area_df = area_df,
                         save_fig = save_fig,
                         save_name = save_name,
-                        overwrite = overwrite,
                         plot_opts=plot_opts,
                         **kwargs)
         return rtn
@@ -268,6 +397,11 @@ class Sweep(Data):
 
     @property
     def data(self) -> pl.DataFrame:
+        '''
+        *Polars* **DataFrame** with sweep data. Load data if it is not already loaded.
+        Can only be set with *Polars* **DataFrame** or **LazyFrame** objects (or **None**)
+
+        '''
         if self._data is None:
             data = {'sample': [], 'f': [], 'I': [], 'Q': []}
             fs, s21z = np.load(self.data_path[0], mmap_mode='r')
@@ -280,24 +414,25 @@ class Sweep(Data):
         return self._data
 
     @data.setter
-    def data(self, value: pl.LazyFrame | None): 
+    def data(self, value: pl.DataFrame | pl.LazyFrame | None) -> None: 
         if value is None or isinstance(value, (pl.DataFrame, pl.LazyFrame)): 
             self._data = value
         else:
             log.log('ERROR', 'Cannot set data with type %s. Must be a Polars LazyFrame! Convert DataFrame to lazy frame with .lazy() before setting.', type(value))
 
     @cached_property
-    def det_f(self) -> np.ndarray:
-        '''Found detector frequencies by find_resonators or find_resonators_fine
+    def det_f(self) -> pl.Series:
+        '''
+        |KID| frequencies identified by *ccatkidlib* ``find_detectors`` or ``tune_tone_placement`` data acquisition methods
 
-        Note:
-            The found detector frequencies are ``NOT`` necessarily the same as the tone frequencies of the sweep!
+        .. important::
+            The identified detector frequencies are **NOT** necessarily the same as the tone frequencies of the sweep!
         
         Returns:
-            np.ndarray: Array of found detector frequencies
+            *Polars* **Series** of identified detector frequencies
 
         Raises:
-            FileNotFoundError: Unable to load file with found detector frequencies
+            FileNotFoundError: If unable to load *NumPy* file of detector frequencies
         '''
 
         det_f = self.drone_cfg['det_config']['found_detector_freqs']
@@ -317,8 +452,15 @@ class Sweep(Data):
     # Data Getter Methods #
     #=====================#
 
-    def f(self, include: int | list[int] | None = None, exclude: int | list[int] | None = None):
+    def f(self, include: int | list[int] | None = None, exclude: int | list[int] | None = None) -> pl.DataFrame:
         '''
-        Get the frequency data of the sweep in Hz
+        Frequency data of the sweep
+
+        Args:
+            include: List of tones to include
+            exclude: List of tones to exclude
+        Returns:
+            *Polars **DataFrame** with frequency data
+
         '''
         return self.get_data(col_name='f', include=include, exclude=exclude)

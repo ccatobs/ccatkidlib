@@ -18,6 +18,7 @@ from scipy.signal import welch
 from functools import cached_property
 from pathlib import Path
 from collections.abc import Iterable
+from typing import TypeAlias, Literal
 from spt3g import core
 
 import holoviews as hv
@@ -34,6 +35,8 @@ import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 from ccatkidlib.analysis.core.data import Data
+
+Format: TypeAlias = Literal['png', 'jpeg', 'pdf']
 
 class Timestream(Data):
     '''Class representing a timestream taken with a radio frequency system on a chip (RFSoC)
@@ -155,8 +158,11 @@ class Timestream(Data):
              unpivot_x=True,
              return_df = False,
              save_fig: bool | None = None,
+             figs_per_file: int | None = None,
              overwrite: bool | None = None,
+             save_dir: str | Path | None = None,
              save_name: str = None,
+             save_fmt: Format | None = None,
              return_fig = True,
              df: pl.DataFrame | None = None,
              by: str | list[str] | None = None,
@@ -172,6 +178,8 @@ class Timestream(Data):
             col_dict['x'], col_dict['y'] = df.select(pl.exclude('det', 'sample')).columns
             df = df.filter((~pl.col(col_dict['x']).is_nan()) & (~pl.col(col_dict['y']).is_nan()))
             if filter_exprs: df = df.filter(filter_exprs)
+        else:
+            col_dict['x'], col_dict['y'] = df.select(pl.exclude(by, 'sample')).columns
         if not return_fig: return df, by
 
         # Set default hvplot key word arguments
@@ -218,7 +226,9 @@ class Timestream(Data):
 
         # Save plot in background
         # -----------------------
-        viz_utils.save_fig(self, Timestream._plot, df, all_opts, *(col_dict['x'], col_dict['y']), save_fig = save_fig, overwrite=overwrite, save_name=save_name, **kwargs)
+        viz_utils.save_fig(self, Timestream._plot, df, all_opts, *(col_dict['x'], col_dict['y']), 
+                           save_fig = save_fig, figs_per_file = figs_per_file, overwrite = overwrite, save_dir = save_dir, save_name = save_name, save_fmt = save_fmt,
+                           **kwargs)
 
         if return_df:
             return plot, df
@@ -344,7 +354,6 @@ class Timestream(Data):
                         grouping=grouping,
                         include=include, 
                         exclude=exclude, 
-                        unpivot_x=False,
                         xlabel=xlabel,
                         ylabel=ylabel,
                         return_df=return_df,
@@ -413,7 +422,8 @@ class Timestream(Data):
                 data[f'I_{t:0{self.padding}d}'] = I
                 data[f'Q_{t:0{self.padding}d}'] = Q
             self._data = pl.DataFrame(data)
-            self._data = self._data.with_columns(pl.col('dt').cast(pl.Datetime(unit)))
+            self._data = self._data.with_columns(pl.col('dt').cast(pl.Datetime(unit)),
+                                                 (pl.col('t') - pl.col('t').first()).alias('zt'))
         elif isinstance(self._data, pl.LazyFrame): 
             self._data = self._data.collect()
         return self._data

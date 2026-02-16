@@ -20,6 +20,7 @@ rfsoc/__pycache__/
 *.pyc
 *.py[cod]
 *$py.class
+*.swp
 
 # Distribution / packaging
 .Python
@@ -30,6 +31,7 @@ build/
 
 # Sphinx documentation
 docs/_build/
+docs/api
 
 # Jupyter Notebook
 .ipynb_checkpoints
