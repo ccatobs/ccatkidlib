@@ -108,6 +108,7 @@ def process_batches(func: Callable, *args, **kwargs) -> list[Any | Exception]:
     '''
     func_args = list(zip(*args))
     func_kwargs = [dict(zip(kwargs.keys(), values)) for values in zip(*kwargs.values())]
+    if not func_kwargs: func_kwargs = [{}]*len(func_args)
 
     results = [None]*len(func_args)
     for i, (func_arg, func_kwarg) in enumerate(zip(func_args, func_kwargs)):

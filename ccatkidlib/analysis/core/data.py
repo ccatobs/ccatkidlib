@@ -231,7 +231,9 @@ class Data:
             exprs=[]
 
             # Timestreams never have self.tones = None but **do** have columns (the time columns in particular) without tones so need to handle those seperately
-            no_tone_name = r'^(sample|t|dt|zt|fft_f|psd_f)(?:_\d+)?$'
+            #no_tone_cols = self.analysis_cfg['col_names']['no_tones']
+            no_tone_cols = ['sample', 't', 'dt', 'zt', 'fft_f', 'psd_f', 'optical_delay', 'mirror_pos']
+            no_tone_name = rf"^({'|'.join(no_tone_cols)})(?:_\d+)?$"
             pattern = re.compile(no_tone_name) # Create regex pattern
 
             # If a specified data column is in the no_tone_name list, add it to the list of Polars Exprs without additional processing
@@ -708,7 +710,7 @@ class Data:
             schema = data.collect_schema()
             self.data = data.with_columns(*ccat_df.parse_tones(_include, _exclude, _all, include, exclude)).collect()
         else:
-            f_args = [[[arg] if not isinstance(arg, Iterable) or isinstance(arg, str) else arg for arg in f_arg] for f_arg in funcs_args]
+            funcs_args = [[[arg] if not isinstance(arg, Iterable) or isinstance(arg, str) else arg for arg in f_arg] for f_arg in funcs_args]
             self.data = data.with_columns(*[func(data.collect_schema(), *f_arg, tones = None, recalc = recalc, col_name = name) for func, f_arg, name in zip(funcs, funcs_args, col_name)]).collect()
         return self.data
 
@@ -881,7 +883,7 @@ class Data:
         col_name = col_name.copy()
         if len(args) == 5:
             window, k, deriv, max_workers, ex = np.array(args)
-            if tones is not None: max_workers, ex = int(max_workers[0]), ex[0]
+            max_workers, ex = int(max_workers[0]), ex[0]
             col_name[-1] = f'{col_name[-1]}{deriv[0]}'
         else:
             log.log('ERROR', 'window, k, deriv, and max_workers are required arguments.')
@@ -922,6 +924,20 @@ class Data:
         '|Drone|' configuration file. Stores parameters that may differ between |RFSoC| drones
         '''
         return self._load_cfg('_drone_')
+
+    @cached_property
+    def detector_type(self) -> str:
+        '''
+        Detector type of the |RFSoC| drone
+        '''
+        return self.drone_cfg.get('det_config', {'detector_type': 'open'})['detector_type']
+
+    @cached_property
+    def network(self) -> str:
+        '''
+        Detector type of the |RFSoC| drone
+        '''
+        return self.drone_cfg.get('det_config', {'network': 'open'})['network']
 
     @cached_property
     def num_tones(self) -> int:

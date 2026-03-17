@@ -659,7 +659,7 @@ class R:
 
     @header
     @log.method_timer
-    def get_stats(self, space: bool = False, temps: bool = False, ADC_rms: bool = True, **kwargs) -> tuple[list[float], tuple[list[float], list[float]], list[float]]:
+    def get_stats(self, space: bool = True, temps: bool = True, ADC_rms: bool = True, **kwargs) -> tuple[list[float], tuple[list[float], list[float]], list[float]]:
         '''
         Get RFSoC storage space, temperatures, and RMS power at drone analog-to-digital converters (ADCs).
 

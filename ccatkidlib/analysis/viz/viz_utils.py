@@ -56,6 +56,7 @@ def save_fig(obj: Data | Detector | Network,
              save_dir: str | Path | None = None,
              save_name: str | None = None, 
              save_fmt: Format | None = None,
+             blocking: bool = False,
              **kwargs) -> None:
     r''' Create a *Holoviews* figure using the specified plotting function and save figure to disk
 
@@ -93,12 +94,12 @@ def save_fig(obj: Data | Detector | Network,
         worker_args = (plot_func, data, timestamp, plot_opts, 
                        overwrite, save_dir, save_name, save_fmt, figs_per_file, 
                        args)
-        # Start worker function in a new process to save figure(s) in the background
-        save_process = Process(target=_save_fig, args=worker_args, kwargs = kwargs)
-        save_process.start()
 
-        # Run worker function in main process for easier debugging
-        #_save_fig(*worker_args, **kwargs)
+        if blocking:
+            _save_fig(*worker_args, **kwargs)
+        else:
+            save_process = Process(target=_save_fig, args=worker_args, kwargs = kwargs)
+            save_process.start()
 
         obj.analysis_cfg['io']['pickle']['pickle_dataframes'] = pickle_dataframes
 

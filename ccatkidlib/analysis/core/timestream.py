@@ -309,7 +309,7 @@ class Timestream(Data):
                         **kwargs)
         return rtn
 
-    def IQ_plot(self, prefix: str = '', projection='polar', grouping = 'groupby', datashade = True, include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
+    def IQ_plot(self, prefix: str = '', projection='IQ', grouping = 'groupby', datashade = True, include: int | list[int] | None = None, exclude: int | list[int] | None = None, return_df = False, save_fig: bool | None = None, overwrite: bool | None = None, **kwargs):
         if projection == 'IQ' or datashade:
             xlabel, ylabel = r'$I\ [arb]$', r'$Q\ [arb]$'
             x_dim, y_dim = 'I', 'Q'
@@ -348,6 +348,8 @@ class Timestream(Data):
 
         if not 'logx' in kwargs: kwargs['logx'] = True
         if not 'logy' in kwargs: kwargs['logy'] = True
+        if not 'datashade' in kwargs: kwargs['datashade'] = False
+
         rtn = self.plot(col_name, col_name, 
                         x_prefix=f"psd_f{'_' if prefix else ''}{prefix}",  
                         y_prefix=f"psd{'_' if prefix else ''}{prefix}",
@@ -514,6 +516,33 @@ class Timestream(Data):
         return self.get_data(col_name = [f'{col_name[-2]}_{col_name[0]}' for col_name in col_names] + 
                                         [f'{col_name[-1]}_{col_name[0]}' for col_name in col_names], include=include, exclude=exclude)
    
+    def fft(self,
+            prefix: str | list[str] = '',
+            col_name: str = 'phase',
+            sampling_freq = None,
+            include: int | list[int] | None = None,
+            exclude: int | list[int] | None = None,
+            recalc: bool = False,
+            max_workers: int = 1,
+            ex=None) -> pl.dataframe.frame.DataFrame:
+        
+        col_name = [col_name, 'fft_f', 'fft']
+        if sampling_freq is None: sampling_freq = self.sampling_freq
+        height = self.data.height
+
+        if isinstance(prefix, str): prefix = [prefix]
+        num_prefix = len(prefix)
+
+        col_names = [[]]*num_prefix
+        for i, pre in enumerate(prefix):
+            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}"] + col_name[1:]
+
+        args = [[sampling_freq, height, ccat_mp.check_max_workers(max_workers), ex]]*num_prefix
+        self.transform([Timestream._calc_fft]*num_prefix, *args, include=include, exclude=exclude, recalc=recalc, col_name = col_names)
+        self.data = self._unnest([f'struct_{col_name[-1]}' for col_name in col_names])
+        return self.get_data(col_name = [f'{col_name[-2]}_{col_name[0]}' for col_name in col_names] + 
+                                        [f'{col_name[-1]}_{col_name[0]}' for col_name in col_names], include=include, exclude=exclude)
+   
     #==================#
     # Analysis Methods #
     #==================#
@@ -533,7 +562,8 @@ class Timestream(Data):
                                                    window = window[inds], 
                                                    nperseg = nperseg[inds], 
                                                    detrend = detrend[inds], 
-                                                   average = average[inds]):  (tones, cols) for i, (tones, inds, (cols)) in enumerate(zip(to_calc, calc_ind, batches))}
+                                                   average = average[inds]
+                                                   ):  (tones, cols) for i, (tones, inds, (cols)) in enumerate(zip(to_calc, calc_ind, batches))}
                 for future in concurrent.futures.as_completed(future_to_batch):
                     tones, cols = future_to_batch[future]
                     psd_cols = future.result()
@@ -550,15 +580,52 @@ class Timestream(Data):
         
         if len(args) == 8:
             sampling_freq, height, window, nperseg, detrend, average, max_workers, ex = np.array(args, dtype=object)
-            if tones is not None: max_workers, ex = max_workers[0], ex[0]
+            max_workers, ex = max_workers[0], ex[0]
         else:
             log.log('ERROR', 'sampling_freq, window, nperseg, detrend, average, and max_workers are required arguments')
-
         calc_col = [f'{col_name[-1]}_{col_name[0]}_{tone:0{padding}d}' for tone in tones]
         return_col, return_type = [f'{col_name[-2]}_{col_name[0]}', f'{col_name[-1]}_{col_name[0]}'], [pl.Float64, pl.Float64]
         expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_mp_psd, tones, [col_name[0], col_name[-1]], schema, padding=padding, return_col=return_col, return_type=return_type, calc_col = calc_col, max_workers=max_workers, recalc=recalc)
         return expr
 
+    @staticmethod
+    def _calc_fft(schema, *args, tones: list[int] | None = None, padding: int = 4, recalc: bool = False, col_name = ['', 'fft_f', 'fft']):
+        def _mp_fft(df):
+            data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
+
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {executor.submit(ccat_mp.process_batches,
+                                                   _fft, 
+                                                   data[i][0],
+                                                   height[inds],
+                                                   sampling_freq[inds]):  (tones, cols) for i, (tones, inds, (cols)) in enumerate(zip(to_calc, calc_ind, batches))}
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tones, cols = future_to_batch[future]
+                    fft_cols = future.result()
+
+                    for tone, col, fft_col in zip(tones, cols, fft_cols):
+                        if isinstance(fft_col, Exception):
+                            log.log('WARNING', 'PSD calculation for tone %s failed with exception: %s', tone, fft_col)
+                            fft_f, fft = np.full(df.len(), np.nan), np.full(df.len(), np.nan)
+                        else:
+                            fft_f, fft = fft_col
+                        results_dict[f'{col_name[-2]}_{col[0]}'] = fft_f
+                        results_dict[f'{col_name[-1]}_{col[0]}'] = fft
+            return ccat_mp.package_results(results_dict)
+        
+        if len(args) == 4:
+            sampling_freq, height, max_workers, ex = np.array(args, dtype=object)
+            max_workers, ex = max_workers[0], ex[0]
+        else:
+            log.log('ERROR', 'sampling_freq, window, nperseg, detrend, average, and max_workers are required arguments')
+
+        calc_col = [f'{col_name[-1]}_{col_name[0]}_{tone:0{padding}d}' for tone in tones]
+        return_col, return_type = [f'{col_name[-2]}_{col_name[0]}', f'{col_name[-1]}_{col_name[0]}'], [pl.Float64, pl.Float64]
+        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(_mp_fft, tones, [col_name[0], col_name[-1]], schema, padding=padding, return_col=return_col, return_type=return_type, calc_col = calc_col, max_workers=max_workers, recalc=recalc)
+        return expr
+
+   
     #==========================#
     # Internal Loading Methods #
     #==========================#
@@ -788,3 +855,12 @@ def _psd(data, height, fs, window='hann', nperseg=None, detrend=False, average='
         psd_f, psd = np.zeros(height), np.zeros(height)
     return psd_f, psd
 
+def _fft(data, height, fs):
+    try:
+        fft_f, fft = np.fft.fftshift(np.fft.fftfreq(height, d=1/fs)), np.abs(np.fft.fftshift(np.fft.fft(data)))
+        
+        pad_len = height - len(fft_f)
+        fft_f, fft = np.pad(fft_f, (0, pad_len), constant_values=None), np.pad(fft, (0, pad_len), constant_values=None)
+    except Exception as e:
+        fft_f, fft = np.zeros(height), np.zeros(height)
+    return fft_f, fft

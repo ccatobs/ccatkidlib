@@ -102,6 +102,8 @@ class Network:
                     if Path(sess_dir).exists():
                         sess_paths.append(Path(sess_dir))
                         break            
+            
+            # TODO: Do not want vnas, targs, and streams to be attributes
             self.vnas  = {str(vna_file): None for sess_path in sess_paths if (vna_dir := (sess_path / 'vna' / network_dir)).exists() for vna_file in vna_dir.iterdir()}
             self.targs = {str(targ_file): None for sess_path in sess_paths if (targ_dir := (sess_path / 'targ' / network_dir)).exists() for targ_file in targ_dir.iterdir()}
             if include_streams: self.streams = {str(stream_file): None for sess_path in sess_paths if (stream_dir := (sess_path / 'timestream' / network_dir)).exists() for stream_file in stream_dir.iterdir()}

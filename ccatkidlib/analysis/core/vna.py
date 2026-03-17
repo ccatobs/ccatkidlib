@@ -101,9 +101,9 @@ class VNA(Sweep):
             return (pl.struct([f_col, phase_col])
                      .map_batches(lambda arrs: stitch_phase(arrs.struct.field(f_col),
                                                             arrs.struct.field(phase_col),
-                                                            int(sweep_steps),
-                                                            float(threshold),
-                                                            float(stitch_percent)
+                                                            int(sweep_steps[0]),
+                                                            float(threshold[0]),
+                                                            float(stitch_percent[0])
                                                             ), return_dtype=pl.Float64).alias(stitch_col))
         else:
             return pl.col(stitch_col)
@@ -122,9 +122,9 @@ class VNA(Sweep):
             return (pl.struct([f_col, mag_col])
                     .map_batches(lambda arrs: stitch_mag(arrs.struct.field(f_col),
                                                          arrs.struct.field(mag_col),
-                                                         int(sweep_steps),
-                                                         float(stitch_percent),
-                                                         int(med_win)
+                                                         int(sweep_steps[0]),
+                                                         float(stitch_percent[0]),
+                                                         int(med_win[0])
                                                          ), return_dtype=pl.Float64).alias(stitch_col))
         else:
             return pl.col(stitch_col)

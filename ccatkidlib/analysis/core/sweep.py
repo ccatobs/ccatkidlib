@@ -187,6 +187,7 @@ class Sweep(Data):
                                     ylabel = ylabel if ylabel is not None else col_dict['y'], 
                                     fig_size = kwargs.pop('fig_size') if 'fig_size' in kwargs else self.viz_cfg['static_plot']['sweep']['fig_size'])
         curve_opts = opts.Curve(show_legend=False)
+        scatter_opts = opts.Scatter(show_legend=False)
         area_opts = opts.Area(alpha = kwargs.pop('area_alpha') if 'area_alpha' in kwargs else self.viz_cfg['static_plot']['sweep']['area_alpha'])
         all_opts = [overlay_opts,
                     curve_opts,
@@ -248,7 +249,6 @@ class Sweep(Data):
                         return_df = return_df,
                         save_fig = save_fig,
                         save_name = save_name,
-                        overwrite = overwrite,
                         **kwargs)
         return rtn
     
@@ -292,7 +292,6 @@ class Sweep(Data):
                              return_df = return_df,
                              save_fig = save_fig,
                              save_name = save_name,
-                             overwrite = overwrite,
                              **kwargs)
         return rtn
 

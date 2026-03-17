@@ -129,7 +129,7 @@ def log(level: Level, msg: str, *args, name: str = __name__) -> None:
         # Log error message
         logger.log(logging.ERROR, 'Failed to log message %s with error %s!', msg, e)
 
-def wait(t: float, desc: str = "", interval: float = 0.1) -> None:
+def wait(t: float, desc: str = "", interval: float = 0.01) -> None:
     '''
     Sleep for ``t`` seconds with a *tqdm* progress bar. This is done by monitoring the difference between the current and start time every ``interval`` seconds.
 

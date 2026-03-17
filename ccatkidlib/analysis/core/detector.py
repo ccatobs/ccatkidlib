@@ -1044,7 +1044,7 @@ class Detector:
         return max_IQ_f
 
     def is_bifurcated(self,
-                      bifurcation_threshold=40,
+                      bifurcation_threshold=60,
                       qifurcation_threshold=50,
                       trim_window: int = 2,
                       trim_savgol_window: int = 9,
