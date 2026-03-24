@@ -1216,7 +1216,10 @@ class Data:
                                                       '.parquet',
                                                       overwrite=self.analysis_cfg['io']['pickle']['overwrite'])
             state['pickle_count'] = file_count
-            data.write_parquet(save_path)
+            if isinstance(data, pl.DataFrame):
+                data.write_parquet(save_path)
+            elif isinstance(data, pl.LazyFrame):
+                data.sink_parquet(save_path)
         return state
 
     def __setstate__(self, state):

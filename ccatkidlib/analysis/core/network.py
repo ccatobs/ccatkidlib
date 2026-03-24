@@ -130,8 +130,10 @@ class Network:
                 raise ValueError(error)
             
             detector_types = ['Timestream']*len(detectors)
+            detector_timestamps = [None]*len(detectors)
             for i, detector in enumerate(detectors):
                 if detector.stream is None: detector_types[i] = 'Target'
+                if detector.timestamp is not None: detector_timestamps[i] = detector.timestamp
 
         self.det_dict = {str(det) : det for det in detectors}
         self.data = pl.DataFrame({'detector': list(self.det_dict.keys()), 'type': detector_types, 'timestamp': detector_timestamps})

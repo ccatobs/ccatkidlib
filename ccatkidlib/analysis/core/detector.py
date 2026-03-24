@@ -1638,7 +1638,10 @@ class Detector:
                                                       '.parquet',
                                                       overwrite=self.analysis_cfg['io']['pickle']['overwrite'])
             state['pickle_count'] = file_count
-            properties.write_parquet(save_path)
+            if isinstance(properties, pl.DataFrame):
+                properties.write_parquet(save_path)
+            elif isinstance(properties, pl.LazyFrame):
+                properties.sink_parquet(save_path)
         return state
 
     def __setstate__(self, state):
