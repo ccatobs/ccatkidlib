@@ -241,6 +241,9 @@ def edit_config(cfg: dict, key: str, value: Any, append: bool = False) -> bool:
     if done: # If matching key was updated
         log.log('DEBUG', f'Updated key "{key}" with value "{value}" in config file"!')
     elif append: # If key was not found and append=True, add key value pair to dictionary
+        if isinstance(key, list):
+            for k in key[:0:-1]: value = {k:value}
+            key = key[0]
         cfg[key] = value
         done = True
         log.log('DEBUG', f'Added key "{key}" with value "{value}" to config file!')
