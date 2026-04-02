@@ -586,7 +586,7 @@ def get_most_recent_file_board(c: Connection, dir: str, file_identifier: str = "
     # Try to find the most recent file
     # --------------------------------
     try:
-        file = c.run(cmd, hide = 'out').stdout
+        file = c.run(cmd, hide = 'out', in_stream=False).stdout
         file = file.rstrip('\r\n') # Remove trailing characters from str
         log.log('DEBUG', f"Found most recent file '{file}' in {dir}.")
         return file
@@ -609,4 +609,4 @@ def path_exists(c: Connection, path: str) -> bool:
     path = str(path) # Convert path objects to str
 
     cmd = f"[ -f {path} ] && echo True || echo False" # Define command str to check if path exists
-    return ast.literal_eval(c.run(cmd, hide = 'out').stdout) # Run command on RFSoC board and get command stdout
+    return ast.literal_eval(c.run(cmd, hide = 'out', in_stream=False).stdout) # Run command on RFSoC board and get command stdout
