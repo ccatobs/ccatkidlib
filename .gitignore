@@ -40,3 +40,5 @@ docs/api
 profile_default/
 ipython_config.py
 
+# UV
+uv.lock
