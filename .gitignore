@@ -1,7 +1,7 @@
 # Drone List
 *override_drone_list*
 
-# Temp data directory
+# Temporary/logging data directories
 tmp/
 log/
 
@@ -28,10 +28,6 @@ build/
 *.egg-info/
 .installed.cfg
 *.egg
-
-# Virtual Environments
-env/
-venv/
 
 # Sphinx documentation
 docs/_build/
