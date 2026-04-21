@@ -432,7 +432,7 @@ class R:
                     # Parse OCS reply to get whether drone is currently running and if it supposed to be running
                     # ------------------------------------------------------------------------------------------
                     ip, to_run, running = [substr.split('=')[-1] for substr in json.loads(rtn.session['data']['data']).split(', ')]
-                    to_run , running = bool(to_run), bool(running)
+                    to_run , running = ast.literal_eval(to_run), ast.literal_eval(running)
                     log.log('PCS', f"{rtn.session}")
 
                     if to_run:
