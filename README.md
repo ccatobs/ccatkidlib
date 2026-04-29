@@ -12,18 +12,20 @@ The CCAT Observatory will employ tens of thousands of kinetic inductance detecto
 
 ## Installation
 *ccatkidlib* can be installed from source using pip:
-``
-git clone https://github.com/ccatobs/ccatkidlib.git
-cd ccatkidlib/
+
+```
+git clone https://github.com/ccatobs/ccatkidlib.git 
+cd ccatkidlib/ 
 pip install .
-``
+```
+
 > [!TIP]
 Those interested in contributing may wish to install using the -e flag allowing the package to automatically reflect source code updates.
 
 ## Documentation
 After installation, the full documentation for *ccatkidlib* can be locally built as HTML files using [Sphinx](https://www.sphinx-doc.org/en/master/):
-``
+```
 cd docs/
 make html
-``
+```
 The root page of the documentation can then be found at `docs/_build/html/index.html`.
