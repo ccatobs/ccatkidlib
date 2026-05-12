@@ -10,8 +10,10 @@ Glossary
         Field Programmable Gate Array
     VNA
         Vector Network Analyzer
+    OCS
+        Observatory Control System
     drone
-        A readout chain of a RFSoC
+        A single RFSoC readout chain
     tone
-        A single output radio frequency wave
+        A single radio frequency wave produced by a RFSoC.
     
