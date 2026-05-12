@@ -1,5 +1,5 @@
 #=========================================#
-# Example ccatkidlib System Config   2025 #
+# Example ccatkidlib System Config   2026 #
 # Darshan Patel         dp649@cornell.edu #
 #=========================================#
 
@@ -14,7 +14,7 @@ sess_id: null
 # External System Parameters #
 ##############################
 
-# - Board properties
+# - Board properties (should copy for all boards)
 boards:
   b1:
     avail_space: null
@@ -41,8 +41,8 @@ desc: "DESC_HERE"          # * Description of measurement
 drone_list: ['1', '2.1'] # *List of boards/drones to use. Can either specify entire boards (e.g. '1') or individual drones (e.g. '1.2')
 
 init:
-  initialize_boards: True   # * Whether to reintialize boards
-  initialize_drones: True   # * Whether to run drone initialize commands (e.g. set_atten and setNCLO)
+  initialize_boards: True   # * Whether to re-intialize boards
+  initialize_drones: True   # * Whether to run drone initialize commands (e.g. set_atten and set_NCLO)
   restart: False            # * Whether to restart already running drones
 
 runtime:
@@ -62,9 +62,10 @@ boards:
 timestream:
   udp_ip: "192.168.3.40"  # ? Control computer UDP packet capture port IP address
   udp_port: 4096          # ? Control computer UDP packet capture port number
-  g3: True                # * Whether to save timestreams as g3 files
-  file_rotation_time: 600 # * Length of timestream files (in seconds) (for npy timestreams)
-  save_interval: 3        # * Length of time after which to save data in timestream buffer (in seconds) (for npy timestreams)
+  g3: True                # * Whether to save timestreams as .g3 files. Requires the rfsoc-streamer library to generate the .g3 files.
+  mv_g3: True             # * Whether to move .g3 files into the ccatkidlib data directory tree. If False, the file paths of the .g3 files are stored in .txt files. 
+  file_rotation_time: 600 # * Length of timestream files (in seconds) (for .npy timestreams)
+  save_interval: 3        # * Length of time after which to save data in timestream buffer (in seconds) (for .npy timestreams)
 
 # PCS agent IDs
 pcs_agents:

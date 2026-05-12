@@ -1355,9 +1355,16 @@ class R:
                     tstream_num -= 1
                     g3_file = g3_tstream_dir / (tstream_name + f'_{tstream_num:03d}.g3')
 
-                tstream_file = timestream_dir / f'{fname}.txt'
-                with open(tstream_file, 'w') as file:
-                    file.writelines(f"{g3_file}\n" for g3_file in g3_files[::-1])
+                if self.io_cfg['timestream']['mv_g3']:
+                    tstream_file = [None]*len(g3_files)
+                    for i, g3_file in enumerate(g3_files[::-1]):
+                        save_file = timestream_dir / f'{fname}_{i:03d}.g3'
+                        data = io.get_array(g3_file, save_file, action = 'mv', load = False)
+                        tstream_file[i] = save_file
+                else:
+                    tstream_file = timestream_dir / f'{fname}.txt'
+                    with open(tstream_file, 'w') as file:
+                        file.writelines(f"{g3_file}\n" for g3_file in g3_files[::-1])
 
                 stream_paths.append(tstream_file)
             return stream_paths
