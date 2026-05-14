@@ -23,9 +23,12 @@ pip install .
 Those interested in contributing may wish to install using the -e flag allowing the package to automatically reflect source code updates.
 
 ## Documentation
-After installation, the full documentation for *ccatkidlib* can be locally built as HTML files using [Sphinx](https://www.sphinx-doc.org/en/master/):
+
+The full documentation of *ccatkidlib* can be found hosted on [Read the Docs](https://ccatkidlib.readthedocs.io/en/latest/index.html).
+The documentation can also be locally built as HTML files using [Sphinx](https://www.sphinx-doc.org/en/master/):
 ```
 cd docs/
+pip install -r requirements.txt
 make html
 ```
 The root page of the documentation can then be found at `docs/_build/html/index.html`.
