@@ -1404,7 +1404,7 @@ class R:
         if g3:
             self._run_parallel(_take_timestream_g3, *args, **kwargs)
             if save_data:
-                time.sleep(1)
+                time.sleep(2)
                 stream_out = _save_timestream_g3(com_to)
         else:
             if self.streamer is None:

@@ -372,12 +372,11 @@ class Timestream(Data):
         if not 'logx' in kwargs: kwargs['logx'] = True
         if not 'logy' in kwargs: kwargs['logy'] = True
         rtn = self.plot('f', col_name, 
-                        x_prefix=f'fft',  
+                        x_prefix=f"fft_f{'_' if prefix else ''}{prefix}",  
                         y_prefix=f"fft{'_' if prefix else ''}{prefix}", 
                         grouping=grouping,
                         include=include, 
                         exclude=exclude, 
-                        unpivot_x=False,
                         xlabel=xlabel,
                         ylabel=ylabel,
                         return_df=return_df,
@@ -690,7 +689,7 @@ class Timestream(Data):
         masks = []
         ts = []
         for g3_file in g3_files:
-            g3_data = core.G3File(g3_file)
+            g3_data = core.G3File(str(g3_file))
             
             for frame in g3_data:
                 # Filter out frames that are not G3 Scan frames (those that contain the timestream data)
@@ -767,7 +766,7 @@ class Timestream(Data):
 
         ts, Is, Qs = [], None, None
         
-        time_precision = 1e5
+        time_precision = 1e9
         tstamp_ind = 0
         start_time = -1
 

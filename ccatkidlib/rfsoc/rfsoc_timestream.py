@@ -105,7 +105,7 @@ class Streamer:
             # Parse timestream data
             dat = np.frombuffer(pack, dtype = "<i", count = int(2*chan_count)).astype("int32")
             data.append(dat)
-            aux.append([info, chan_count, pack_count, np.int64(100000*(tstamp - time_diff))])
+            aux.append([info, chan_count, pack_count, np.int64(1e9*tstamp)])
         return data, aux, time_diff
 
     def take_timestream(self, t_sec, offset = 10):

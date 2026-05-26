@@ -42,3 +42,7 @@ ipython_config.py
 
 # UV
 uv.lock
+
+# Marimo
+
+*.slides.json
