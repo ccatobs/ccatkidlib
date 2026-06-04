@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).parents[1] / 'ccatkidlib'))
+sys.path.append(str(Path(__file__).parents[2] / 'ccatkidlib'))
 
 project = 'ccatkidlib'
 copyright = '2026, CCAT Observatory'
