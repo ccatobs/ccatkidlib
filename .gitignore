@@ -31,7 +31,7 @@ build/
 
 # Sphinx documentation
 docs/_build/
-docs/api
+docs/source/api
 
 # Jupyter Notebook
 .ipynb_checkpoints

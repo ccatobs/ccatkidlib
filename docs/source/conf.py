@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).parents[2] / 'ccatkidlib'))
+sys.path.append(str(Path(__file__).parents[1] / 'ccatkidlib'))
 
 project = 'ccatkidlib'
 copyright = '2026, CCAT Observatory'
@@ -19,7 +19,7 @@ templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 autoclass_content = 'both'
 apidoc_modules = [
-    {"path":'../../../ccatkidlib', "destination": './api'},
+    {"path":'../../ccatkidlib', "destination": './api'},
     {
         'exclude_patterns': ['**/test*', '**/kid_phase_fit*'],
         'max_depth': 6,
