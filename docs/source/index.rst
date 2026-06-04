@@ -11,8 +11,8 @@ An in-depth overview of CCAT Observatory's readout hardware and software stack c
    :maxdepth: 2
    :caption: Contents:
 
-   quickstart
    installation/index
+   quickstart
    daq/index
    analysis/index
    glossary

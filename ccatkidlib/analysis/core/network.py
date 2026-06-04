@@ -104,21 +104,21 @@ class Network:
                         break            
             
             # TODO: Do not want vnas, targs, and streams to be attributes
-            self.vnas  = {str(vna_file): None for sess_path in sess_paths if (vna_dir := (sess_path / 'vna' / network_dir)).exists() for vna_file in vna_dir.iterdir()}
-            self.targs = {str(targ_file): None for sess_path in sess_paths if (targ_dir := (sess_path / 'targ' / network_dir)).exists() for targ_file in targ_dir.iterdir()}
-            if include_streams: self.streams = {str(stream_file): None for sess_path in sess_paths if (stream_dir := (sess_path / 'timestream' / network_dir)).exists() for stream_file in stream_dir.iterdir()}
+            vnas  = {str(vna_file): None for sess_path in sess_paths if (vna_dir := (sess_path / 'vna' / network_dir)).exists() for vna_file in vna_dir.iterdir()}
+            targs = {str(targ_file): None for sess_path in sess_paths if (targ_dir := (sess_path / 'targ' / network_dir)).exists() for targ_file in targ_dir.iterdir()}
+            if include_streams: streams = {str(stream_file): None for sess_path in sess_paths if (stream_dir := (sess_path / 'timestream' / network_dir)).exists() for stream_file in stream_dir.iterdir()}
 
             detectors = []
             detector_types = []
             detector_timestamps = []
             if include_targs:
-                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, self.targs, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Target', com_to, targs, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, cable_delay, vnas, targs)
                 detectors += det_objs
                 detector_types += det_types
                 detector_timestamps += det_timestamps
 
             if include_streams:
-                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, self.streams, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, cable_delay)
+                det_objs, det_types, det_timestamps = self._create_detectors('Timestream', com_to, streams, cfg_path, self.analysis_cfg, self.viz_cfg, dets, noise_tones, cable_delay, vnas, targs)
                 detectors += det_objs
                 detector_types += det_types
                 detector_timestamps += det_timestamps
@@ -320,7 +320,7 @@ class Network:
     # Helper Methods #
     #================#
 
-    def _create_detectors(self, det_type, com_to, path_dict, cfg_path, analysis_cfg, viz_cfg, dets, noise_tones, cable_delay):
+    def _create_detectors(self, det_type, com_to, path_dict, cfg_path, analysis_cfg, viz_cfg, dets, noise_tones, cable_delay, vnas, targs):
         '''
         '''
         def _create_sweep(sweep_path, sweep_dict, sweep_class, dets):
@@ -348,8 +348,8 @@ class Network:
                 targ_path = data_path
             
 
-            vna = _create_sweep(vna_path, self.vnas, VNA, None)
-            targ = _create_sweep(targ_path, self.targs, Target, dets)
+            vna = _create_sweep(vna_path, vnas, VNA, None)
+            targ = _create_sweep(targ_path, targs, Target, dets)
             
             detector = Detector(com_to=com_to, cfg_path=cfg_path, analysis_cfg=analysis_cfg, viz_cfg=viz_cfg, dets=dets, noise_tones=noise_tones, cable_delay=cable_delay, targ=targ, vna=vna, stream_path=stream_path)
 
