@@ -362,7 +362,7 @@ class Network:
         """
 
         # Validate data_type
-        if not data_type in ["vna", "targ", "stream", "detector"]:
+        if data_type not in ["vna", "targ", "stream", "detector"]:
             error = "data_type must be one of: 'vna', 'targ', 'stream', or 'detector'"
             log.log("CRITICAL", error)
             raise ValueError(error)

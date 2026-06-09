@@ -79,10 +79,6 @@ class Target(Sweep):
         self._properties = {}
         self._properties_df = None
 
-    # ================ #
-    # Analysis Methods #
-    # ================ #
-
     # ==========================#
     # Lazily Loaded Attributes #
     # ==========================#
@@ -123,11 +119,18 @@ class Target(Sweep):
                     )
                     log.log("ERROR", "Failed to reshape data array with error %s.", e)
 
-                data_dict = {"sample": range(sweep_steps)}
+                name_mapping = self.analysis_cfg["convention"]["name"]
+                data_dict = {name_mapping["sample"]: range(sweep_steps)}
                 for t, f, I, Q in zip(tones, fs, Is, Qs):
-                    data_dict[(f"f_{t:0{self.padding}d}")] = f
-                    data_dict[(f"I_{t:0{self.padding}d}")] = I
-                    data_dict[(f"Q_{t:0{self.padding}d}")] = Q
+                    data_dict[
+                        ccat_df.add_tone(name_mapping["frequency"], t, self.padding)
+                    ] = f
+                    data_dict[
+                        ccat_df.add_tone(name_mapping["in_phase"], t, self.padding)
+                    ] = I
+                    data_dict[
+                        ccat_df.add_tone(name_mapping["quadrature"], t, self.padding)
+                    ] = Q
                 df = pl.DataFrame(data_dict)
             else:
                 df = data
@@ -162,7 +165,9 @@ class Target(Sweep):
         new_dict = {"det": []}
 
         props_dict = self._properties
-        self._properties = {f"det_{tone:0{self.padding}d}": {} for tone in self.tones}
+        self._properties = {
+            ccat_df.add_tone("det", tone, self.padding): {} for tone in self.tones
+        }
 
         all_props = set(
             [prop for props in props_dict.values() for prop in props.keys()]
@@ -192,45 +197,26 @@ class Target(Sweep):
         if isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._properties_df = value
 
-    @cached_property
-    def cable_delay(self) -> dict | None:
-        """Get the cable delay of the RF chain using the phase data
+    def get_properties(
+        self,
+        col_name: str | list[str] = ".*",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        strict: bool = False,
+    ):
+        """Get the specified data columns and rows from the ``properties`` Polars DataFrame
 
-        Returns:
-            float: The cable delay in nanoseconds
+        Args:
+            col_name (str | list[str], optional): Defaults to all columns
+            include (int | list[int] | None, optional): Defaults to *None*
+            exclude (int | list[int] | None, optional): Defaults to *None*
+            strict (bool, optional): Defaults to *False*
+
         """
+        return ccat_df.get_properties(
+            self, col_name=col_name, include=include, exclude=exclude, strict=strict
+        )
 
-        @njit(cache=True)
-        def _calc_cable_delay(f, phase):
-            window = int(0.1 * len(f))
-            cable_delay_low, _ = linear_fit(f[:window], phase[:window])
-            cable_delay_high, _ = linear_fit(f[-window:], phase[-window:])
-            cable_delay = (cable_delay_high + cable_delay_low) / 2
-            return cable_delay * 1e9 / (2 * np.pi)
-
-        tones = self.tones
-        if tones is None:
-            cable_delay = None
-        else:
-            self.phase()
-            cable_delay = {
-                f"det_{tone:0{self.padding}d}": self.data.select(
-                    pl.struct(
-                        [f"f_{tone:0{self.padding}d}", f"phase_{tone:0{self.padding}d}"]
-                    ).map_batches(
-                        lambda arrs: _calc_cable_delay(
-                            arrs.struct.field(f"f_{tone:0{self.padding}d}").to_numpy(),
-                            arrs.struct.field(
-                                f"phase_{tone:0{self.padding}d}"
-                            ).to_numpy(),
-                        ),
-                        returns_scalar=True,
-                        return_dtype=pl.Float64,
-                    )
-                ).item()
-                for tone in tones
-            }
-        return cable_delay
 
     def join(self, other, in_place=False):
         new_data = super().join(other, in_place=in_place)

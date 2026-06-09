@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.2"
+__generated_with = "0.23.8"
 app = marimo.App(width="columns")
 
 
@@ -85,7 +85,7 @@ def _(load_pickle_button, mo, pickle_tabs):
 
 
 @app.cell(column=1)
-def _(
+def transform_data(
     Network,
     analysis_cfg,
     ccat_pickle,
@@ -138,7 +138,7 @@ def _(
 
 
 @app.cell
-def _(
+def load_pickle(
     ccat_pickle,
     com_to_selector,
     load_pickle_button,
@@ -165,6 +165,11 @@ def _(
         )
         for _com_to in com_to_selector.value
     }
+    return
+
+
+@app.cell
+def _():
     return
 
 

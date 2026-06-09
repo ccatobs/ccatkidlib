@@ -388,12 +388,12 @@ def phase_fit(
         params = Parameters()
     if nonlinear:
         if I is None:
-            raise ValueError(f"I is a required argument for nonlinear fits.")
+            raise ValueError("I is a required argument for nonlinear fits.")
         if Q is None:
-            raise ValueError(f"Q is a required argument for nonlinear fits.")
-        if (R is None) and (not "R" in params):
+            raise ValueError("Q is a required argument for nonlinear fits.")
+        if (R is None) and ("R" not in params):
             raise ValueError(
-                f"R must be passed as an argument or through params for a nonlinear fit."
+                "R must be passed as an argument or through params for a nonlinear fit."
             )
 
     in_params = [param in params for param in ["f_0", "Qr", "theta_0", "beta"]]

@@ -27,6 +27,69 @@ io:
     pickle_dataframes: False    # Whether to pickle properties and data DataFrames or save them as seperate parquet files (Recommended: False)
     overwrite: False # Whether to overwrite already existing pickle and parquet files
 
+convention:
+  name:
+    # Data Names
+    in_phase: 'I'
+    quadrature: 'Q'
+    magnitude: 'mag'
+    phase: 'phase'
+    frequency: 'f'
+    fractional_frequency: 'ff'
+    sample: 'sample'
+    time: 't' 
+    datetime: 'dt' 
+    zerotime: 'zt'
+
+    # Properties Names
+    internal_quality_factor: 'Q_i'
+    coupling_quality_factor: 'Q_c'
+    real_external_quality_factor: 'Q_e_real'
+    imag_external_quality_factor: 'Q_e_imag'
+    total_quality_factor: 'Q'
+    nonlinearity_parameter: 'a'
+    cable_delay: 'delay'
+    IQ_circle_radius: 'R'
+    IQ_circle_center: 'center'
+    phase_fit_beta: 'beta'
+    phase_fit_theta: 'theta'
+    resonant_frequency: 'f_0'
+    full_width_half_max: 'FWHM'
+    spline: 'spline'
+
+  prefix:
+    # General
+    translate: 'shift'
+    rotate: 'rotate'
+    scale: 'scale'
+    trim: 'trim'
+    difference: 'diff'
+    savgol_filter: 'savgol'
+    decible: 'dB'
+
+    # Timestream
+    power_spectral_density: 'psd'
+    power_spectral_density_frequency: 'psd_f'
+    fourier_transform: 'fft'
+    fourier_transform_frequency: 'fft_f'
+
+    # Detector
+    stitch: 'stitch'
+    IQ_circle_fit: 'circle_fit'
+    complex_fit: 'complex_fit'
+    complex_fit_cable: 'cable'
+    phase_fit: 'phase_fit'
+    spline: 'spline'
+    remove_cable: 'unwind'
+    normalize: 'norm'
+    trim_tail: 'tail'
+    center_origin: 'origin'
+    remove_impedance_mismatch: 'mismatch'
+    center_timestream: 'timestream' # Center timestream on real axis
+    low_frequency_side: 'low'
+    middle_frequency_point: 'mid'
+    high_frequency_side: 'high'
+
 ---
 static_plot:
   sweep:

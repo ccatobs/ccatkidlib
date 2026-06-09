@@ -1,9 +1,65 @@
 import polars as pl
 import ccatkidlib.log as log
 
+from enum import StrEnum
+from collections.abc import Iterable
 from typing import Callable, TypeAlias, Any
 
 ExprFunction: TypeAlias = Callable[[list[int], Any], list[pl.Expr]]
+
+def check_args(args, num_prefix, data_type):
+    if (
+        isinstance(args, data_type)
+        or not isinstance(args, Iterable)
+        or not len(args) == num_prefix
+    ):
+        args = [args] * num_prefix
+    return args
+
+def create_enums(
+    name: list[str],
+    input_prefix: str | list[str],
+    output_prefix: list[str],
+    mapping: dict,
+    no_prefix: list[str] = [],
+):
+    if isinstance(input_prefix, str):
+        input_prefix = [input_prefix]
+    name_mapping, prefix_mapping = (
+        mapping["convention"]["name"],
+        mapping["convention"]["prefix"],
+    )
+
+    name_enums = [
+        StrEnum(
+            "Name",
+            [
+                (
+                    n.upper(),
+                    f"{pre}_{name_mapping[n]}"
+                    if pre and n not in no_prefix
+                    else name_mapping[n],
+                )
+                for n in name
+                if n in name_mapping
+            ],
+        )
+        for pre in input_prefix
+    ]
+    prefix_enums = [
+        StrEnum(
+            "Prefix",
+            [
+                (p.upper(), prefix_mapping[p])
+                for p in output_prefix
+                if p in prefix_mapping
+            ],
+        )
+    ] * len(input_prefix)
+    return name_enums, prefix_enums
+
+def add_tone(col_name: str, tone: int | None, padding: int):
+    return col_name if tone is None else f"{col_name}_{tone:0{padding}d}"
 
 
 def parse_tones(
@@ -30,6 +86,23 @@ def parse_tones(
         return func_exclude(exclude, *args)
     else:
         return func_all(*args)
+
+
+def unnest(data_obj, col_names: str | list[str]) -> pl.DataFrame:
+    """ """
+    struct_cols = []
+    if isinstance(col_names, str):
+        col_names = [col_names]
+
+    for col_name in col_names:
+        schema = data_obj.data.schema
+        for name, data in schema.items():
+            if isinstance(data, pl.Struct) and col_name in name:
+                data_obj.data = data_obj.data.drop(
+                    [col for col in dict(data).keys() if col in schema]
+                )
+                struct_cols.append(name)
+    return data_obj.data.unnest(struct_cols)
 
 
 def coalesce_join(

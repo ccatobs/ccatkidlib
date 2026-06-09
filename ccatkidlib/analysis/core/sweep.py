@@ -503,16 +503,16 @@ class Sweep(Data):
 
         """
         if self._data is None:
-            data = {"sample": [], "f": [], "I": [], "Q": []}
             fs, s21z = np.load(self.data_path[0], mmap_mode="r")
             I, Q = s21z.real, s21z.imag
 
-            data["sample"], data["f"], data["I"], data["Q"] = (
-                range(len(fs)),
-                fs.real,
-                I,
-                Q,
-            )
+            name_mapping = self.analysis_cfg["convention"]["name"]
+            data = {
+                name_mapping["sample"]: range(len(fs)),
+                name_mapping["frequency"]: fs.real,
+                name_mapping["in_phase"]: I,
+                name_mapping["quadrature"]: Q,
+            }
             self._data = pl.DataFrame(data)
         elif isinstance(self._data, pl.LazyFrame):
             self._data = self._data.collect()
@@ -551,7 +551,7 @@ class Sweep(Data):
             try:
                 f_path = pair.replace_root(det_f, self._original_root, self._root_dir)
                 det_f = np.real(np.load(f_path))
-            except:
+            except FileNotFoundError:
                 error = f"Failed to load detector frequencies file {det_f}."
                 log.log("ERROR", error)
                 raise FileNotFoundError(error)
@@ -576,4 +576,8 @@ class Sweep(Data):
             *Polars **DataFrame** with frequency data
 
         """
-        return self.get_data(col_name="f", include=include, exclude=exclude)
+        return self.get_data(
+            col_name=self.analysis_cfg["convention"]["name"]["frequency"],
+            include=include,
+            exclude=exclude,
+        )
