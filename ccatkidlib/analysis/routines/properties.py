@@ -7,6 +7,63 @@ import ccatkidlib.log as log
 from ccatkidlib.analysis.core.timestream import Timestream
 
 
+def agg(obj, operation, col_name, prefix="", include=None, exclude=None, recalc=False):
+    AGGS = {
+        "mean": pl.all().mean(),
+        "median": pl.all().median(),
+        "max": pl.all().max(),
+        "min": pl.all().min(),
+        "std": pl.all().std(),
+    }
+    agg = AGGS.get(operation, None)
+    if agg is None:
+        error = f"Invalid operation specified, must be one of {', '.join(AGGS.keys())}"
+        log.log("ERROR", error)
+        raise ValueError(error)
+
+    enum_key, mapping = None, obj.analysis_cfg["convention"]["name"]
+    for key, val in mapping.items():
+        if val == col_name:
+            enum_key = key
+            break
+
+    if enum_key is None:
+        error = f"Could not find column '{col_name}'. Ensure that a mapping exists in the analysis configuration file."
+        log.log("ERROR", error)
+        raise KeyError(error)
+
+    name_enums, prefix_enums = ccat_df.create_enums(
+        [enum_key],
+        prefix,
+        [],
+        obj.analysis_cfg,
+    )
+
+    name_enum, prefix_enum = name_enums[0], prefix_enums[0]
+    agg_name = f"{operation}_{'stream' if isinstance(obj, Timestream) else 'targ'}_{name_enum[enum_key.upper()].value}"
+
+    include_subset = ccat_df.check_properties(
+        obj,
+        agg_name,
+        include=include,
+        exclude=exclude,
+        recalc=recalc,
+    )
+    if not len(include_subset) == 0:
+        df = obj.get_data(
+            name_enum[enum_key.upper()].value, include=include_subset, strict=True
+        )
+        agg_df = df.select([agg.name.map(lambda s: s.split("_")[-1])])
+        ccat_df.add_data_to_properties(obj, agg_df, agg_name)
+
+    return obj.get_properties(
+        agg_name,
+        include=include,
+        exclude=exclude,
+        strict=True,
+    )
+
+
 def mismatch_angle(
     targ, prefix="", mean_points=10, include=None, exclude=None, recalc=False
 ):
@@ -262,58 +319,172 @@ def fwhm(targ, mag_prefix="", mean_points=10, include=None, exclude=None, recalc
     )
 
 
-def agg(obj, operation, col_name, prefix="", include=None, exclude=None, recalc=False):
-    AGGS = {
-        "mean": pl.all().mean(),
-        "median": pl.all().median(),
-        "max": pl.all().max(),
-        "min": pl.all().min(),
-        'std': pl.all().std(),
-    }
-    agg = AGGS.get(operation, None)
-    if agg is None:
-        error = f"Invalid operation specified, must be one of {', '.join(AGGS.keys())}"
-        log.log("ERROR", error)
-        raise ValueError(error)
-
-    enum_key, mapping = None, obj.analysis_cfg["convention"]["name"]
-    for key, val in mapping.items():
-        if val == col_name:
-            enum_key = key
-            break
-
-    if enum_key is None:
-        error = f"Could not find column '{col_name}'. Ensure that a mapping exists in the analysis configuration file."
-        log.log("ERROR", error)
-        raise KeyError(error)
-
-    name_enums, prefix_enums = ccat_df.create_enums(
-        [enum_key],
-        prefix,
-        [],
-        obj.analysis_cfg,
-    )
-
-    name_enum, prefix_enum = name_enums[0], prefix_enums[0]
-    agg_name = f"{operation}_{'stream' if isinstance(obj, Timestream) else 'targ'}_{name_enum[enum_key.upper()].value}"
+def mag_min(
+    self,
+    include: int | list[int] | None = None,
+    exclude: int | list[int] | None = None,
+    recalc: bool = False,
+) -> list[pl.DataFrame]:
+    col_name = ["f", "mag", "min"]
+    prop_names = [
+        f"{col_name[-1]}_{col_name[1]}_{col_name[0]}",
+        f"{col_name[-1]}_{col_name[1]}",
+    ]
 
     include_subset = ccat_df.check_properties(
-        obj,
-        agg_name,
+        self, prop_names[0], include=include, exclude=exclude, recalc=recalc
+    )
+    if not len(include_subset) == 0:
+        # Get detector magnitudes and frequencies and unpivot DataFrame from wide to long format
+        f_df = self.targ.get_data(
+            col_name=col_name[0], strict=True, include=include_subset
+        )
+        mag_df = self.targ.get_data(
+            col_name=col_name[1], strict=True, include=include_subset
+        )
+
+        mag_df = mag_df.unpivot(
+            variable_name="det", value_name=col_name[1]
+        ).with_columns(pl.col("det").str.strip_prefix(f"{col_name[1]}_").cast(pl.Int32))
+
+        f_df = f_df.unpivot(variable_name="tmp", value_name=col_name[0]).drop("tmp")
+
+        mag_f_df = pl.concat([mag_df, f_df], how="horizontal")
+
+        # Get minimum magnitude values for each detector and corresponding sample numbers
+
+        min_df = mag_f_df.filter(
+            (pl.col(col_name[1]) == pl.col(col_name[1]).min()).over("det")
+        ).rename({col_name[0]: prop_names[0], col_name[1]: prop_names[1]})
+        shared_cols = prop_names if prop_names[0] in self._properties_df.schema else []
+        self._properties_df = ccat_df.coalesce_join(
+            self._properties_df, min_df, "det", shared_cols
+        )
+    return self.get_properties(
+        col_name=prop_names, include=include, exclude=exclude, strict=True
+    )
+
+
+def is_bifurcated(
+    self,
+    bifurcation_threshold=60,
+    qifurcation_threshold=50,
+    trim_window: int = 2,
+    trim_savgol_window: int = 9,
+    trim_savgol_k: int = 1,
+    include=None,
+    exclude=None,
+    recalc=False,
+    max_workers=1,
+    ex=None,
+):
+    """
+    Determine if a detector is bifurcated or has a high quasiparticle nonlinearity using the angle of the maximally seperated points in IQ space
+
+
+    """
+
+    # Get maximally distant points in IQ space
+    # ----------------------------------------
+    self.IQ_max_dist(
+        diff_savgol_window=1,
+        trim_window=trim_window,
+        trim_savgol_window=trim_savgol_window,
+        trim_savgol_k=trim_savgol_k,
         include=include,
         exclude=exclude,
         recalc=recalc,
+        max_workers=max_workers,
+        ex=ex,
     )
-    if not len(include_subset) == 0:
-        df = obj.get_data(
-            name_enum[enum_key.upper()].value, include=include_subset, strict=True
-        )
-        agg_df = df.select([agg.name.map(lambda s: s.split("_")[-1])])
-        ccat_df.add_data_to_properties(obj, agg_df, agg_name)
 
-    return obj.get_properties(
-        agg_name,
+    # Fit IQ circle to get radius
+    # ---------------------------
+    self.IQ_circle_fit(
+        prefix="tail_trim_unwind_rotate",
         include=include,
         exclude=exclude,
-        strict=True,
+        recalc=recalc,
+        max_workers=max_workers,
+        ex=ex,
     )
+
+    # Get frequency corresponding to the |S_21| minimum
+    # -------------------------------------------------
+    self.mag_min(include=include, exclude=exclude, recalc=recalc)
+
+    include_subset = ccat_df.check_properties(
+        self, "bifurcated", include=include, exclude=exclude, recalc=recalc
+    )
+
+    added_cols = [
+        "bifurcated",
+        "qifurcated",
+        "sin_half_max_IQ_angle",
+        "chord_length_ratio",
+        "max_IQ_angle_rad",
+        "max_IQ_angle_deg",
+    ]
+    if not len(include_subset) == 0:
+        df = self.get_properties(
+            [
+                "max_IQ_dist",
+                "max_IQ_dist_f",
+                "max_IQ_dist_adj_f",
+                "circle_fit_tail_trim_unwind_rotate_R",
+                "min_mag_f",
+            ],
+            include=include_subset,
+            strict=True,
+        )
+
+        bif_df = (
+            df.lazy()
+            .with_columns(
+                (
+                    0.5
+                    * (
+                        pl.col("max_IQ_dist")
+                        / pl.col("circle_fit_tail_trim_unwind_rotate_R")
+                    )
+                ).alias("sin_half_max_IQ_angle"),
+                (
+                    0.5
+                    * (
+                        4
+                        - (
+                            pl.col("max_IQ_dist")
+                            / pl.col("circle_fit_tail_trim_unwind_rotate_R")
+                        )
+                        ** 2
+                    ).sqrt()
+                ).alias("chord_length_ratio"),
+            )
+            .with_columns(
+                (2 * pl.col("sin_half_max_IQ_angle").arcsin()).alias("max_IQ_angle_rad")
+            )
+            .with_columns(
+                ((180 / np.pi) * pl.col("max_IQ_angle_rad")).alias("max_IQ_angle_deg")
+            )
+            .with_columns(
+                (
+                    (pl.col("max_IQ_angle_deg") >= bifurcation_threshold)
+                    & (pl.col("max_IQ_dist_adj_f") < pl.col("min_mag_f"))
+                ).alias("bifurcated"),
+                (
+                    (pl.col("max_IQ_angle_deg") >= qifurcation_threshold)
+                    & (pl.col("max_IQ_dist_f") > pl.col("min_mag_f"))
+                ).alias("qifurcated"),
+            )
+            .select(["det"] + added_cols)
+            .collect()
+        )
+        shared_cols = added_cols if "bifurcated" in self._properties_df.schema else []
+        self._properties_df = ccat_df.coalesce_join(
+            self.properties, bif_df, "det", shared_cols
+        )
+
+    bif_df = self.get_properties(
+        ["bifurcated", "qifurcated"], include=include, exclude=exclude, strict=True
+    )
+    return bif_df

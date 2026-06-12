@@ -2,14 +2,9 @@
 
 Authors:
     - Darshan Patel <dp649@cornell.edu>
-
-TODO:
-    - Change data args to string enums
 """
 
-import os
 import sys
-import time
 
 import copy
 import numpy as np
@@ -24,7 +19,6 @@ from pathlib import Path
 from functools import cached_property
 
 # local imports
-import ccatkidlib
 import ccatkidlib.io as io
 import ccatkidlib.log as log
 import ccatkidlib.analysis.utils.pair as pair
@@ -34,8 +28,6 @@ import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.viz.viz_utils as viz_utils
 
-from ccatkidlib.log import header
-from ccatkidlib.analysis.core.data import Data
 from ccatkidlib.analysis.core.timestream import Timestream
 from ccatkidlib.analysis.core.vna import VNA
 from ccatkidlib.analysis.core.target import Target
@@ -480,8 +472,8 @@ class Detector:
             ]
 
             # Calculate Q_c and Q_i. Convert cable delay into nanaseconds
-            self.properties = (
-                self.properties.lazy()
+            self.targ._properties_df = (
+                self.targ.properties.lazy()
                 .with_columns(
                     (
                         (
@@ -577,6 +569,7 @@ class Detector:
                 "phase_fit_beta",
                 "phase_fit_theta",
                 "resonant_frequency",
+                "nonlinearity_parameter",
             ],
             prefix,
             ["phase_fit"],
@@ -610,6 +603,7 @@ class Detector:
             .T[1]
             for name_enum in circle_name_enums
         ]
+
         args = [
             [
                 self,
@@ -643,8 +637,8 @@ class Detector:
                 f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE.value}",
             ]
 
-            self.properties = (
-                self.properties.lazy()
+            self.targ._properties_df = (
+                self.targ.properties.lazy()
                 .with_columns(
                     [
                         (
@@ -824,11 +818,12 @@ class Detector:
                 "frequency",
                 "in_phase",
                 "quadrature",
+                "tone_frequency"
             ],
             prefix,
             ["rotate", "remove_cable"],
             self.analysis_cfg,
-            no_prefix=["frequency"],
+            no_prefix=["frequency", "tone_frequency"],
         )
 
         # TODO: Allow different delay cols for each prefix
@@ -871,7 +866,7 @@ class Detector:
                 else [
                     delay * tone_freq
                     for tone_freq, delay in zip(
-                        self.stream.comb["tone_freqs"].to_numpy().T, delays
+                        self.stream.comb[name_enums[0].TONE_FREQUENCY.value].to_numpy().T, delays
                     )
                 ]
             )
@@ -916,11 +911,11 @@ class Detector:
         """
 
         name_enums, prefix_enums = ccat_df.create_enums(
-            ["frequency", "in_phase", "quadrature", "magnitude"],
+            ["frequency", "in_phase", "quadrature", "magnitude", 'tone_frequency'],
             prefix,
             ["scale", "normalize"],
             self.analysis_cfg,
-            no_prefix=["frequency", "magnitude"],
+            no_prefix=["frequency", "magnitude", 'tone_frequency'],
         )
 
         data_objs, data_types = self._get_data_obj(data)
@@ -932,7 +927,7 @@ class Detector:
             raise ValueError(error)
 
         tone_freqs = self.get_properties(
-            "tone_freqs", include=include, exclude=exclude, strict=True
+            name_enums[0].TONE_FREQUENCY.value, include=include, exclude=exclude, strict=True
         )
 
         norm_dfs = []
@@ -967,7 +962,7 @@ class Detector:
                     1
                     / (
                         f_cable_df.lazy()
-                        .sort((pl.col(f_col) - pl.col("tone_freqs")).abs())
+                        .sort((pl.col(f_col) - pl.col(name_enums[0].TONE_FREQUENCY.value)).abs())
                         .select(pl.col("cable").first().over("det"))
                         .collect()
                     )
@@ -1245,9 +1240,7 @@ class Detector:
             data_obj.IQ_rotate(
                 prefix=prefix,
                 angle=angles,
-                name=[
-                    prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums
-                ],
+                name=[prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums],
                 include=include,
                 exclude=exclude,
                 recalc=recalc,
@@ -1258,9 +1251,7 @@ class Detector:
                     for pre, prefix_enum in zip(prefix, prefix_enums)
                 ],
                 shift_I=shifts,
-                name=[
-                    prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums
-                ],
+                name=[prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums],
                 include=include,
                 exclude=exclude,
                 recalc=recalc,
@@ -1431,7 +1422,7 @@ class Detector:
                 low,
                 up,
                 kk,
-                self.stream_timestamp,
+                self.stream.timestamp,
                 ccat_mp.check_max_workers(max_workers),
                 ex,
             ]
@@ -1451,8 +1442,8 @@ class Detector:
         col_name = []
         for prefix_enum, name_enum in zip(prefix_enums, name_enums):
             col_name += [
-                f"{prefix_enum.SPLINE.value}_{name_enum.FREQUENCY.value}_to_{name_enum.PHASE.value}",
-                f"{prefix_enum.SPLINE.value}_{name_enum.PHASE.value}_to_{name_enum.FREQUENCY.value}",
+                f"{self.stream.timestamp}_{prefix_enum.SPLINE.value}_{name_enum.FREQUENCY.value}_to_{name_enum.PHASE.value}",
+                f"{self.stream.timestamp}_{prefix_enum.SPLINE.value}_{name_enum.PHASE.value}_to_{name_enum.FREQUENCY.value}",
             ]
 
         self.targ.data = ccat_df.unnest(
@@ -1469,9 +1460,6 @@ class Detector:
         self,
         prefix: str
         | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
-        spline_prefix: str = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
-        phase_bounds: float = 0.2,
-        k: int = 3,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -1505,8 +1493,6 @@ class Detector:
         )
 
         num_prefix = len(name_enums)
-        spline_prefix = ccat_df.check_args(spline_prefix, num_prefix, str)
-
         spline_dict = self.stream.spline_dict
         y_to_x_spline = [
             self.get_properties(
@@ -1565,8 +1551,7 @@ class Detector:
         self,
         prefix: str
         | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
-        ref_f: str | list[float] = "tone_freqs",
-        name="",
+        ref_f: str | list[float] = "",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -1612,390 +1597,6 @@ class Detector:
             include=include,
             exclude=exclude,
         )
-
-    # High Level Analysis Methods
-    # ---------------------------
-
-    def mag_min(
-        self,
-        include: int | list[int] | None = None,
-        exclude: int | list[int] | None = None,
-        recalc: bool = False,
-    ) -> list[pl.DataFrame]:
-        col_name = ["f", "mag", "min"]
-        prop_names = [
-            f"{col_name[-1]}_{col_name[1]}_{col_name[0]}",
-            f"{col_name[-1]}_{col_name[1]}",
-        ]
-
-        include_subset = ccat_df.check_properties(
-            self, prop_names[0], include=include, exclude=exclude, recalc=recalc
-        )
-        if not len(include_subset) == 0:
-            # Get detector magnitudes and frequencies and unpivot DataFrame from wide to long format
-            f_df = self.targ.get_data(
-                col_name=col_name[0], strict=True, include=include_subset
-            )
-            mag_df = self.targ.get_data(
-                col_name=col_name[1], strict=True, include=include_subset
-            )
-
-            mag_df = mag_df.unpivot(
-                variable_name="det", value_name=col_name[1]
-            ).with_columns(
-                pl.col("det").str.strip_prefix(f"{col_name[1]}_").cast(pl.Int32)
-            )
-
-            f_df = f_df.unpivot(variable_name="tmp", value_name=col_name[0]).drop("tmp")
-
-            mag_f_df = pl.concat([mag_df, f_df], how="horizontal")
-
-            # Get minimum magnitude values for each detector and corresponding sample numbers
-
-            min_df = mag_f_df.filter(
-                (pl.col(col_name[1]) == pl.col(col_name[1]).min()).over("det")
-            ).rename({col_name[0]: prop_names[0], col_name[1]: prop_names[1]})
-            shared_cols = (
-                prop_names if prop_names[0] in self._properties_df.schema else []
-            )
-            self._properties_df = ccat_df.coalesce_join(
-                self._properties_df, min_df, "det", shared_cols
-            )
-        return self.get_properties(
-            col_name=prop_names, include=include, exclude=exclude, strict=True
-        )
-
-    def IQ_circle_center(self):
-        """
-        Remove cable delay from IQ circle and center at the origin
-        """
-        return
-
-    def IQ_max_dist(
-        self,
-        trim_window: int = 2,
-        trim_savgol_window: int = 9,
-        diff_savgol_window: int = 21,
-        trim_savgol_k: int = 1,
-        diff_savgol_k: int = 1,
-        include=None,
-        exclude=None,
-        recalc=False,
-        max_workers=1,
-        ex=None,
-    ):
-        """
-        Get the frequency corresponding to the max geometric distance between adjacent points in IQ space
-        """
-        trim_savgol, diff_savgol = trim_savgol_window > 1, diff_savgol_window > 1
-        # Calculate the geometric distance between adjacent points in IQ space
-        self.cable_delay
-        self.targ.mag(include=include, exclude=exclude, recalc=recalc)
-
-        if trim_savgol:
-            self.targ.savgol(
-                col_name="mag",
-                prefix="",
-                window=trim_savgol_window,
-                k=trim_savgol_k,
-                deriv=0,
-                max_workers=max_workers,
-                ex=ex,
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-        self.IQ_unwind(
-            prefix="",
-            data="targ",
-            delay_col="network_cable_delay",
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-        )
-        self.IQ_trim(
-            prefix="unwind_rotate",
-            window=trim_window,
-            use_fit=False,
-            mag_prefix=f"{'savgol0' if trim_savgol else ''}",
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-        )
-
-        if diff_savgol:
-            self.targ.savgol(
-                col_name="I",
-                prefix="tail_trim_unwind_rotate",
-                window=diff_savgol_window,
-                k=diff_savgol_k,
-                deriv=1,
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-                max_workers=max_workers,
-                ex=ex,
-            )
-            self.targ.savgol(
-                col_name="Q",
-                prefix="tail_trim_unwind_rotate",
-                window=diff_savgol_window,
-                k=diff_savgol_k,
-                deriv=1,
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-                max_workers=max_workers,
-                ex=ex,
-            )
-        else:
-            self.targ.diff(
-                col_name="I",
-                prefix="tail_trim_unwind_rotate",
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-            self.targ.diff(
-                col_name="Q",
-                prefix="tail_trim_unwind_rotate",
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-        self.targ.mag(
-            prefix=f"{'savgol1' if diff_savgol else 'diff'}_tail_trim_unwind_rotate",
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-        )
-
-        # Get the frequencies corresponding to the max distance in IQ space (same as frequency with steepest phase gradient)
-        include_subset = ccat_df.check_properties(
-            self, "max_IQ_dist_f", include=include, exclude=exclude, recalc=recalc
-        )
-        if not len(include_subset) == 0:
-            diff_IQ = (
-                self.targ.get_data(
-                    [
-                        "sample",
-                        f"{'savgol1' if diff_savgol else 'diff'}_tail_trim_unwind_rotate_mag",
-                    ],
-                    strict=True,
-                    include=include_subset,
-                )
-                .rechunk()
-                .lazy()
-                .unpivot(index="sample", value_name="IQ", variable_name="temp")
-                .drop("temp")
-                .collect()
-            )
-            f = (
-                self.targ.get_data(["f"], strict=True, include=include_subset)
-                .lazy()
-                .unpivot(value_name="f", variable_name="det")
-                .with_columns((pl.col("det").str.strip_prefix("f_")).cast(pl.Int32))
-                .collect()
-            )
-            full_df = pl.concat([f, diff_IQ], how="horizontal")
-            max_sample = (
-                full_df.lazy()
-                .filter(~pl.col("IQ").is_nan())
-                .filter((pl.col("IQ") == pl.col("IQ").max()).over("det"))
-                .select("det", pl.col("sample").alias("max_sample"))
-                .group_by("det")
-                .agg(pl.col("max_sample").first())
-                .collect()
-            )
-
-            full_df = full_df.join(max_sample, on="det", how="left")
-            max_IQ = (
-                full_df.lazy()
-                .filter(pl.col("sample") == pl.col("max_sample"))
-                .select(
-                    "det",
-                    pl.col("sample").alias("max_IQ_dist_sample"),
-                    pl.col("f").alias("max_IQ_dist_f"),
-                    pl.col("IQ").alias("max_IQ_dist"),
-                )
-                .collect()
-            )
-            adj_IQ = (
-                full_df.lazy()
-                .filter(pl.col("sample") == pl.col("max_sample") - 1)
-                .select("det", pl.col("f").alias("max_IQ_dist_adj_f"))
-                .collect()
-            )
-
-            max_IQ = max_IQ.join(adj_IQ, on="det", how="left")
-
-            # Use tone frequencies for detectors where finding the max distance frequency failed
-            tone_freq_df = self.get_properties(
-                "tone_freqs", strict=True, include=include_subset
-            )
-            max_IQ = (
-                max_IQ.join(tone_freq_df, on="det", how="right", coalesce=True)
-                .lazy()
-                .with_columns(
-                    pl.when(pl.col("max_IQ_dist_f").is_null())
-                    .then(pl.col("tone_freqs"))
-                    .otherwise(pl.col("max_IQ_dist_f"))
-                    .alias("max_IQ_dist_f")
-                )
-                .drop("tone_freqs")
-                .collect()
-            )
-            shared_cols = (
-                [
-                    "max_IQ_dist_f",
-                    "max_IQ_dist",
-                    "max_IQ_dist_sample",
-                    "max_IQ_dist_adj_f",
-                ]
-                if "max_IQ_dist_f" in self._properties_df.schema
-                else []
-            )
-            self._properties_df = ccat_df.coalesce_join(
-                self.properties, max_IQ, "det", shared_cols
-            )
-            self.targ._properties_df = ccat_df.coalesce_join(
-                self.targ.properties, max_IQ, "det", shared_cols
-            )
-
-        max_IQ_f = self.get_properties(
-            "max_IQ_dist_f", include=include, exclude=exclude, strict=True
-        )
-        return max_IQ_f
-
-    def is_bifurcated(
-        self,
-        bifurcation_threshold=60,
-        qifurcation_threshold=50,
-        trim_window: int = 2,
-        trim_savgol_window: int = 9,
-        trim_savgol_k: int = 1,
-        include=None,
-        exclude=None,
-        recalc=False,
-        max_workers=1,
-        ex=None,
-    ):
-        """
-        Determine if a detector is bifurcated or has a high quasiparticle nonlinearity using the angle of the maximally seperated points in IQ space
-
-
-        """
-
-        # Get maximally distant points in IQ space
-        # ----------------------------------------
-        self.IQ_max_dist(
-            diff_savgol_window=1,
-            trim_window=trim_window,
-            trim_savgol_window=trim_savgol_window,
-            trim_savgol_k=trim_savgol_k,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            max_workers=max_workers,
-            ex=ex,
-        )
-
-        # Fit IQ circle to get radius
-        # ---------------------------
-        self.IQ_circle_fit(
-            prefix="tail_trim_unwind_rotate",
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            max_workers=max_workers,
-            ex=ex,
-        )
-
-        # Get frequency corresponding to the |S_21| minimum
-        # -------------------------------------------------
-        self.mag_min(include=include, exclude=exclude, recalc=recalc)
-
-        include_subset = ccat_df.check_properties(
-            self, "bifurcated", include=include, exclude=exclude, recalc=recalc
-        )
-
-        added_cols = [
-            "bifurcated",
-            "qifurcated",
-            "sin_half_max_IQ_angle",
-            "chord_length_ratio",
-            "max_IQ_angle_rad",
-            "max_IQ_angle_deg",
-        ]
-        if not len(include_subset) == 0:
-            df = self.get_properties(
-                [
-                    "max_IQ_dist",
-                    "max_IQ_dist_f",
-                    "max_IQ_dist_adj_f",
-                    "circle_fit_tail_trim_unwind_rotate_R",
-                    "min_mag_f",
-                ],
-                include=include_subset,
-                strict=True,
-            )
-
-            bif_df = (
-                df.lazy()
-                .with_columns(
-                    (
-                        0.5
-                        * (
-                            pl.col("max_IQ_dist")
-                            / pl.col("circle_fit_tail_trim_unwind_rotate_R")
-                        )
-                    ).alias("sin_half_max_IQ_angle"),
-                    (
-                        0.5
-                        * (
-                            4
-                            - (
-                                pl.col("max_IQ_dist")
-                                / pl.col("circle_fit_tail_trim_unwind_rotate_R")
-                            )
-                            ** 2
-                        ).sqrt()
-                    ).alias("chord_length_ratio"),
-                )
-                .with_columns(
-                    (2 * pl.col("sin_half_max_IQ_angle").arcsin()).alias(
-                        "max_IQ_angle_rad"
-                    )
-                )
-                .with_columns(
-                    ((180 / np.pi) * pl.col("max_IQ_angle_rad")).alias(
-                        "max_IQ_angle_deg"
-                    )
-                )
-                .with_columns(
-                    (
-                        (pl.col("max_IQ_angle_deg") >= bifurcation_threshold)
-                        & (pl.col("max_IQ_dist_adj_f") < pl.col("min_mag_f"))
-                    ).alias("bifurcated"),
-                    (
-                        (pl.col("max_IQ_angle_deg") >= qifurcation_threshold)
-                        & (pl.col("max_IQ_dist_f") > pl.col("min_mag_f"))
-                    ).alias("qifurcated"),
-                )
-                .select(["det"] + added_cols)
-                .collect()
-            )
-            shared_cols = (
-                added_cols if "bifurcated" in self._properties_df.schema else []
-            )
-            self._properties_df = ccat_df.coalesce_join(
-                self.properties, bif_df, "det", shared_cols
-            )
-
-        bif_df = self.get_properties(
-            ["bifurcated", "qifurcated"], include=include, exclude=exclude, strict=True
-        )
-        return bif_df
 
     # ==================#
     # Analysis Methods #
@@ -2159,15 +1760,11 @@ class Detector:
                             mask = fit_col.mask
                             best_fit[mask] = fit_col.best_fit
                             best_vals_dict = {
-                                f"{fit_name_col}_{param_names[k]}": float(
-                                    v
-                                )
+                                f"{fit_name_col}_{param_names[k]}": float(v)
                                 for k, v in fit_col.best_values.items()
                             }
                             init_vals_dict = {
-                                f"init_{fit_name_col}_{param_names[k]}": float(
-                                    v
-                                )
+                                f"init_{fit_name_col}_{param_names[k]}": float(v)
                                 for k, v in fit_col.init_values.items()
                             }
 
@@ -2383,7 +1980,7 @@ class Detector:
                 for future in concurrent.futures.as_completed(future_to_batch):
                     i, tones = future_to_batch[future]
                     spline_cols = future.result()
-                    for tone, spline_col in zip(tones, spline_cols):
+                    for j, (tone, spline_col) in enumerate(zip(tones, spline_cols)):
                         property_dict = {name: "None" for name in property_col}
                         spline_data = 2 * [np.full(df.len(), np.nan)]
                         if isinstance(spline_col, Exception):
@@ -2394,20 +1991,20 @@ class Detector:
                                 spline_col,
                             )
                         else:
-                            for j, (name, spline, data_index) in enumerate(
+                            for l, (name, spline, data_index) in enumerate(
                                 zip(property_col, spline_col, [1, 0])
                             ):
                                 if spline is not None:
-                                    dat = data[i][data_index][tone]
+                                    dat = data[i][data_index][j]
                                     spline.extrapolate = False
-                                    spline_data[j] = spline(dat)
+                                    spline_data[l] = spline(dat)
                                     det.stream.spline_dict[str(spline)] = spline
                                     property_dict[name] = str(spline)
                         det.stream._properties[
                             ccat_df.add_tone("det", tone, padding)
                         ] = property_dict
-                        for name, data in zip(return_col, spline_data):
-                            results_dict[ccat_df.add_tone(name, tone, padding)] = data
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = spline_data[0]
+                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = spline_data[1]
             return ccat_mp.package_results(results_dict)
 
         if not len(args) == 7:
@@ -2548,7 +2145,7 @@ class Detector:
                 ff_tone_col := ccat_df.add_tone(ff_col, tone, padding)
             ) not in schema or recalc:
                 f_tone_col = ccat_df.add_tone(f_col, tone, padding)
-                exprs.append((pl.col(f_tone_col) - f) / f).alias(ff_tone_col)
+                exprs.append(((pl.col(f_tone_col) - f) / f).alias(ff_tone_col))
         return exprs
 
     def properties_histogram(

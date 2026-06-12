@@ -1,7 +1,10 @@
 import marimo
 
 __generated_with = "0.23.2"
-app = marimo.App(width="columns")
+app = marimo.App(
+    width="columns",
+    layout_file="layouts/tune_frequency_mo.slides.json",
+)
 
 
 @app.cell(column=0, hide_code=True)
@@ -9,7 +12,7 @@ def _(mo):
     mo.md(r"""
     ### Overview
 
-    Kinetic inductance detectors (KIDs) are resonators that form circles in IQ space. This notebook provides a step-by-step exploration of the **IQ_circle_center** routine found in `ccatkidlib/analysis/routines/common.py`, which centers these circles at the origin for further analysis.
+    This notebook provides an overview of converting time-ordered kinetic inductance detector (KID) data to fractional frequency shift units.
     """)
     return
 
@@ -38,35 +41,38 @@ def _(analysis_cfg_browser, cfg_editor, data_browser, data_desc, mo):
 
 
 @app.cell(hide_code=True)
-def _(com_to_selector, mo, targ_selector):
+def _(
+    com_to_selector,
+    mo,
+    savgol_workers_selector,
+    targ_selector,
+    transform_button,
+):
     mo.md(rf"""
     ### Select Drone & Sweep
 
     The Radio Frequency System on a Chip (RFSoC) drone (readout chain) with data to load can be selected below. After a drone is selected, a specific target sweep data file can be chosen.
 
-    {mo.hstack([com_to_selector, targ_selector], widths=[1, 1])}
+    {mo.vstack([mo.hstack([com_to_selector, targ_selector], widths=[1, 1]), mo.hstack([savgol_workers_selector], widths=[1]), transform_button])}
     """)
     return
 
 
-@app.cell(column=1)
-def _(det):
-    LABELS = {
-        "mag": {"xlabel": "Frequency [Hz]", "ylabel": r"$|S_{21}|$"},
-        "phase": {"xlabel": "Frequency [Hz]", "ylabel": "Phase [rad]"},
-        "IQ": {"xlabel": "I", "ylabel": "Q"},
-    }
-
-    NAMES, PREFIX = (
-        det.analysis_cfg["convention"]["name"],
-        det.analysis_cfg["convention"]["prefix"],
-    )
-    return LABELS, NAMES, PREFIX
-
-
 @app.cell
-def _(Detector, analysis_cfg, com_to_selector, mo, targ_selector):
-    mo.stop(not targ_selector.value)
+def _():
+    return
+
+
+@app.cell(column=1)
+def _(
+    Detector,
+    analysis_cfg,
+    com_to_selector,
+    mo,
+    targ_selector,
+    transform_button,
+):
+    mo.stop(not transform_button.value)
 
     det = Detector(
         com_to=com_to_selector.value[0],
@@ -78,244 +84,64 @@ def _(Detector, analysis_cfg, com_to_selector, mo, targ_selector):
 
 @app.cell
 def _(det):
-    raw_plot_dfs = get_plot_dfs(det, prefix="")
-    return (raw_plot_dfs,)
+    LABELS = {
+        "mag": {"xlabel": "Frequency [Hz]", "ylabel": r"$|S_{21}|$"},
+        "phase": {"xlabel": "Frequency [Hz]", "ylabel": "Phase [rad]"},
+        "IQ": {"xlabel": "I", "ylabel": "Q"},
+    }
+
+    NAMES, PREFIX = (
+        det.analysis_cfg["convention"]["name"],
+        det.analysis_cfg["convention"]["prefix"],
+    )
+    return LABELS, PREFIX
 
 
 @app.cell
-def _(create_dashboard, plot_sweep, raw_plot_dfs):
-    raw_plots, _mag_phase_opts, _IQ_opts = plot_sweep(raw_plot_dfs)
-    raw_plots_dashboard = create_dashboard(raw_plots, _mag_phase_opts, _IQ_opts)
-    return (raw_plots_dashboard,)
+def _(det, savgol_workers_selector, tune_routines):
+    tuned_fs = tune_routines.max_IQ_dist_f(
+        det,
+        trim_window=2,
+        trim_savgol_window=9,
+        diff_savgol_window=21,
+        trim_savgol_k=1,
+        diff_savgol_k=1,
+        max_workers=savgol_workers_selector.value,
+        recalc=True,
+    ).to_numpy().T[1]
 
-
-@app.cell(hide_code=True)
-def _(mo, raw_plots_dashboard):
-    mo.md(rf"""
-    ### Raw Target Sweep Data (*Best Viewed As Fullsceen*)
-    Below we plot the raw KID IQ, magnitude, and phase data. The red star indicates the placement of the tone frequency, which corresponds to the center point of the target sweep. 
-
-    {raw_plots_dashboard}
-    """)
-    return
-
-
-@app.cell
-def _(NAMES, det):
-    det.vna.phase()  # Use VNA sweep phase data to calculate cable delay
-    det.cable_delay
-    det.IQ_unwind(
-        delay_col=f"vna_{NAMES['cable_delay']}", data="targ"
-    )  # Remove cable delay from target sweeps
-
-    _ = 0
-    return
+    get_max_dist_f = True
+    return get_max_dist_f, tuned_fs
 
 
 @app.cell
-def _(PREFIX, det):
+def _(PREFIX, det, get_max_dist_f, mo):
+    mo.stop(not get_max_dist_f)
     cable_prefix = f"{PREFIX['remove_cable']}_{PREFIX['rotate']}"
     unwind_plot_dfs = get_plot_dfs(det, cable_prefix)
-    return cable_prefix, unwind_plot_dfs
+    return (unwind_plot_dfs,)
 
 
 @app.cell
-def _(create_dashboard, plot_sweep, unwind_plot_dfs):
+def _(
+    create_dashboard,
+    hv,
+    plot_sweep,
+    tone_selector,
+    tuned_fs,
+    unwind_plot_dfs,
+):
     unwind_plots, _mag_phase_opts, _IQ_opts = plot_sweep(unwind_plot_dfs)
+    unwind_plots['mag'] *= hv.VLine(tuned_fs[tone_selector.value])
     unwind_plots_dashboard = create_dashboard(
         unwind_plots, _mag_phase_opts, _IQ_opts
     )
-    return unwind_plots, unwind_plots_dashboard
-
-
-@app.cell(hide_code=True)
-def _(mo, unwind_plots_dashboard):
-    mo.md(rf"""
-    ### Remove Cable Delay
-
-    {unwind_plots_dashboard}
-    """)
-    return
+    return (unwind_plots_dashboard,)
 
 
 @app.cell
-def _(NAMES, cable_prefix, det):
-    det.targ.savgol(
-        col_name=NAMES["magnitude"],
-        prefix=det.analysis_cfg["convention"]["prefix"]["decible"],
-        deriv=0,
-        window=9,
-        k=1,
-        max_workers=2,
-        recalc=True,
-    )
-
-    savgol_prefix = f"{det.analysis_cfg['convention']['prefix']['savgol_filter']}0_{det.analysis_cfg['convention']['prefix']['decible']}"
-    det.IQ_trim(
-        prefix=cable_prefix,
-        window=10,
-        mean_points=10,
-        use_fit=False,
-        mag_prefix=savgol_prefix,
-        recalc=True,
-    )
-
-    _ = 0
-    return
-
-
-@app.cell
-def _(PREFIX, cable_prefix, det):
-    trim_prefix = f"{PREFIX['trim_tail']}_{PREFIX['trim']}_{cable_prefix}"
-    trim_plot_dfs = get_plot_dfs(det, trim_prefix)
-    return trim_plot_dfs, trim_prefix
-
-
-@app.cell
-def _(create_dashboard, plot_sweep, trim_plot_dfs, unwind_plots):
-    trim_plots, _mag_phase_opts, _IQ_opts = plot_sweep(trim_plot_dfs)
-    trim_unwind_plots = {
-        _k: unwind_plots[_k] * _v for _k, _v in trim_plots.items()
-    }
-    trim_plots_dashboard = create_dashboard(
-        trim_unwind_plots, _mag_phase_opts, _IQ_opts
-    )
-    return trim_plots, trim_plots_dashboard
-
-
-@app.cell(hide_code=True)
-def _(mo, trim_plots_dashboard):
-    mo.md(rf"""
-    ### Trim Tails
-
-    {trim_plots_dashboard}
-    """)
-    return
-
-
-@app.cell
-def _(det, trim_prefix):
-    det.IQ_circle_fit(
-        prefix=trim_prefix, max_workers=8, recalc=True
-    )  # Fit target sweep IQ circles
-
-    _ = 0
-    return
-
-
-@app.cell
-def _(PREFIX, det, trim_prefix):
-    circle_prefix = f"{PREFIX['IQ_circle_fit']}_{trim_prefix}"
-    circle_fit_plot_dfs = get_plot_dfs(det, circle_prefix)
-    return circle_fit_plot_dfs, circle_prefix
-
-
-@app.cell
-def _(circle_fit_plot_dfs, create_dashboard, plot_sweep, trim_plots):
-    circle_fit_plots, _mag_phase_opts, _IQ_opts = plot_sweep(
-        circle_fit_plot_dfs, include_tones=False
-    )
-    circle_fit_plots = {
-        _k: circle_fit_plots[_k] * _v if _k == "IQ" else _v
-        for _k, _v in trim_plots.items()
-    }
-    circle_fit_plots_dashboard = create_dashboard(
-        circle_fit_plots, _mag_phase_opts, _IQ_opts
-    )
-    return (circle_fit_plots_dashboard,)
-
-
-@app.cell(hide_code=True)
-def _(circle_fit_plots_dashboard, mo):
-    mo.md(rf"""
-    ### Fit IQ Circle
-
-    {circle_fit_plots_dashboard}
-    """)
-    return
-
-
-@app.cell
-def _(cable_prefix, circle_prefix, det):
-    det.IQ_circle_origin(
-        prefix=cable_prefix,
-        circle_fit_prefix=circle_prefix,
-        data="targ",
-        recalc=False,
-    )  # Rotate and translate circle to the origin
-
-    _ = 0
-    return
-
-
-@app.cell
-def _(PREFIX, cable_prefix, det):
-    center_prefix = f"{PREFIX['center_origin']}_{PREFIX['translate']}_{PREFIX['center_origin']}_{PREFIX['rotate']}_{cable_prefix}"
-    center_plot_dfs = get_plot_dfs(det, center_prefix)
-    return center_plot_dfs, center_prefix
-
-
-@app.cell
-def _(center_plot_dfs, create_dashboard, plot_sweep):
-    center_plots, _mag_phase_opts, _IQ_opts = plot_sweep(
-        center_plot_dfs, include_tones=True
-    )
-    center_plots_dashboard = create_dashboard(
-        center_plots, _mag_phase_opts, _IQ_opts
-    )
-    return (center_plots_dashboard,)
-
-
-@app.cell(hide_code=True)
-def _(center_plots_dashboard, mo):
-    mo.md(rf"""
-    ### Center IQ Circle
-
-    {center_plots_dashboard}
-    """)
-    return
-
-
-@app.cell
-def _(center_prefix, det):
-    det.IQ_circle_rotate(
-        prefix=center_prefix,
-        data="targ",
-        rotation="mismatch",
-        recalc=False,
-    )
-
-    _ = 0
-    return
-
-
-@app.cell
-def _(PREFIX, center_prefix, det):
-    mismatch_prefix = (
-        f"{PREFIX['remove_impedance_mismatch']}_{PREFIX['rotate']}_{center_prefix}"
-    )
-    mismatch_plot_dfs = get_plot_dfs(det, mismatch_prefix)
-    return (mismatch_plot_dfs,)
-
-
-@app.cell
-def _(create_dashboard, mismatch_plot_dfs, plot_sweep):
-    mismatch_plots, _mag_phase_opts, _IQ_opts = plot_sweep(
-        mismatch_plot_dfs, include_tones=True
-    )
-    mismatch_plots_dashboard = create_dashboard(
-        mismatch_plots, _mag_phase_opts, _IQ_opts
-    )
-    return (mismatch_plots_dashboard,)
-
-
-@app.cell(hide_code=True)
-def _(mismatch_plots_dashboard, mo):
-    mo.md(rf"""
-    ### Remove Impedance Mismatch
-
-    {mismatch_plots_dashboard}
-    """)
+def _(unwind_plots_dashboard):
+    unwind_plots_dashboard
     return
 
 
@@ -357,15 +183,14 @@ def _():
     # ccatkidlib
     import ccatkidlib.io as ccat_io
     import ccatkidlib.log as ccat_log
-    import ccatkidlib.analysis.utils.pickle as ccat_pickle
     import ccatkidlib.analysis.utils.pair as ccat_pair
     import ccatkidlib.analysis.utils.dataframe as ccat_df
+    import ccatkidlib.analysis.routines.tune as tune_routines
+    import ccatkidlib.analysis.routines.properties as properties_routines
 
-    from ccatkidlib.rfsoc.rfsoc_daq import R
     from ccatkidlib.analysis.core.detector import Detector
-    from ccatkidlib.analysis.core.network import Network
 
-    return Detector, ccat_io
+    return Detector, ccat_io, tune_routines
 
 
 @app.cell
@@ -473,6 +298,19 @@ def _(ccat_io, data_browser):
 
 
 @app.cell
+def _(mo, targ_selector):
+    # Create run button for transforming data
+    transform_button = mo.ui.run_button(
+        kind="success",
+        label="Calculate Max IQ Distance",
+        tooltip="Click to max IQ distance",
+        full_width=True,
+        disabled=not targ_selector.value,
+    )
+    return (transform_button,)
+
+
+@app.cell
 def _(data_browser, data_dirs, mo):
     mo.stop(not data_browser.value)
 
@@ -504,8 +342,13 @@ def _(data_browser, data_dirs, mo):
 def _(com_to_selector, data_dirs, mo):
     if _selected_drone := com_to_selector.value:
         _bid, _drid = _selected_drone[0].split(".")
-        _targ_files = list(
-            map(str, (data_dirs[0] / "targ" / f"B{_bid}D{_drid}").iterdir())
+        _targ_files = sorted(
+            list(
+                map(
+                    str,
+                    (data_dirs[0] / "targ" / f"B{_bid}D{_drid}").iterdir(),
+                )
+            )
         )
     else:
         _targ_files = []
@@ -526,28 +369,15 @@ def _(mo, os):
     # ----------------------------------------
 
     # Create selector for max number of CPU cores to use
-    max_workers_selector = mo.ui.number(
+    savgol_workers_selector = mo.ui.number(
         start=1,
         stop=os.cpu_count(),
         step=1,
-        label="Max Workers",
-        value=1,
+        label="Savgol Filter Max Workers",
+        value=os.cpu_count() // 6,
         full_width=True,
     )
-    return
-
-
-@app.cell
-def _(mo, unwind_plot_dfs):
-    # Create run button for transforming data
-    fit_circle_button = mo.ui.run_button(
-        kind="success",
-        label="Fit IQ Circle",
-        tooltip="Click to fit IQ circle",
-        full_width=True,
-        disabled=not unwind_plot_dfs,
-    )
-    return
+    return (savgol_workers_selector,)
 
 
 @app.cell
@@ -562,6 +392,11 @@ def _(det, mo):
         label="Tone",
     )
     return (tone_selector,)
+
+
+@app.cell
+def _():
+    return
 
 
 @app.function(column=3)

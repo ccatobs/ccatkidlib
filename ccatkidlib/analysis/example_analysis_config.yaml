@@ -40,8 +40,12 @@ convention:
     time: 't' 
     datetime: 'dt' 
     zerotime: 'zt'
+    distance: 'dist'
 
     # Properties Names
+    tone_frequency: 'tone_freq'
+    tone_power: 'tone_power'
+    tone_phase: 'tone_phi'
     internal_quality_factor: 'Q_i'
     coupling_quality_factor: 'Q_c'
     real_external_quality_factor: 'Q_e_real'

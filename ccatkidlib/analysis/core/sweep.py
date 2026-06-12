@@ -176,19 +176,19 @@ class Sweep(Data):
 
         # Set default hvplot key word arguments
         # -------------------------------------
-        if not "aspect" in kwargs:
+        if "aspect" not in kwargs:
             kwargs["aspect"] = self.viz_cfg["static_plot"]["sweep"]["aspect"]
-        if not "marker" in kwargs:
+        if "marker" not in kwargs:
             kwargs["marker"] = self.viz_cfg["static_plot"]["sweep"]["marker"]
-        if not "ms" in kwargs:
+        if "ms" not in kwargs:
             kwargs["ms"] = self.viz_cfg["static_plot"]["sweep"]["marker_size"]
-        if not "linewidth" in kwargs:
+        if "linewidth" not in kwargs:
             kwargs["linewidth"] = self.viz_cfg["static_plot"]["sweep"]["linewidth"]
-        if not "tone_marker" in kwargs:
+        if "tone_marker" not in kwargs:
             kwargs["tone_marker"] = self.viz_cfg["static_plot"]["sweep"]["tone_marker"]
-        if not "tone_ms" in kwargs:
+        if "tone_ms" not in kwargs:
             kwargs["tone_ms"] = self.viz_cfg["static_plot"]["sweep"]["tone_marker_size"]
-        if not "dynamic" in kwargs:
+        if "dynamic" not in kwargs:
             kwargs["dynamic"] = True
 
         if grouping == "by":
@@ -281,12 +281,12 @@ class Sweep(Data):
             if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         """
         xlabel = (
-            r"$Frequency\ [Hz]$" if not "xlabel" in kwargs else kwargs.pop("xlabel")
+            r"$Frequency\ [Hz]$" if "xlabel" not in kwargs else kwargs.pop("xlabel")
         )
-        ylabel = r"$|S_{21}|$" if not "ylabel" in kwargs else kwargs.pop("ylabel")
+        ylabel = r"$|S_{21}|$" if "ylabel" not in kwargs else kwargs.pop("ylabel")
         save_name = (
             f"sweep_{prefix}{'_' if prefix else ''}mag"
-            if not "save_name" in kwargs
+            if "save_name" not in kwargs
             else kwargs.pop("save_name")
         )
 
@@ -338,12 +338,12 @@ class Sweep(Data):
             if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         """
         xlabel = (
-            r"$Frequency\ [Hz]$" if not "xlabel" in kwargs else kwargs.pop("xlabel")
+            r"$Frequency\ [Hz]$" if "xlabel" not in kwargs else kwargs.pop("xlabel")
         )
-        ylabel = r"$Phase\ [rad]$" if not "ylabel" in kwargs else kwargs.pop("ylabel")
+        ylabel = r"$Phase\ [rad]$" if "ylabel" not in kwargs else kwargs.pop("ylabel")
         save_name = (
             f"sweep_{prefix}{'_' if prefix else ''}phase"
-            if not "save_name" in kwargs
+            if "save_name" not in kwargs
             else kwargs.pop("save_name")
         )
         rtn = self.plot(
@@ -453,7 +453,7 @@ class Sweep(Data):
             log.log("CRITICAL", error)
             raise ValueError(error)
 
-        if not "linewidth" in kwargs:
+        if "linewidth" not in kwargs:
             kwargs["linewidth"] = 0
         if "plot_opts" in kwargs:
             plot_opts += (
@@ -464,7 +464,7 @@ class Sweep(Data):
 
         save_name = (
             f"sweep_{prefix}{'_' if prefix else ''}{projection}"
-            if not "save_name" in kwargs
+            if "save_name" not in kwargs
             else kwargs.pop("save_name")
         )
         if "xlabel" in kwargs:

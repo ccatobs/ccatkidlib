@@ -1,7 +1,7 @@
 import polars as pl
 import ccatkidlib.log as log
 
-from enum import StrEnum
+from enum import Enum
 from collections.abc import Iterable
 from typing import Callable, TypeAlias, Any
 
@@ -31,7 +31,7 @@ def create_enums(
     )
 
     name_enums = [
-        StrEnum(
+        Enum(
             "Name",
             [
                 (
@@ -47,7 +47,7 @@ def create_enums(
         for pre in input_prefix
     ]
     prefix_enums = [
-        StrEnum(
+        Enum(
             "Prefix",
             [
                 (p.upper(), prefix_mapping[p])

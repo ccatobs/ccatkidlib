@@ -257,17 +257,15 @@ def y_to_x_interp(ys, y_to_x_spline=None, x_to_y_spline=None):
                 xs[i] = root_scalar(
                     lambda x: x_to_y_spline(x) - y, bracket=[min_x, max_x]
                 ).root
-            except:
+            except Exception as e:
                 pass
     else:
         xs = np.zeros(len(ys))
     return xs
 
-
 # ===================#
 # Resonator Fitting #
 # ===================#
-
 
 def phase_fit(
     f: np.ndarray,
