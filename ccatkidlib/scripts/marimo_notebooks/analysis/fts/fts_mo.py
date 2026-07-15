@@ -14,8 +14,8 @@
 
 import marimo
 
-__generated_with = "0.23.2"
-app = marimo.App(width="columns", layout_file="layouts/fts_mo.slides.json")
+__generated_with = "0.23.10"
+app = marimo.App(width="columns", layout_file="layouts/fts_mo.grid.json")
 
 
 @app.cell(column=0, hide_code=True)
@@ -106,8 +106,20 @@ def _(
 
 
 @app.cell
-def _(spec_df):
-    spec_df.write_parquet('/home/jovyan/notebooks/Darshan/Al1_response_new.parquet')
+def _(mo):
+    highest_sn_det_selector = mo.ui.number(start=0, stop=5000, step=1, value=5, label='Select Number of Detectors')
+    return (highest_sn_det_selector,)
+
+
+@app.cell
+def _(highest_sn_det_selector):
+    highest_sn_det_selector
+    return
+
+
+@app.cell
+def _(det_map_df, highest_sn_det_selector):
+    det_map_df.sort('spec_S/N', descending=True).head(highest_sn_det_selector.value)['spec_S/N'][-1]
     return
 
 
@@ -159,12 +171,6 @@ def _(
 
 
 @app.cell
-def _(det_map_df):
-    det_map_df
-    return
-
-
-@app.cell
 def _(
     color_bar_range,
     color_col_selector,
@@ -177,39 +183,63 @@ def _(
     mo,
     plt,
 ):
-    _norm = colors.LogNorm if log_cb.value else colors.Normalize
+    try:
+        _norm = colors.LogNorm if log_cb.value else colors.Normalize
+    
+        plt.figure(
+            clear=True, figsize=(det_map_fig_size.value, det_map_fig_size.value)
+        )
+        plt.scatter(
+            x=det_map_df["x_0"],
+            y=det_map_df["y_0"],
+            c=det_map_df[color_col_selector.value],
+            s=20,
+            cmap="viridis",
+            norm=_norm(
+                vmin=color_bar_range.value[0],
+                vmax=color_bar_range.value[1],
+            ),
+        )
+        plt.xlabel("Beam Mapper X Position [mm]")
+        plt.ylabel("Beam Mapper Y Position [mm]")
+        plt.title(det_map_title.value)
+    
+        _ax = plt.gca()
+        _ax.set_aspect("equal")
+        _ax.invert_xaxis()
+        plt.colorbar(ax=_ax, label=det_map_cb_title.value)
+    
 
-    plt.figure(
-        clear=True, figsize=(det_map_fig_size.value, det_map_fig_size.value)
-    )
-    plt.scatter(
-        x=det_map_df["x_0"],
-        y=det_map_df["y_0"],
-        c=det_map_df[color_col_selector.value],
-        s=20,
-        cmap="viridis",
-        norm=_norm(
-            vmin=color_bar_range.value[0],
-            vmax=color_bar_range.value[1],
-        ),
-    )
-    plt.xlabel("Beam Mapper X Position [mm]")
-    plt.ylabel("Beam Mapper Y Position [mm]")
-    plt.title(det_map_title.value)
-
-    _ax = plt.gca()
-    _ax.set_aspect("equal")
-    _ax.invert_xaxis()
-    plt.colorbar(ax=_ax, label=det_map_cb_title.value)
-
-
-    det_map = mo.ui.matplotlib(_ax, debounce=True)
+        det_map = mo.ui.matplotlib(_ax, debounce=True)
+    except:
+        det_map = mo.callout('Select Network(s) to plot...')
     return (det_map,)
 
 
 @app.cell
-def _(avg_spec_plot):
-    avg_spec_plot
+def _(avg_spec_plot, bandpass_filename_input, mo, save_bandpass_button):
+    mo.md(rf"""
+    ### Average Spectral Response
+
+    {mo.vstack([bandpass_filename_input, save_bandpass_button, avg_spec_plot])}
+    """)
+    return
+
+
+@app.cell
+def _(bandpass_filename_input, data_dirs, mo, save_bandpass_button, spec_df):
+    mo.stop(
+        not save_bandpass_button.value,
+        mo.callout(mo.md("Click **Save Bandpass** to save the average spectrum to parquet."), kind="info"),
+    )
+
+    _bandpass_dir = data_dirs[0] / "pickle" / "bandpass"
+    _bandpass_dir.mkdir(parents=True, exist_ok=True)
+    _save_path = _bandpass_dir / bandpass_filename_input.value
+
+    spec_df.write_parquet(_save_path)
+
+    mo.callout(mo.md(f"Saved bandpass to `{_save_path}`"), kind="success")
     return
 
 
@@ -325,7 +355,7 @@ def _(analysis_cfg_browser, ccat_io, json, mo):
         max_height=_editor_height,
         placeholder="Configuration file contents will display here once a valid file is selected!",
     )
-    return analysis_cfg, cfg_editor
+    return analysis_cfg, cfg_editor, viz_cfg
 
 
 @app.cell(hide_code=True)
@@ -619,6 +649,13 @@ def _(mo):
         full_width=True,
     )
 
+    default_color_column = mo.ui.text(
+        value="tone_powers",
+        full_width=True,
+        label="Default Color Column",
+        debounce=True,
+    )
+
     SN_slider = mo.ui.slider(
         start=0,
         stop=500,
@@ -629,13 +666,6 @@ def _(mo):
         show_value=True,
         include_input=True,
         full_width=True,
-    )
-
-    default_color_column = mo.ui.text(
-        value="tone_powers",
-        full_width=True,
-        label="Default Color Column",
-        debounce=True,
     )
     return (
         SN_slider,
@@ -750,7 +780,7 @@ def _(default_color_column, det_map_df, mo, pl):
     )
     color_col_selector = mo.ui.dropdown(
         options=_color_cols,
-        value=default_color_column.value,
+        value=_default_color if (_default_color := default_color_column.value) in _color_cols else 'tone_powers',
         searchable=True,
         label="Select Color Column",
         full_width=True,
@@ -850,6 +880,26 @@ def _(
 
 @app.cell
 def _(masked_df, mo):
+    _det_arrays = masked_df["detector_array"].unique().sort().to_list()
+    _default_filename = "_".join([_da.replace(" ", "_") for _da in _det_arrays]) + "_bandpass.parquet"
+
+    bandpass_filename_input = mo.ui.text(
+        value=_default_filename,
+        label="Save Filename",
+        debounce=True,
+        full_width=True,
+    )
+
+    save_bandpass_button = mo.ui.run_button(
+        label="Save Bandpass",
+        kind="success",
+        full_width=True
+    )
+    return bandpass_filename_input, save_bandpass_button
+
+
+@app.cell
+def _(masked_df, mo):
     _com_to_cols = masked_df["com_to"].to_list()
     fts_com_to_selector = mo.ui.dropdown(
         options=_com_to_cols,
@@ -903,14 +953,12 @@ def _(hv, mo, opts, spec_df):
     _opts = [
         opts.Spread(alpha=0.3),
         opts.Curve(show_grid=True),
-        opts.Overlay(aspect=2, show_legend=True, fig_size=250),
+        opts.Overlay(aspect=2.5, show_legend=True, fig_inches=(4.5, 1.75)),
     ]
 
-    avg_spec_plot = mo.mpl.interactive(
-        hv.render(
-            (_avg_spec_plot * _err_plot).opts(*_opts), backend="matplotlib"
-        ).gca()
-    )
+    _fig = hv.render((_avg_spec_plot * _err_plot).opts(*_opts), backend="matplotlib")
+    _fig.tight_layout(pad=0.5)
+    avg_spec_plot = mo.mpl.interactive(_fig.gca())
     return (avg_spec_plot,)
 
 
@@ -963,13 +1011,8 @@ def _(
     return (indiv_spec_plot,)
 
 
-@app.cell
-def _():
-    return
-
-
 @app.cell(column=3)
-def _(pl):
+def _(analysis_cfg, pl, viz_cfg):
     def load_pickle_transforms(
         network, col_name, prefix="", freq_thresholds=[250e9, 350e9]
     ):
@@ -977,7 +1020,11 @@ def _(pl):
 
         for det in network.data["detector"]:
             det = network.det_dict[det]
+            det.analysis_cfg = analysis_cfg
+            det.viz_cfg = viz_cfg
             stream = det.stream
+            stream.analysis_cfg = analysis_cfg
+            stream.viz_cfg = viz_cfg
             tone = stream.tones[0]
 
             stream._data = stream._data.filter(
@@ -990,6 +1037,8 @@ def _(pl):
                 )
                 <= high_freq,
             )
+        network.analysis_cfg = analysis_cfg
+        network.viz_cfg = viz_cfg
 
         return network
 

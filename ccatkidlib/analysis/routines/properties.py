@@ -63,7 +63,6 @@ def agg(obj, operation, col_name, prefix="", include=None, exclude=None, recalc=
         strict=True,
     )
 
-
 def mismatch_angle(
     targ, prefix="", mean_points=10, include=None, exclude=None, recalc=False
 ):
@@ -135,6 +134,71 @@ def mismatch_angle(
         mismatch_col_name, include=include, exclude=exclude, strict=True
     )
 
+def mismatch_dist(
+    targ, prefix="", mean_points=10, include=None, exclude=None, recalc=False
+):
+    name_enums, prefix_enums = ccat_df.create_enums(
+        ["in_phase", "quadrature", "magnitude"],
+        prefix,
+        ["remove_impedance_mismatch"],
+        targ.analysis_cfg,
+        no_prefix=[],
+    )
+
+    name_enum, prefix_enum = name_enums[0], prefix_enums[0]
+    mismatch_col_name = (
+        f"{prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value}_{name_enum.MAGNITUDE.value}"
+    )
+    include_subset = ccat_df.check_properties(
+        targ,
+        mismatch_col_name,
+        include=include,
+        exclude=exclude,
+        recalc=recalc,
+    )
+    if not len(include_subset) == 0:
+        I_df = targ.get_data(
+            name_enum.IN_PHASE.value,
+            include=include_subset,
+            strict=True,
+        )
+        Q_df = targ.get_data(
+            name_enum.QUADRATURE.value,
+            include=include_subset,
+            strict=True,
+        )
+        I_cols, Q_cols = I_df.columns, Q_df.columns
+        IQ_df = pl.concat([I_df, Q_df], how="horizontal")
+
+        mismatch_df = (
+            IQ_df.lazy()
+            .select(
+                pl.all().head(mean_points).mean().name.prefix("first_"),
+                pl.all().tail(mean_points).mean().name.prefix("last_"),
+            )
+            .select(
+                [
+                    (
+                        (
+                            (pl.col(f"first_{Q_col}")**2
+                            + pl.col(f"first_{I_col}")**2).sqrt()
+                            
+                            + (
+                                pl.col(f"last_{Q_col}")**2
+                                +pl.col(f"last_{I_col}")**2
+                            ).sqrt()
+                        )
+                        / 2
+                    ).alias(I_col.split("_")[-1])
+                    for I_col, Q_col in zip(I_cols, Q_cols)
+                ]
+            )
+            .collect()
+        )
+        ccat_df.add_data_to_properties(targ, mismatch_df, mismatch_col_name)
+    return targ.get_properties(
+        mismatch_col_name, include=include, exclude=exclude, strict=True
+    )
 
 def timestream_angle(stream, prefix="", include=None, exclude=None, recalc=False):
     name_enums, prefix_enums = ccat_df.create_enums(
@@ -193,46 +257,51 @@ def timestream_angle(stream, prefix="", include=None, exclude=None, recalc=False
         strict=True,
     )
 
-
 def fwhm(targ, mag_prefix="", mean_points=10, include=None, exclude=None, recalc=False):
+    "TODO: Use min/max values of phase instead potentially. Should be accurate as long as no large impedance mismatch"
     name_enums, prefix_enums = ccat_df.create_enums(
         [
             "sample",
+            "frequency",
             "magnitude",
             "full_width_half_max",
         ],
         mag_prefix,
         ["low_frequency_side", "middle_frequency_point", "high_frequency_side"],
         targ.analysis_cfg,
-        no_prefix=["sample"],
+        no_prefix=["sample", 'frequency'],
     )
 
     name_enum, prefix_enum = name_enums[0], prefix_enums[0]
-    low_sample, mid_sample, high_sample = (
+    low_sample, mid_sample, high_sample, low_f, mid_f, high_f = (
         f"{prefix_enum.LOW_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.SAMPLE.value}",
         f"{prefix_enum.MIDDLE_FREQUENCY_POINT.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.SAMPLE.value}",
         f"{prefix_enum.HIGH_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.SAMPLE.value}",
+        f"{prefix_enum.LOW_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.FREQUENCY.value}",
+        f"{prefix_enum.MIDDLE_FREQUENCY_POINT.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.FREQUENCY.value}",
+        f"{prefix_enum.HIGH_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.FREQUENCY.value}",
     )
 
     include_subset = ccat_df.check_properties(
         targ, mid_sample, include=include, exclude=exclude, recalc=recalc
     )
     if not len(include_subset) == 0:
-        sample_col, mag_col = name_enum.SAMPLE.value, name_enum.MAGNITUDE.value
+        sample_col, mag_col, f_col = name_enum.SAMPLE.value, name_enum.MAGNITUDE.value, name_enum.FREQUENCY.value
         # Get detector magnitudes and sample numbers and unpivot DataFrame from wide to long format
-        mag_df = targ.get_data(
-            col_name=[sample_col, mag_col], strict=True, include=include_subset
+        mag_df = (targ.get_data(col_name=[sample_col, mag_col], strict=True, include=include_subset)
+                      .unpivot(
+                        index=sample_col,
+                        variable_name="det",
+                        value_name=mag_col,
+                            )
+                        .with_columns(pl.col("det").str.strip_prefix(f"{mag_col}_").cast(pl.Int32))
         )
-        mag_df = (
-            mag_df.unpivot(
-                index=sample_col,
-                variable_name="det",
-                value_name=mag_col,
-            )
-            .lazy()
-            .with_columns(pl.col("det").str.strip_prefix(f"{mag_col}_").cast(pl.Int32))
-            .sort(mag_col, descending=True)
-        )
+
+        f_df = (targ.get_data(col_name=f_col, strict=True, include=include_subset)
+                    .unpivot(variable_name='tmp', value_name=f_col)
+                    .drop('tmp'))
+
+        mag_df = pl.concat([mag_df, f_df], how='horizontal').lazy().sort(mag_col, descending=True)
 
         # Get minimum magnitude values for each detector and corresponding sample numbers
         min_df = (
@@ -240,15 +309,16 @@ def fwhm(targ, mag_prefix="", mean_points=10, include=None, exclude=None, recalc
             .rename(
                 {
                     sample_col: f"min_{sample_col}",
+                    f_col: f"min_{f_col}",
                     mag_col: f"min_{mag_col}",
                 }
             )
             .collect()
         )
-        shared_cols = mid_sample if mid_sample in targ._properties_df.schema else []
+        shared_cols = [mid_sample, mid_f] if mid_sample in targ._properties_df.schema else []
         targ._properties_df = ccat_df.coalesce_join(
             targ._properties_df,
-            min_df.select(["det", pl.col(f"min_{sample_col}").alias(mid_sample)]),
+            min_df.select(["det", pl.col(f"min_{sample_col}").alias(mid_sample), pl.col(f"min_{f_col}").alias(mid_f)]),
             "det",
             shared_cols,
         )
@@ -297,76 +367,30 @@ def fwhm(targ, mag_prefix="", mean_points=10, include=None, exclude=None, recalc
             )
         )
         # Get the samples corresponding to the half max on the low and high frequency sides of each detector
-        for side, name in zip(["low", "high"], [low_sample, high_sample]):
+        for side, sample_name, f_name in zip(["low", "high"], [low_sample, high_sample], [low_f, high_f]):
             HM_df = (
                 min_max_df.filter(pl.col("low") == ("low" == pl.lit(side)))
-                .sort(name)
-                .select("det", pl.col(sample_col).first().over("det"))
+                .sort(sample_name)
+                .select("det", pl.col(sample_col).first().over("det"), pl.col(f_col).first().over('det'))
                 .unique()
                 .sort("det")
-                .rename({sample_col: name})
+                .rename({sample_col: sample_name, f_col: f_name})
                 .collect()
             )
-            shared_cols = name if name in targ._properties_df.schema else []
+            shared_cols = [sample_name, f_name] if sample_name in targ._properties_df.schema else []
             targ._properties_df = ccat_df.coalesce_join(
                 targ._properties_df, HM_df, "det", shared_cols
             )
     return targ.get_properties(
-        [low_sample, mid_sample, high_sample],
+        [low_sample, mid_sample, high_sample, low_f, mid_f, high_f],
         include=include,
         exclude=exclude,
         strict=True,
     )
 
-
-def mag_min(
-    self,
-    include: int | list[int] | None = None,
-    exclude: int | list[int] | None = None,
-    recalc: bool = False,
-) -> list[pl.DataFrame]:
-    col_name = ["f", "mag", "min"]
-    prop_names = [
-        f"{col_name[-1]}_{col_name[1]}_{col_name[0]}",
-        f"{col_name[-1]}_{col_name[1]}",
-    ]
-
-    include_subset = ccat_df.check_properties(
-        self, prop_names[0], include=include, exclude=exclude, recalc=recalc
-    )
-    if not len(include_subset) == 0:
-        # Get detector magnitudes and frequencies and unpivot DataFrame from wide to long format
-        f_df = self.targ.get_data(
-            col_name=col_name[0], strict=True, include=include_subset
-        )
-        mag_df = self.targ.get_data(
-            col_name=col_name[1], strict=True, include=include_subset
-        )
-
-        mag_df = mag_df.unpivot(
-            variable_name="det", value_name=col_name[1]
-        ).with_columns(pl.col("det").str.strip_prefix(f"{col_name[1]}_").cast(pl.Int32))
-
-        f_df = f_df.unpivot(variable_name="tmp", value_name=col_name[0]).drop("tmp")
-
-        mag_f_df = pl.concat([mag_df, f_df], how="horizontal")
-
-        # Get minimum magnitude values for each detector and corresponding sample numbers
-
-        min_df = mag_f_df.filter(
-            (pl.col(col_name[1]) == pl.col(col_name[1]).min()).over("det")
-        ).rename({col_name[0]: prop_names[0], col_name[1]: prop_names[1]})
-        shared_cols = prop_names if prop_names[0] in self._properties_df.schema else []
-        self._properties_df = ccat_df.coalesce_join(
-            self._properties_df, min_df, "det", shared_cols
-        )
-    return self.get_properties(
-        col_name=prop_names, include=include, exclude=exclude, strict=True
-    )
-
-
 def is_bifurcated(
-    self,
+    targ,
+    prefix="",
     bifurcation_threshold=60,
     qifurcation_threshold=50,
     trim_window: int = 2,
@@ -384,30 +408,36 @@ def is_bifurcated(
 
     """
 
-    # Get maximally distant points in IQ space
-    # ----------------------------------------
-    self.IQ_max_dist(
-        diff_savgol_window=1,
-        trim_window=trim_window,
-        trim_savgol_window=trim_savgol_window,
-        trim_savgol_k=trim_savgol_k,
-        include=include,
-        exclude=exclude,
-        recalc=recalc,
-        max_workers=max_workers,
-        ex=ex,
+    name_enums, prefix_enums = ccat_df.create_enums(
+    [
+        "in_phase",
+        "quadrature",
+        "magnitude",
+    ],
+    prefix,
+    ["remove_impedance_mismatch"],
+    targ.analysis_cfg,
+    no_prefix=[],
     )
 
-    # Fit IQ circle to get radius
-    # ---------------------------
-    self.IQ_circle_fit(
-        prefix="tail_trim_unwind_rotate",
-        include=include,
-        exclude=exclude,
-        recalc=recalc,
-        max_workers=max_workers,
-        ex=ex,
-    )
+    name_enum, prefix_enum = name_enums[0], prefix_enums[0]
+
+    property_routines.mismatch_dist(det.targ, prefix=_mismatch_prefix)
+    I_shifts = det.targ.properties[f"{_prefix['remove_impedance_mismatch']}_{_mismatch_prefix}_{_name['magnitude']}"]
+
+    det.targ.IQ_shift(prefix=_mismatch_prefix, shift_I = I_shifts, name='anchor')
+
+    det.IQ_trim(prefix=f"anchor_shift_{_mismatch_prefix}", window=2, mag_prefix=f"{_prefix['savgol_filter']}0")
+    det.targ.linewidth_shift(prefix=f"tail_trim_anchor_shift_{_mismatch_prefix}")
+    _fwhm_q = det.targ.properties.select((pl.col('mid_savgol0_FWHM_f')/ (pl.col('high_savgol0_FWHM_f') -pl.col('low_savgol0_FWHM_f'))).alias('FWHM_Q')).to_numpy().T[0]
+    _qs = det.targ.properties.select(pl.col('phase_fit_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_Q')).to_numpy().T[0]
+    det.targ.scale(col_name='lw', prefix=f"tail_trim_anchor_shift_{_mismatch_prefix}", scale=10e5/_fwhm_q, name='FWHM')
+    det.targ.scale(col_name='lw', prefix=f"tail_trim_anchor_shift_{_mismatch_prefix}", scale=10e5/_qs, name='Q')
+
+    det.targ.diff(col_name='lw', prefix=f"Q_scale_tail_trim_anchor_shift_{_mismatch_prefix}")
+    det.targ.diff(col_name='lw', prefix=f"FWHM_scale_tail_trim_anchor_shift_{_mismatch_prefix}")
+
+
 
     # Get frequency corresponding to the |S_21| minimum
     # -------------------------------------------------
@@ -488,3 +518,128 @@ def is_bifurcated(
         ["bifurcated", "qifurcated"], include=include, exclude=exclude, strict=True
     )
     return bif_df
+
+
+# def is_bifurcated(
+#     self,
+#     bifurcation_threshold=60,
+#     qifurcation_threshold=50,
+#     trim_window: int = 2,
+#     trim_savgol_window: int = 9,
+#     trim_savgol_k: int = 1,
+#     include=None,
+#     exclude=None,
+#     recalc=False,
+#     max_workers=1,
+#     ex=None,
+# ):
+#     """
+#     Determine if a detector is bifurcated or has a high quasiparticle nonlinearity using the angle of the maximally seperated points in IQ space
+
+
+#     """
+
+#     # Get maximally distant points in IQ space
+#     # ----------------------------------------
+#     self.IQ_max_dist(
+#         diff_savgol_window=1,
+#         trim_window=trim_window,
+#         trim_savgol_window=trim_savgol_window,
+#         trim_savgol_k=trim_savgol_k,
+#         include=include,
+#         exclude=exclude,
+#         recalc=recalc,
+#         max_workers=max_workers,
+#         ex=ex,
+#     )
+
+#     # Fit IQ circle to get radius
+#     # ---------------------------
+#     self.IQ_circle_fit(
+#         prefix="tail_trim_unwind_rotate",
+#         include=include,
+#         exclude=exclude,
+#         recalc=recalc,
+#         max_workers=max_workers,
+#         ex=ex,
+#     )
+
+#     # Get frequency corresponding to the |S_21| minimum
+#     # -------------------------------------------------
+#     self.mag_min(include=include, exclude=exclude, recalc=recalc)
+
+#     include_subset = ccat_df.check_properties(
+#         self, "bifurcated", include=include, exclude=exclude, recalc=recalc
+#     )
+
+#     added_cols = [
+#         "bifurcated",
+#         "qifurcated",
+#         "sin_half_max_IQ_angle",
+#         "chord_length_ratio",
+#         "max_IQ_angle_rad",
+#         "max_IQ_angle_deg",
+#     ]
+#     if not len(include_subset) == 0:
+#         df = self.get_properties(
+#             [
+#                 "max_IQ_dist",
+#                 "max_IQ_dist_f",
+#                 "max_IQ_dist_adj_f",
+#                 "circle_fit_tail_trim_unwind_rotate_R",
+#                 "min_mag_f",
+#             ],
+#             include=include_subset,
+#             strict=True,
+#         )
+
+#         bif_df = (
+#             df.lazy()
+#             .with_columns(
+#                 (
+#                     0.5
+#                     * (
+#                         pl.col("max_IQ_dist")
+#                         / pl.col("circle_fit_tail_trim_unwind_rotate_R")
+#                     )
+#                 ).alias("sin_half_max_IQ_angle"),
+#                 (
+#                     0.5
+#                     * (
+#                         4
+#                         - (
+#                             pl.col("max_IQ_dist")
+#                             / pl.col("circle_fit_tail_trim_unwind_rotate_R")
+#                         )
+#                         ** 2
+#                     ).sqrt()
+#                 ).alias("chord_length_ratio"),
+#             )
+#             .with_columns(
+#                 (2 * pl.col("sin_half_max_IQ_angle").arcsin()).alias("max_IQ_angle_rad")
+#             )
+#             .with_columns(
+#                 ((180 / np.pi) * pl.col("max_IQ_angle_rad")).alias("max_IQ_angle_deg")
+#             )
+#             .with_columns(
+#                 (
+#                     (pl.col("max_IQ_angle_deg") >= bifurcation_threshold)
+#                     & (pl.col("max_IQ_dist_adj_f") < pl.col("min_mag_f"))
+#                 ).alias("bifurcated"),
+#                 (
+#                     (pl.col("max_IQ_angle_deg") >= qifurcation_threshold)
+#                     & (pl.col("max_IQ_dist_f") > pl.col("min_mag_f"))
+#                 ).alias("qifurcated"),
+#             )
+#             .select(["det"] + added_cols)
+#             .collect()
+#         )
+#         shared_cols = added_cols if "bifurcated" in self._properties_df.schema else []
+#         self._properties_df = ccat_df.coalesce_join(
+#             self.properties, bif_df, "det", shared_cols
+#         )
+
+#     bif_df = self.get_properties(
+#         ["bifurcated", "qifurcated"], include=include, exclude=exclude, strict=True
+#     )
+#     return bif_df

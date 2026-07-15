@@ -688,8 +688,8 @@ class Timestream(Data):
 
     def psd(
         self,
+        col_name: str, 
         prefix: str | list[str] = "",
-        col_name: str = "phase",
         window="hann",
         nperseg=None,
         detrend=False,
@@ -763,6 +763,88 @@ class Timestream(Data):
             include=include,
             exclude=exclude,
         )
+
+    def psd_trim(self,
+                 col_name: str,
+                 prefix: str | list[str] = "",
+                 low_f = 0, 
+                 high_f = 10000,
+                 name='',
+                 include=None,
+                 exclude=None,
+                 recalc=False
+                 ):
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == col_name:
+                enum_key = key
+                break
+
+        if enum_key is None:
+            error = f"Could not find column '{col_name}'. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ['sample', enum_key],
+            prefix,
+            ['trim', 'power_spectral_density', 'power_spectral_density_frequency'],
+            self.analysis_cfg,
+            no_prefix=['sample']
+        )
+        num_prefix = len(name_enums)
+
+        low_f = ccat_df.check_args(low_f, num_prefix, float)
+        high_f = ccat_df.check_args(high_f, num_prefix, float)
+
+        low_inds, up_inds = [None]*num_prefix, [None]*num_prefix
+        for i, (name_enum, prefix_enum, lf, hf) in enumerate(zip(name_enums, prefix_enums, low_f, high_f)):
+            sample_col, data_col, f_col = (name_enum.SAMPLE.value, 
+                                          f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{name_enum[enum_key.upper()].value}",
+                                          f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}_{name_enum[enum_key.upper()].value}")
+            low_index_col, up_index_col = (f"{name}{'_' if name else ''}{prefix_enum.TRIM.value}_{data_col}_lower_{sample_col}",
+                                           f"{name}{'_' if name else ''}{prefix_enum.TRIM.value}_{data_col}_upper_{sample_col}")
+            include_subset = ccat_df.check_properties(
+                self,
+                low_index_col,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+            )
+            if not len(include_subset) == 0:
+                index_df = (self.get_data([sample_col, f_col], strict=True, include=include_subset)
+                                .unpivot(index=sample_col,
+                                    variable_name="det",
+                                    value_name=f_col)
+                                .lazy()
+                                .with_columns(pl.col("det").str.strip_prefix(f"{f_col}_").cast(pl.Int32))
+                                .filter(pl.col(f_col).is_between(lf, hf))
+                                .with_columns(pl.col(sample_col).get(pl.col(f_col).arg_min().over('det')).alias(low_index_col),
+                                              pl.col(sample_col).get(pl.col(f_col).arg_max().over('det')).alias(up_index_col))   
+                                .select('det', low_index_col, up_index_col)
+                                .unique()
+                                .collect()
+                            )
+                shared_cols = [low_index_col, up_index_col] if low_index_col in self._properties_df.schema else []
+                self._properties_df = ccat_df.coalesce_join(
+                    self._properties_df,
+                    index_df,
+                    "det",
+                    shared_cols,
+                )
+            low_inds[i], up_inds[i] = self.get_properties([low_index_col, up_index_col], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
+        
+        if isinstance(prefix, str):
+            prefix = [prefix]
+
+        return self.trim(col_name=col_name,
+                         prefix=[f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{pre}" for prefix_enum, pre in zip(prefix_enums, prefix)],
+                         lower_index=low_inds,
+                         upper_index=up_inds,
+                         name=name,
+                         include=include,
+                         exclude=exclude,
+                         recalc=recalc)
 
     def fft(
         self,
@@ -1058,6 +1140,7 @@ class Timestream(Data):
                 if not original_g3_root[-1] == "/":
                     original_g3_root += "/"
 
+                print(original_g3_root)
                 with open(path, "r") as file:
                     g3_files += file.readlines()
                     g3_files = [
@@ -1067,7 +1150,6 @@ class Timestream(Data):
                 break  # If user specifies multiple txt files only load the first one since there can only be one txt file per timestream
             else:
                 g3_files += [path]
-
         # Do initial pass through of frames in G3 file without fully loading the data to:
         # 1. Aggregate frames from different G3 files into one list
         # 2. Filter out frames that do not contain timestream data

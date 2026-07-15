@@ -170,7 +170,8 @@ class Sweep(Data):
             )
             if area_df is not None:
                 df = df.join(area_df, on="det", how="left")
-
+        else:
+            col_dict["x"], col_dict["y"] = df.select(pl.exclude(by, "sample", "tone")).columns
         if not return_fig:
             return df, by
 

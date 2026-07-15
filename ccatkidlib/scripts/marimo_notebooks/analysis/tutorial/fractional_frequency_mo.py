@@ -1,10 +1,7 @@
 import marimo
 
-__generated_with = "0.23.2"
-app = marimo.App(
-    width="columns",
-    layout_file="layouts/fractional_frequency_mo.slides.json",
-)
+__generated_with = "0.23.10"
+app = marimo.App(width="columns")
 
 
 @app.cell(column=0, hide_code=True)
@@ -170,7 +167,7 @@ def _(
     _bounds = 1
     det.phase_spline(
         prefix=mismatch_prefix,
-        phase_low=-_min_phase - _bounds,
+        phase_low=_min_phase - _bounds,
         phase_up=_max_phase + _bounds,
         k=2,
         max_workers=phase_spline_workers_selector.value,
@@ -182,26 +179,117 @@ def _(
 
 
 @app.cell
+def _(PREFIX, det, mismatch_prefix, mo, routines, spline_calculated):
+    mo.stop(not spline_calculated)
+
+    routines.IQ_noise(det, prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate')
+    noise_prefix = f"{PREFIX['isolate_readout_noise']}_{PREFIX['rotate']}_{mismatch_prefix}"
+    det.stream.phase(prefix=noise_prefix)
+    noise_rotated = True
+    return noise_prefix, noise_rotated
+
+
+@app.cell
 def _(
     det,
     mismatch_prefix,
     mo,
+    noise_prefix,
+    noise_rotated,
     phase_spline_workers_selector,
-    spline_calculated,
 ):
-    mo.stop(not spline_calculated)
+    mo.stop(not noise_rotated)
 
     det.phase_to_f(
-        prefix=mismatch_prefix,
+        prefix=[mismatch_prefix, noise_prefix],
+        spline_prefix=mismatch_prefix,
         max_workers=phase_spline_workers_selector.value,
         recalc=True,
     )
 
     det.frac_f(
-        prefix=mismatch_prefix,
+        prefix=[mismatch_prefix, noise_prefix],
         recalc=True,
     )
     return
+
+
+@app.cell
+def _(det):
+    _tone = 10
+    (det.stream.stream_plot(col_name='ff', prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', time_col='zt', include=_tone, datashade=False)
+    *det.stream.stream_plot(col_name='ff', prefix='readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', time_col='zt', include=_tone, datashade=False))
+    return
+
+
+@app.cell
+def _(det):
+    _tone = 10
+    (det.stream.IQ_plot(prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone, datashade=False)
+    *det.stream.IQ_plot(prefix='readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone, datashade=False))
+    return
+
+
+@app.cell
+def _(det):
+    det.stream.psd(col_name='ff', prefix=['mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 'readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'], nperseg=512, recalc=True)
+    return
+
+
+@app.cell
+def _(det, hv, np):
+    _f = np.linspace(0.5, 200, 1000)
+    _l = 1e-8*_f**-1/2
+    _tone = 162
+    (det.stream.psd_plot(col_name='ff', prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone)*
+     det.stream.plot(x_dim='ff', y_dim='ff', x_prefix='psd_f_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', y_prefix='white_noise_trim_psd_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone, datashade=False, logx=True, logy=True)*
+    det.stream.psd_plot(col_name='ff', prefix='readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone)*hv.Curve((_f, _l))).opts(aspect=2, fig_size=250)
+    return
+
+
+@app.cell
+def _(det, properties_routines):
+    properties_routines.fwhm(det.targ, mag_prefix='savgol0', recalc=True)
+    return
+
+
+@app.cell
+def _(det):
+    det.frac_f(prefix='', data='targ', ref_f='mid_savgol0_FWHM_f')[0]
+    return
+
+
+@app.cell
+def _(det):
+    det.targ.plot(x_dim='ff', y_dim='mag', ms=1, linewidth=0)
+    return
+
+
+@app.cell
+def _(det):
+    det.targ.scale('f', scale=1/1e6, name='MHz', recalc=True)
+    return
+
+
+@app.cell
+def _(det, pl):
+    det.stream.get_data(['sample', 'psd_f_mismatch.*_ff']).unpivot(index='sample', value_name='frequency', variable_name='det').with_columns(pl.col('det').str.strip_prefix(f'psd_f_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_ff_').cast(pl.Int32)).filter(pl.col('frequency').is_between(200, 250)).with_columns(pl.col('sample').get(pl.col('frequency').arg_min().over('det')).alias('low_index'),
+                       pl.col('sample').get(pl.col('frequency').arg_max()).alias('upper_index')).select('det', 'low_index', 'upper_index').unique().sort('det')
+    return
+
+
+@app.cell
+def _(det):
+    det.stream.psd_trim(col_name='ff', prefix=['mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 'readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'], low_f=100, name='white_noise', recalc=True)
+    return
+
+
+app._unparsable_cell(
+    r"""
+    properties_routines.agg(det.stream, 'median', col_name='ff', prefix='white_noise_trim_psd_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'])
+    """,
+    name="_"
+)
 
 
 @app.cell
@@ -234,7 +322,7 @@ def _():
     import numpy as np
     import polars as pl
 
-    return (pl,)
+    return np, pl
 
 
 @app.cell
@@ -473,11 +561,6 @@ def _(det, mo):
         label="Tone",
     )
     return (tone_selector,)
-
-
-@app.cell
-def _():
-    return
 
 
 @app.function(column=3)

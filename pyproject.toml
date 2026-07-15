@@ -43,10 +43,10 @@ classifiers = [
 Homepage = "https://github.com/ccatobs/ccatkidlib"
 
 [build-system]
-requires = ["setuptools>=80.0", "wheel", "setuptools_scm[toml]>=9.2"]
+requires = ["setuptools>=61.0", "wheel", "setuptools_scm[toml]>=6.2"]
 build-backend = 'setuptools.build_meta'
 
 [tool.setuptools_scm]
-version_file = "ccatkidlib/_version.py"
+write_to = "ccatkidlib/_version.py"
 
 [tool.setuptools.packages.find]

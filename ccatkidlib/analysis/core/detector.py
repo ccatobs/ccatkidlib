@@ -443,9 +443,9 @@ class Detector:
             [
                 self,
                 nonlin,
-                asymm,
-                fix_cable,
-                fix_thetaQ,
+                asym,
+                cable,
+                thetaQ,
                 ccat_mp.check_max_workers(max_workers),
                 ex,
             ]
@@ -973,7 +973,7 @@ class Detector:
             data_obj.IQ_scale(
                 prefix=prefix,
                 scale=scale,
-                name=[prefix_enum.REMOVE_CABLE.value for prefix_enum in prefix_enums],
+                name=[prefix_enum.NORMALIZE.value for prefix_enum in prefix_enums],
                 include=include,
                 exclude=exclude,
                 recalc=recalc,
@@ -1063,7 +1063,7 @@ class Detector:
                     .T[1:4]
                 )
 
-            lower_bounds[i] = (HM_mid - (HM_mid - HM_low) * win).astype(int)
+            lower_bounds[i] = np.maximum((HM_mid - (HM_mid - HM_low) * win).astype(int), 0)
             upper_bounds[i] = (HM_mid + (HM_high - HM_mid) * win).astype(int)
 
         self.targ.IQ_trim(
@@ -1207,8 +1207,8 @@ class Detector:
                     if properties_mag_col in self._properties_df.schema
                     else []
                 )
-                self._properties_df = ccat_df.coalesce_join(
-                    self._properties_df,
+                self.targ._properties_df = ccat_df.coalesce_join(
+                    self.targ._properties_df,
                     circle_fit_df,
                     on="det",
                     shared_cols=shared_cols,
@@ -1454,12 +1454,13 @@ class Detector:
             col_name=col_name,
             include=include,
             exclude=exclude,
+            strict=True
         )
 
     def phase_to_f(
         self,
-        prefix: str
-        | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
+        prefix: str | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
+        spline_prefix: str | list[str] = '',
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -1472,7 +1473,7 @@ class Detector:
 
         Args:
             prefix (str | list[str]): Prefix of phase data to convert to frequency
-            spline_col (str): Prefix of phase data used to construct spline
+            spline_prefix (str): Prefix of phase data used to construct spline
             phase_bounds (float): Amount to add to min and max timestream phase to determine phase vs. frequency spline bounds (i.e., ``phase_low = min_stream_phase - phase_bounds`` & ``phase_up = max_stream_phase + phase_bounds``)
             k (int): Order of polynomials to use for phase vs. frequency spline
             include (int | list[int] | None, optional): Detector(s) for which to perform calculation
@@ -1480,41 +1481,49 @@ class Detector:
             recalc (bool): Whether to recalculate if data is already in ``data`` DataFrame. Defaults to False
             max_workers (int): Number of processor cores to use for calculation. Defaults to 1.
         """
-
-        if isinstance(prefix, str):
-            prefix = [prefix]
+        if not spline_prefix: spline_prefix = prefix
 
         name_enums, prefix_enums = ccat_df.create_enums(
-            ["spline", "frequency", "phase"],
+            ["frequency", "phase"],
             prefix,
+            [],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+
+        num_prefix = len(name_enums)
+        spline_prefix = ccat_df.check_args(spline_prefix, num_prefix, str)
+
+        spline_name_enums, spline_prefix_enums = ccat_df.create_enums(
+            ["spline", "frequency", "phase"],
+            spline_prefix,
             [],
             self.analysis_cfg,
             no_prefix=["spline"],
         )
 
-        num_prefix = len(name_enums)
         spline_dict = self.stream.spline_dict
         y_to_x_spline = [
             self.get_properties(
-                col_name=f"{name_enum.PHASE.value}_to_{name_enum.FREQUENCY.value.split('_')[-1]}_{name_enum.SPLINE.value}",
+                col_name=f"{spline_name_enum.PHASE.value}_to_{spline_name_enum.FREQUENCY.value.split('_')[-1]}_{spline_name_enum.SPLINE.value}",
                 include=include,
                 exclude=exclude,
                 strict=True,
             )
             .to_numpy()
             .T[1]
-            for name_enum in name_enums
+            for spline_name_enum in spline_name_enums
         ]
         x_to_y_spline = [
             self.get_properties(
-                col_name=f"{name_enum.FREQUENCY.value.split('_')[-1]}_to_{name_enum.PHASE.value}_{name_enum.SPLINE.value}",
+                col_name=f"{spline_name_enum.FREQUENCY.value.split('_')[-1]}_to_{spline_name_enum.PHASE.value}_{spline_name_enum.SPLINE.value}",
                 include=include,
                 exclude=exclude,
                 strict=True,
             )
             .to_numpy()
             .T[1]
-            for name_enum in name_enums
+            for spline_name_enum in spline_name_enums
         ]
 
         args = [
@@ -1545,6 +1554,7 @@ class Detector:
             col_name=col_name,
             include=include,
             exclude=exclude,
+            strict=True
         )
 
     def frac_f(
@@ -1552,6 +1562,7 @@ class Detector:
         prefix: str
         | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
         ref_f: str | list[float] = "",
+        data='timestream',
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -1560,6 +1571,7 @@ class Detector:
         """
         Convert timestream frequency data to fractional frequency shift
         """
+        if not ref_f: ref_f = self.analysis_cfg['convention']['name']['tone_frequency']
 
         name_enums, prefix_enums = ccat_df.create_enums(
             ["frequency", "fractional_frequency"],
@@ -1568,6 +1580,14 @@ class Detector:
             self.analysis_cfg,
             no_prefix=[],
         )
+
+        data_objs, _ = self._get_data_obj(data)
+        if not data_objs:
+            error = (
+                f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
+            )
+            log.log("ERROR", error)
+            raise ValueError(error)
 
         num_prefix = len(name_enums)
         ref_f = ccat_df.check_args(ref_f, num_prefix, str)
@@ -1582,21 +1602,27 @@ class Detector:
                     .T[1]
                 )  # Get reference frequencies from .properties DataFrame
 
-        args = [[f] for f in ref_f]
-        self.stream.transform(
-            [Detector._calc_frac_f] * num_prefix,
-            *args,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            col_enum=name_enums,
-            prefix_enum=prefix_enums,
-        )
-        return self.stream.get_data(
-            col_name=[name_enum.FRACTIONAL_FREQUENCY.value for name_enum in name_enums],
-            include=include,
-            exclude=exclude,
-        )
+        frac_f_dfs, args = [], [[f] for f in ref_f]
+        for data_obj in data_objs:
+            data_obj.transform(
+                [Detector._calc_frac_f] * num_prefix,
+                *args,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+                col_enum=name_enums,
+                prefix_enum=prefix_enums,
+            )
+
+            frac_f_dfs.append(
+                data_obj.get_data(
+                    col_name=[name_enum.FRACTIONAL_FREQUENCY.value for name_enum in name_enums],
+                    include=include,
+                    exclude=exclude,
+                    strict=True
+                    ))
+
+        return frac_f_dfs
 
     # ==================#
     # Analysis Methods #
@@ -1622,14 +1648,14 @@ class Detector:
                 future_to_batch = {
                     executor.submit(
                         ccat_mp.process_batches,
-                        resonator_model_v3.nonlinear_fit,  # noqa: F821
+                        resonator_model_v3.full_fit,  # noqa: F821
                         data[i][0],
                         data[i][1],
                         data[i][2],
                         nonlinear=nonlinear[inds],
                         asymm=asymm[inds],
                         fix_cable=fix_cable[inds],
-                        fix_thetaQ=fix_thetaQ[inds],
+                        #fix_thetaQ=fix_thetaQ[inds],
                     ): (i, all_tones[inds])
                     for i, inds in enumerate(calc_ind)
                 }

@@ -18,7 +18,7 @@ version_tuple: tuple[int | str, ...]
 commit_id: str | None
 __commit_id__: str | None
 
-__version__ = version = '0.1.dev152+ga486cbea9.d20260608'
-__version_tuple__ = version_tuple = (0, 1, 'dev152', 'ga486cbea9.d20260608')
+__version__ = version = '0.1.dev154+gb8d92a0e6.d20260622'
+__version_tuple__ = version_tuple = (0, 1, 'dev154', 'gb8d92a0e6.d20260622')
 
-__commit_id__ = commit_id = 'ga486cbea9'
+__commit_id__ = commit_id = 'gb8d92a0e6'

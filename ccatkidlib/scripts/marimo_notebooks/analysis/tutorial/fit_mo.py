@@ -1,7 +1,7 @@
 import marimo
 
-__generated_with = "0.23.2"
-app = marimo.App(width="columns", layout_file="layouts/fit_mo.slides.json")
+__generated_with = "0.23.10"
+app = marimo.App(width="columns")
 
 
 @app.cell(column=0, hide_code=True)
@@ -145,13 +145,26 @@ def _(mismatch_plots_dashboard, mo):
 
 
 @app.cell
+def _(det):
+    det.targ.properties
+    return
+
+
+@app.cell
+def _():
+    return
+
+
+@app.cell
 def _(PREFIX, det, mismatch_prefix, phase_fit_workers_selector):
     _circle_fit_prefix = f"{PREFIX['IQ_circle_fit']}_{PREFIX['trim_tail']}_{PREFIX['trim']}_{PREFIX['remove_cable']}_{PREFIX['rotate']}"
     det.phase_fit(
         prefix=mismatch_prefix,
         circle_fit_prefix=_circle_fit_prefix,
         nonlinear=True,
+        window=1.5,
         max_workers=phase_fit_workers_selector.value,
+        recalc=True
     )
     return
 

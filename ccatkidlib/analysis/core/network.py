@@ -34,7 +34,7 @@ class Network:
         dets: int | list[int] = -1,
         noise_tones: int | list[int] | None = None,
         cable_delay: float | None = None,
-        detectors: list[ccatkidlib.analysis.core.detector.Detector] | None = None,
+        detectors: list[Detector] | None = None,
         sess_ids: str | list[str] | None = None,
         include_streams: bool = True,
         include_targs: bool = False,
