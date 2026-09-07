@@ -257,7 +257,7 @@ def timestream_angle(stream, prefix="", include=None, exclude=None, recalc=False
         strict=True,
     )
 
-def fwhm(targ, mag_prefix="", mean_points=10, include=None, exclude=None, recalc=False):
+def fwhm(targ, mag_prefix="", mean_points=10, peak=False, include=None, exclude=None, recalc=False):
     "TODO: Use min/max values of phase instead potentially. Should be accurate as long as no large impedance mismatch"
     name_enums, prefix_enums = ccat_df.create_enums(
         [
@@ -301,11 +301,12 @@ def fwhm(targ, mag_prefix="", mean_points=10, include=None, exclude=None, recalc
                     .unpivot(variable_name='tmp', value_name=f_col)
                     .drop('tmp'))
 
-        mag_df = pl.concat([mag_df, f_df], how='horizontal').lazy().sort(mag_col, descending=True)
+        mag_df = pl.concat([mag_df, f_df], how='horizontal').lazy().sort(mag_col, descending=not peak)
 
         # Get minimum magnitude values for each detector and corresponding sample numbers
+        expr = pl.col(mag_col).max() if peak else pl.col(mag_col).min()
         min_df = (
-            mag_df.filter((pl.col(mag_col) == pl.col(mag_col).min()).over("det"))
+            mag_df.filter((pl.col(mag_col) == expr).over("det"))
             .rename(
                 {
                     sample_col: f"min_{sample_col}",
@@ -436,8 +437,6 @@ def is_bifurcated(
 
     det.targ.diff(col_name='lw', prefix=f"Q_scale_tail_trim_anchor_shift_{_mismatch_prefix}")
     det.targ.diff(col_name='lw', prefix=f"FWHM_scale_tail_trim_anchor_shift_{_mismatch_prefix}")
-
-
 
     # Get frequency corresponding to the |S_21| minimum
     # -------------------------------------------------

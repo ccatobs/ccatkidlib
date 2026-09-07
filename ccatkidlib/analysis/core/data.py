@@ -31,6 +31,7 @@ import ccatkidlib.utils as utils
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
+import ccatkidlib.analysis.fit.fit as ccat_fit
 
 from concurrent.futures import ProcessPoolExecutor
 
@@ -626,6 +627,7 @@ class Data:
         lower_index: int | list[int] | list[list[int]] = 0,
         upper_index: int | list[int] | list[list[int]] = -1,
         name: str = "",
+        invert = False,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -654,6 +656,7 @@ class Data:
                    lower_index=lower_index,
                    upper_index=upper_index,
                    name=name,
+                   invert=invert,
                    include=include,
                    exclude=exclude,
                    recalc=recalc)
@@ -663,6 +666,7 @@ class Data:
                    lower_index=lower_index,
                    upper_index=upper_index,
                    name=name,
+                   invert=invert,
                    include=include,
                    exclude=exclude,
                    recalc=recalc)
@@ -794,6 +798,7 @@ class Data:
              lower_index = 0,
              upper_index = -1, 
              name: str = "",
+             invert: bool = False,
              include: int | list[int] | None = None,
              exclude: int | list[int] | None = None,
              recalc: bool = False, ):
@@ -831,6 +836,7 @@ class Data:
         num_prefix = len(name_enums)
         lower_index = ccat_df.check_args(lower_index, num_prefix, int)
         upper_index = ccat_df.check_args(upper_index, num_prefix, int)
+        invert = ccat_df.check_args(invert, num_prefix, bool)
         name = ccat_df.check_args(name, num_prefix, str)
 
         prefix_enums = [
@@ -843,7 +849,7 @@ class Data:
         lower_index = _neg_indexing(lower_index, df_height)
         upper_index = _neg_indexing(upper_index, df_height)
 
-        args = [[low, up, enum_key] for low, up in zip(lower_index, upper_index)]
+        args = [[low, up, inv, enum_key] for low, up, inv in zip(lower_index, upper_index, invert)]
         self.transform(
             [Data._calc_trim] * num_prefix,
             *args,
@@ -1008,6 +1014,93 @@ class Data:
             exclude=exclude,
         )
 
+    def linear_fit(
+        self,
+        x_col_name: str,
+        y_col_name: str,
+        x_prefix: str | list[str] = "",
+        y_prefix: str | list[str] = "",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        max_workers: int = 1,
+        ex: ProcessPoolExecutor | None = None,
+    ) -> pl.DataFrame:
+        """
+        Apply Savitzky–Golay filter to specified data column
+
+        .. seealso:: The data is filtered using *SciPy's* `savgol_filter function <https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html>`_
+
+        Args:
+            col_name: Data column name without prefix or |tone| suffix (e.g., **mag**, **phase**, etc.)
+            prefix: Prefix(es) of data column
+            window: The length of the filter window. Can specify a list of windows for individual tones
+            k: Order of polynomial used to fit the data. Can specify a list of orders for individual tones
+            deriv: The order of derivative to compute. Can specify a list of orders for inidividual tones
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if Savitzky–Golay filtered data column already exists
+            max_workers: Max number of CPU cores to use for multiprocessing. Only used if no ``ex`` provided.
+            ex: *concurrent.futures* **ProcessPoolExecutor** to use for multiprocessing
+        Returns:
+            *Polars* **DataFrame** with Savitzky–Golay filtered data
+        """
+        x_enum_key, y_enum_key, mapping = None, None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == x_col_name:
+                x_enum_key = key
+            if val == y_col_name:
+                y_enum_key = key
+            if not (x_enum_key is None or y_enum_key is None): break
+
+        if x_enum_key is None or y_enum_key is None:
+            error = f"Could not find column {x_col_name} and/or {y_col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        x_name_enums, prefix_enums = ccat_df.create_enums(
+            [x_enum_key, 'linear_fit_slope', 'linear_fit_intercept'],
+            x_prefix,
+            ["linear_fit"],
+            self.analysis_cfg,
+            no_prefix=['linear_fit_slope', 'linear_fit_intercept']
+        )
+
+        y_name_enums, _ = ccat_df.create_enums(
+            [y_enum_key],
+            y_prefix,
+            ["linear_fit"],
+            self.analysis_cfg,
+        )
+
+        if not (num_prefix := len(x_name_enums)) == len(y_name_enums):
+            error = f"Number of prefixes must match for the x and y columns."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        args = [[x_enum_key, self, ccat_mp.check_max_workers(max_workers), ex]]*num_prefix
+        self.transform(
+            [Data._calc_linear_fit] * num_prefix,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=list(zip(x_name_enums, y_name_enums)),
+            prefix_enum=prefix_enums,
+        )
+
+        col_name = [
+            f"{prefix_enum.LINEAR_FIT.value}_{y_name_enum[y_enum_key.upper()].value}"
+            for y_name_enum, prefix_enum in zip(y_name_enums, prefix_enums)
+        ]
+
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_name])
+
+        return self.get_data(
+            col_name=col_name,
+            include=include,
+            exclude=exclude,
+        )
     # ==================#
     # Analysis Methods #
     # ==================#
@@ -1306,7 +1399,7 @@ class Data:
                     ccat_df.add_tone(Q_col, tone, padding),
                 )
                 exprs.append(
-                    (pl.col(Q_tone_col)/(-2*pl.col(I_tone_col))).alias(
+                    ((pl.col(Q_tone_col)/(-2*pl.col(I_tone_col)))/((1 + (pl.col(Q_tone_col)/pl.col(I_tone_col))**2)*pl.col(I_tone_col))                              ).alias(
                         linewidth_tone_col
                     )
                 )
@@ -1435,10 +1528,10 @@ class Data:
         prefix_enum=None,
     ) -> list[pl.Expr]:
         """ """
-        if not len(args) == 3:
-            log.log("ERROR", "'lower_index', 'upper_index', and 'enum_key' are required arguments")
-        lower_indicies, upper_indicies, enum_key = args
-        enum_key = enum_key[0]
+        if not len(args) == 4:
+            log.log("ERROR", "'lower_index', 'upper_index', 'invert', and 'enum_key' are required arguments")
+        lower_indicies, upper_indicies, invert, enum_key = args
+        invert, enum_key = invert[0], enum_key[0]
 
         if tones is None:
             tones = [tones]
@@ -1449,6 +1542,11 @@ class Data:
             prefix_enum.TRIM.value,
         )
 
+        if invert:
+            then_expr = pl.lit(None)
+        else:
+            oth_expr = pl.lit(None)
+
         exprs = []
         for lower_index, upper_index, tone in zip(
             lower_indicies, upper_indicies, tones
@@ -1458,14 +1556,19 @@ class Data:
                 not in schema
                 or recalc
             ):
+                if invert:
+                    oth_expr = pl.col(data_tone_col)
+                else:
+                    then_expr = pl.col(data_tone_col)
+
                 exprs.append(
                     pl.when(
                         pl.col(sample_col).is_between(
                             pl.lit(lower_index), pl.lit(upper_index), closed="none"
                         )
                     )
-                    .then(pl.col(data_tone_col))
-                    .otherwise(pl.lit(None))
+                    .then(then_expr)
+                    .otherwise(oth_expr)
                     .name.prefix(f"{trim_prefix}_")
                 )
         return exprs
@@ -1579,6 +1682,94 @@ class Data:
         )
         return expr
 
+    @staticmethod
+    def _calc_linear_fit(
+        schema: pl.Schema,
+        *args,
+        tones: list[int] | None = None,
+        padding: int = 4,
+        recalc: bool = False,
+        col_enum=None,
+        prefix_enum=None,
+    ) -> pl.Expr:
+        def _mp_linear_fit(df):
+            data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {
+                    executor.submit(
+                        ccat_mp.process_batches,
+                        ccat_fit.linear_fit,
+                        data[i][0],
+                        data[i][1]
+                    ): all_tones[inds]
+                    for i, inds in enumerate(calc_ind)
+                }
+
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tones = future_to_batch[future]
+                    fit_cols = future.result()
+                    for tone, fit_col in zip(tones, fit_cols):
+                        if isinstance(fit_col, Exception):
+                            log.log(
+                                "WARNING",
+                                "Linear fit for tone %s failed with exception: %s",
+                                tone,
+                                fit_col,
+                            )
+                            fit_data = np.full(df.len(), np.nan)
+                            properties_dict = {}
+                        else:
+                            m, b, fit_data = fit_col
+                            properties_dict = {f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_slope}": m, 
+                                               f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_intercept}": b}
+
+                        obj._properties[ccat_df.add_tone("det", tone, padding)] = (
+                            properties_dict
+                        )
+
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            fit_data
+                        )
+            return ccat_mp.package_results(results_dict)
+
+        if not len(args) == 4:
+            log.log(
+                "ERROR", "max_workers, and ex are required arguments."
+            )
+
+        x_key, obj, max_workers, ex = np.array(args)
+        x_key, obj, max_workers, ex = (
+            x_key[0],
+            obj[0],
+            int(max_workers[0]),
+            ex[0],
+        )        
+        all_tones = np.array(tones)
+
+        x_name_enum, y_name_enum = col_enum
+
+        x_data_col, y_data_col, linear_fit_prefix = (
+            x_name_enum[x_key.upper()].value,
+            [name for name in y_name_enum][0].value,
+            prefix_enum.LINEAR_FIT.value,
+        )
+
+        linear_fit_slope, linear_fit_intercept = x_name_enum.LINEAR_FIT_SLOPE.value, x_name_enum.LINEAR_FIT_INTERCEPT.value
+
+        return_col, return_type = [f"{linear_fit_prefix}_{y_data_col}"], [pl.Float64]
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
+            _mp_linear_fit,
+            tones,
+            schema,
+            input_col=[x_data_col, y_data_col],
+            return_col=return_col,
+            return_type=return_type,
+            padding=padding,
+            max_workers=max_workers,
+            recalc=recalc,
+        )
+        return expr
     # ==========================#
     # Lazily Loaded Attributes #
     # ==========================#

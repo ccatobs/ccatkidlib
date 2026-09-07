@@ -17,20 +17,26 @@ warnings.filterwarnings("ignore")
 
 @njit(parallel=True, cache=True)
 def linear_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    """Calculate 2D linear regression for given x and y np.arrays by solving matrix equation
-
+    """Calculate 2D linear regression using least squares
+    
     Args:
         x (np.ndarray): Array of independent variable data
         y (np.ndarray): Array of dependent variable data
     Returns:
-        tuple[int, int]: Slope, intercept
+        tuple[float, float]: Slope, intercept
     """
-    A = np.ones((2, x.size))
-    A[0] = x
 
-    m, b = np.linalg.solve(A @ A.T, A @ y.T)
-    return m, b
+    mask = ~np.isnan(x) & ~np.isnan(y)
 
+    # Stack x values and ones into design matrix
+    x_masked = x[mask]
+    A = np.column_stack((x_masked, np.ones(x_masked.size)))
+    
+    # Use lstsq for better numerical stability
+    result = np.linalg.lstsq(A, y[mask])
+    m, b = result[0]
+    
+    return m, b, m*x + b
 
 def circle_fit(
     x: np.ndarray,
@@ -163,7 +169,6 @@ def circle_fit(
     else:
         return x_c - shift_x, y_c - shift_y, R
 
-
 def init_circle_fit(x, y):
     @njit(cache=True)
     def _moments(x, y):
@@ -201,11 +206,9 @@ def init_circle_fit(x, y):
     R = 1 / (2 * np.abs(A))
     return x, y, R
 
-
 # ===============#
 # Interpolation #
 # ===============#
-
 
 def y_to_x_spline(
     x: np.ndarray, y: np.ndarray, k: int = 3, y_low=None, y_up=None
@@ -355,11 +358,14 @@ def phase_fit(
             dist = (I - I_off) ** 2 + (Q - Q_off) ** 2
 
             # Shift resonant frequency using nonlinear term
-            beta *= 1e-8
+            beta *= 1e6
             f_0 = f_0 - beta * dist
 
         x = (f - f_0) / f_0
         return theta_0 + 2 * np.arctan(-2 * Qr * x)
+    
+    mask = ~np.isnan(phase)
+    f, phase = f[mask], phase[mask]
 
     # Unwrap phase
     # ------------
@@ -393,6 +399,7 @@ def phase_fit(
             raise ValueError(
                 "R must be passed as an argument or through params for a nonlinear fit."
             )
+        I, Q = I[mask], Q[mask]
 
     in_params = [param in params for param in ["f_0", "Qr", "theta_0", "beta"]]
     if not all(in_params):
@@ -411,37 +418,25 @@ def phase_fit(
     beta_guess = params["beta"].value
     params["beta"].set(value=0, vary=False)
 
-    if window is not None:
-        f_0, Qr = params["f_0"].value, params["Qr"].value
-        f_win = 0.5 * window * (f_0 / Qr)
-        mask = (f < (f_0 + f_win)) & (f > (f_0 - f_win))
-
     fit = phase_model.fit(
-        phase[mask], params=params, nan_policy="omit", f=f[mask], I=I[mask], Q=Q[mask]
+        phase, params=params, nan_policy="omit", f=f, I=I, Q=Q
     )
     params = fit.params
 
-    if window is not None:
-        f_0, Qr = params["f_0"].value, params["Qr"].value
-        f_win = 0.5 * window * (f_0 / Qr)
-        mask = (f < (f_0 + f_win)) & (f > (f_0 - f_win))
-
     if nonlinear:
+        a_conv = 1e-6*(params["f_0"].value / params["Qr"].value)/ (2 * params["R"].value) ** 2
+
         if beta_guess == 0:
-            beta_guess = (
-                0.1e8
-                * (params["f_0"].value / params["Qr"].value)
-                / (2 * params["R"].value) ** 2
-            )
-        params["beta"].set(value=beta_guess, vary=True)
+            beta_guess = 0.1*a_conv
+        params["beta"].set(value=beta_guess, vary=True, min=-10*a_conv, max=10*a_conv)
 
     fit = phase_model.fit(
-        phase[mask],
+        phase,
         params=params,
         nan_policy="omit",
-        f=f[mask],
-        I=I[mask],
-        Q=Q[mask],
+        f=f,
+        I=I,
+        Q=Q,
         method=method,
     )
     fit.mask = mask
@@ -456,7 +451,6 @@ def phase_fit_al(
     I: np.ndarray | None = None,
     Q: np.ndarray | None = None,
     R: float | None = None,
-    window: float | None = None,
     unwrap_threshold=1.9 * np.pi,
     params: Parameters | None = None,
     nonlinear: bool = False,
@@ -506,11 +500,12 @@ def phase_fit_al(
         theta_0_param = ("theta_0", 0, True, -np.pi, np.pi)
         beta_param = ("beta", 0, True, -1e4, 1e4)
         gamma_param = ("gamma", 0, True, -1e4, 1e4)
+        delta_param = ("delta", 2, True, 2, 10)
 
-        return f_0_param, Qr_param, theta_0_param, beta_param, gamma_param
+        return f_0_param, Qr_param, theta_0_param, beta_param, gamma_param, delta_param
 
     @njit(cache=True)
-    def _phase_fit(f, I, Q, f_0, Qr, theta_0, beta, gamma, R):
+    def _phase_fit(f, I, Q, f_0, Qr, theta_0, beta, gamma, delta, R):
         """Calculates phases for the given frequencies for a nonlinear KID
         Args:
             f (np.ndarray): Array of frequencies (in Hz)
@@ -528,7 +523,7 @@ def phase_fit_al(
 
         f_0s = np.ones(f.size) * f_0
 
-        # Calculate nonlinear correction only if a nonzero beta is provided
+        # Calculate nonlinear correction only if a nonzero beta or gamma is provided
         if not (beta == 0 and gamma == 0):
             # Calculate off resonance I and Q (I_off, Q_off)
             sin = np.sin(theta_0 + np.pi)
@@ -536,17 +531,31 @@ def phase_fit_al(
             I_off, Q_off = R * cos, R * sin
 
             # Calculate distance between arbitrary (I, Q) point and off resonance point (I_off, Q_off)
-            dist = (I - I_off) ** 2 + (Q - Q_off) ** 2
+            dist = np.sqrt((I - I_off) ** 2 + (Q - Q_off) ** 2)**delta
 
             # Shift resonant frequency using nonlinear terms
-            beta *= 1e-8
-            gamma *= 1e-8
+            #f_0 = f_0 - beta * dist
 
-            mask_low, mask_up = f <= f_0,  f > f_0
-            f_0s = f_0s - beta * dist
+            beta *= 1e6
+            gamma *= 1e6
+
+            # Apply smooth step between beta and gamma values
+            num_smooth = 2
+            t = np.linspace(0, 1, 2*num_smooth+1)
+            beta_gamma = (3*t**2 - 2*t**3) * (gamma - beta) + beta 
+
+            f_0_ind = np.argwhere(f <= f_0)[-1][0]
+            low_ind, high_ind = f_0_ind - num_smooth, f_0_ind + num_smooth + 1
+            
+            f_0s = (np.append(np.append(f_0s[:low_ind] + beta * dist[:low_ind], 
+                                        f_0s[low_ind: high_ind] + beta_gamma * dist[low_ind: high_ind]),
+                                        f_0s[high_ind:] + gamma * dist[high_ind:]))
 
         x = (f - f_0s) / f_0s
         return theta_0 + 2 * np.arctan(-2 * Qr * x)
+
+    mask = ~np.isnan(phase)
+    f, phase = f[mask], phase[mask]
 
     # Unwrap phase
     # ------------
@@ -580,8 +589,9 @@ def phase_fit_al(
             raise ValueError(
                 "R must be passed as an argument or through params for a nonlinear fit."
             )
+        I, Q = I[mask], Q[mask]
 
-    in_params = [param in params for param in ["f_0", "Qr", "theta_0", "beta", "gamma"]]
+    in_params = [param in params for param in ["f_0", "Qr", "theta_0", "beta", "gamma", "delta"]]
     if not all(in_params):
         guess_params = _guess_params(f, phase)
 
@@ -595,49 +605,41 @@ def phase_fit_al(
     # --------------------------------
     phase_model = Model(_phase_fit, independent_vars=["f", "I", "Q"])
 
-    beta_guess, gamma_guess = params["beta"].value, params["gamma"].value
+    beta_guess, gamma_guess, delta_guess = params["beta"].value, params["gamma"].value, params["delta"].value
     params["beta"].set(value=0, vary=False)
     params["gamma"].set(value=0, vary=False)
-
-    if window is not None:
-        f_0, Qr = params["f_0"].value, params["Qr"].value
-        f_win = 0.5 * window * (f_0 / Qr)
-        mask = (f < (f_0 + f_win)) & (f > (f_0 - f_win))
+    params['delta'].set(value=2, vary=False)
 
     fit = phase_model.fit(
-        phase[mask], params=params, nan_policy="omit", f=f[mask], I=I[mask], Q=Q[mask]
+        phase, params=params, nan_policy="omit", f=f, I=I, Q=Q
     )
     params = fit.params
 
-    if window is not None:
-        f_0, Qr = params["f_0"].value, params["Qr"].value
-        f_win = 0.5 * window * (f_0 / Qr)
-        mask = (f < (f_0 + f_win)) & (f > (f_0 - f_win))
-
     if nonlinear:
+        params['delta'].set(value=delta_guess, vary=False)
         if beta_guess == 0:
             beta_guess = (
-                1e7
+                0.35e-6
                 * (params["f_0"].value / params["Qr"].value)
-                / (2 * params["R"].value) ** 2
+                / (2 * params["R"].value) ** delta_guess
             )
         params["beta"].set(value=beta_guess, vary=True)
 
         if gamma_guess == 0:
             gamma_guess = (
-                1e7
+                0.35e-6
                 * (params["f_0"].value / params["Qr"].value)
-                / (2 * params["R"].value) ** 2
+                / (2 * params["R"].value) ** delta_guess
             )
         params["gamma"].set(value=gamma_guess, vary=True)
 
     fit = phase_model.fit(
-        phase[mask],
+        phase,
         params=params,
         nan_policy="omit",
-        f=f[mask],
-        I=I[mask],
-        Q=Q[mask],
+        f=f,
+        I=I,
+        Q=Q,
         method=method,
     )
     fit.mask = mask
@@ -645,3 +647,52 @@ def phase_fit_al(
     # Fit model
     # ---------
     return fit
+
+@guvectorize(
+    [(float64[:], float64[:], float64[:], float64, float64[:], float64[:])],
+    "(n),(n),(n),()->(n),(n)", nopython=True
+)
+def dissipation_correction(I, Q, mag, R, I_proj, Q_proj):
+    I_star = -1*(R - (2*mag*R)/(mag+R)) # Point on real axis projection line should pass through
+    m = Q/(I-I_star) # Slope of projection line
+
+    # Coefficients of quadratic equation to determine (I,Q) on projected circle
+    a = 1 + m**2
+    b = -2*(m**2 * I_star)
+    c = (m*I_star)**2 - R ** 2 
+    
+    # Roots of quadratic equation
+    I_proj_pos, I_proj_neg = (-b + np.sqrt(b**2 - 4*a*c))/(2*a), (-b - np.sqrt(b**2 - 4*a*c))/(2*a)
+
+    # Correct point should also be on same side as I relative to I_star
+    mask = (I_proj_neg <= I_star) & (I >= I_star)
+    I_proj[:] = np.where(mask, I_proj_pos, I_proj_neg)
+    
+    # Calculate projected Q from projected I and equation of projection line
+    Q_proj[:] = m*(I_proj-I_star)
+
+@guvectorize(
+    [(float64[:], float64[:], float64, float64, float64[:])],
+    "(n),(n),(),()->(n)", nopython=True
+)
+def linear_frac_f(I, Q, R, Qr, frac_f):
+    # Calculate frac_f solutions from real part (I) equation
+    x_I1 = 1/(2*Qr)*np.sqrt((2*R)/(I + R)-1)
+    x_I2 = -1*x_I1
+    I_arr = np.vstack((x_I1, x_I2, x_I1, x_I2))
+
+    # Calculate frac_f solutions from imag part (Q) equation
+    a, b, c = 4*Q*Qr**2, 4*R*Qr, Q
+    x_Q1, x_Q2 = (-b + np.sqrt(b**2 - 4*a*c))/(2*a), (-b - np.sqrt(b**2 - 4*a*c))/(2*a)
+    Q_arr = np.vstack((x_Q1, x_Q2, x_Q2, x_Q1))
+
+    # Find common solution between both equations
+    x_diff = np.abs(I_arr - Q_arr)
+    ind_array = np.argmin(x_diff, axis=0)
+    x_I, x_Q = np.take_along_axis(I_arr, np.expand_dims(ind_array, axis=0), axis=0)[0], np.take_along_axis(Q_arr, np.expand_dims(ind_array, axis=0), axis=0)[0]
+
+    # Return average of common solution
+    frac_f[:] = (x_I + x_Q)/2
+
+
+

@@ -243,6 +243,7 @@ class Detector:
         # --------------------------------------------------------------------
         self._cable_delay = cable_delay
         self._properties_df = None
+        self.fit_result = {}
 
         log_dir = io.add_dir(
             "log",
@@ -544,7 +545,6 @@ class Detector:
         nonlinear: bool = False,
         method: str = "least_squares",
         params: lmfit.Parameters = None,
-        window: float = 1,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -567,9 +567,13 @@ class Detector:
                 "coupling_quality_factor",
                 "total_quality_factor",
                 "phase_fit_beta",
+                #"phase_fit_gamma",
+                #"phase_fit_delta",
                 "phase_fit_theta",
+                "fit_result",
                 "resonant_frequency",
-                "nonlinearity_parameter",
+                "ki_nonlinearity_parameter",
+                #"qp_nonlinearity_parameter",
             ],
             prefix,
             ["phase_fit"],
@@ -580,7 +584,6 @@ class Detector:
         num_prefix = len(name_enums)
         params = ccat_df.check_args(params, num_prefix, lmfit.parameter.Parameters)
         nonlinear = ccat_df.check_args(nonlinear, num_prefix, bool)
-        window = ccat_df.check_args(window, num_prefix, float)
         method = ccat_df.check_args(method, num_prefix, str)
         circle_fit_prefix = ccat_df.check_args(circle_fit_prefix, num_prefix, str)
 
@@ -611,12 +614,11 @@ class Detector:
                 nonlin,
                 meth,
                 param,
-                win,
                 ccat_mp.check_max_workers(max_workers),
                 ex,
             ]
-            for radius, nonlin, param, win, meth in zip(
-                radii, nonlinear, params, window, method
+            for radius, nonlin, param, meth in zip(
+                radii, nonlinear, params, method
             )
         ]
         self.targ.transform(
@@ -642,7 +644,7 @@ class Detector:
                 .with_columns(
                     [
                         (
-                            1e-8
+                            1e6
                             * (
                                 pl.col(
                                     f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_BETA.value}"
@@ -664,8 +666,33 @@ class Detector:
                                 )
                             )
                         ).alias(
-                            f"{prefix_enum.PHASE_FIT.value}_{name_enum.NONLINEARITY_PARAMETER.value}"
+                            f"{prefix_enum.PHASE_FIT.value}_{name_enum.KI_NONLINEARITY_PARAMETER.value}"
                         ),
+                        #(
+                        #    1e6
+                        #    * (
+                        #        pl.col(
+                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_GAMMA.value}"
+                        #        )
+                        #        * (
+                        #            2
+                        #            * pl.col(
+                        #                f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
+                        #            )
+                        #        )
+                        #        ** pl.col(f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_DELTA.value}")
+                        #    )
+                        #    / (
+                        #        pl.col(
+                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.RESONANT_FREQUENCY.value}"
+                        #        )
+                        #        / pl.col(
+                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
+                        #        )
+                        #    )
+                        #).alias(
+                        #    f"{prefix_enum.PHASE_FIT.value}_{name_enum.QP_NONLINEARITY_PARAMETER.value}"
+                        #),
                         (
                             pl.col(
                                 f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
@@ -786,6 +813,60 @@ class Detector:
             include=include,
             exclude=exclude,
         )
+
+    def nonlinearity_parameter(self,
+                               prefix: str | list[str] = "",
+                               m: str | float | list[float],
+                               b: str | float | list[float],
+                               f_shift: str | float | list[float] = 0,
+                               include: int | list[int] | None = None,
+                               exclude: int | list[int] | None = None,
+                               recalc: bool = False,
+                               **kwargs,):
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["linewidth_shift", "ki_nonlinearity_parameter"],
+            prefix,
+            [],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+
+        num_prefix = len(name_enums)
+        m = ccat_df.check_args(f_shift, num_prefix, str)
+        b = ccat_df.check_args(f_shift, num_prefix, str)
+        f_shift = ccat_df.check_args(f_shift, num_prefix, str)
+
+        for i, f_0 in enumerate(ref_f):
+            if isinstance(f_0, str):
+                ref_f[i] = (
+                    self.get_properties(
+                        f_0, include=include, exclude=exclude, strict=True
+                    )
+                    .to_numpy()
+                    .T[1]
+                )  # Get reference frequencies from .properties DataFrame
+
+        frac_f_dfs, args = [], [[f] for f in ref_f]
+        for data_obj in data_objs:
+            data_obj.transform(
+                [Detector._calc_frac_f] * num_prefix,
+                *args,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+                col_enum=name_enums,
+                prefix_enum=prefix_enums,
+            )
+
+            frac_f_dfs.append(
+                data_obj.get_data(
+                    col_name=[name_enum.FRACTIONAL_FREQUENCY.value for name_enum in name_enums],
+                    include=include,
+                    exclude=exclude,
+                    strict=True
+                    ))
+
+        return frac_f_dfs
 
     # IQ transformations
     # ------------------
@@ -1005,6 +1086,7 @@ class Detector:
         Q_col: str = "complex_fit_Q",
         mean_points: int = 10,
         mag_prefix: str = "",
+        invert: bool = False,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -1071,6 +1153,7 @@ class Detector:
             lower_index=lower_bounds,
             upper_index=upper_bounds,
             name=[prefix_enum.TRIM_TAIL.value for prefix_enum in prefix_enums],
+            invert=invert,
             include=include,
             exclude=exclude,
             recalc=recalc,
@@ -1379,6 +1462,68 @@ class Detector:
             )
         return rotation_dfs
 
+    def IQ_circle_diss_corr(
+        self,
+        prefix: str | list[str] = "",
+        circle_fit_prefix: str | list[str] = "circle_fit_unwind_rotate",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        max_workers=1,
+        ex=None,
+        **kwargs):
+        if isinstance(prefix, str):
+            prefix = [prefix]
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature", "magnitude"],
+            prefix,
+            ['dissipation_correction'],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+        num_prefix = len(name_enums)
+
+        circle_fit_prefix = ccat_df.check_args(circle_fit_prefix, num_prefix, str)
+        radii = [
+            self.get_properties(
+                col_name=f"{pre}_{self.analysis_cfg['convention']['name']['IQ_circle_radius']}",
+                include=include,
+                exclude=exclude,
+                strict=True,
+            )
+            .to_numpy()
+            .T[1]
+            for pre in circle_fit_prefix
+        ]
+
+        args = [[radius, ccat_mp.check_max_workers(max_workers), ex] for radius in radii]
+        self.targ.transform(
+            [Detector._calc_dissipation_correction] * num_prefix,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
+        )
+
+        col_names = []
+        for prefix_enum, name_enum in zip(prefix_enums, name_enums):
+            col_names += [
+                f"{prefix_enum.DISSIPATION_CORRECTION.value}_{name_enum.IN_PHASE.value}",
+                f"{prefix_enum.DISSIPATION_CORRECTION.value}_{name_enum.QUADRATURE.value}",
+            ]
+
+        self.targ.data = ccat_df.unnest(
+            self.targ, [f"struct_{name}" for name in col_names]
+        )
+        return self.targ.get_data(
+            col_name=col_names,
+            include=include,
+            exclude=exclude,
+        )
+
     # Timestream conversion
     # ---------------------
     def phase_spline(
@@ -1624,6 +1769,87 @@ class Detector:
 
         return frac_f_dfs
 
+    def linear_frac_f(self,
+                      prefix: str | list[str] = "",
+                      circle_fit_prefix: str | list[str] = "circle_fit_unwind_rotate",
+                      mag_prefix: str = "",
+                      mean_points: int = 10,
+                      include: int | list[int] | None = None,
+                      exclude: int | list[int] | None = None,
+                      recalc: bool = False,
+                      max_workers=1,
+                      ex=None,
+                      **kwargs):
+        if isinstance(prefix, str):
+            prefix = [prefix]
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature", "fractional_frequency"],
+            prefix,
+            ['linear'],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+        num_prefix = len(name_enums)
+        mean_points = ccat_df.check_args(mean_points, num_prefix, int)
+        mag_prefix = ccat_df.check_args(mag_prefix, num_prefix, str)
+        circle_fit_prefix = ccat_df.check_args(circle_fit_prefix, num_prefix, str)
+
+        # Get IQ circle radius
+        # --------------------
+        radii = [
+            self.get_properties(
+                col_name=f"{pre}_{self.analysis_cfg['convention']['name']['IQ_circle_radius']}",
+                include=include,
+                exclude=exclude,
+                strict=True,
+            )
+            .to_numpy()
+            .T[1]
+            for pre in circle_fit_prefix
+        ]
+
+        # Estimate detector total quality factors
+        # ---------------------------------------
+        Qs = [[]]*num_prefix
+        for i, (mag_pre, mean_point) in enumerate(zip(mag_prefix, mean_points)):
+            f_low, f_mid, f_high = (
+                property_routines.fwhm(
+                    self.targ,
+                    mag_pre,
+                    mean_points=mean_point,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
+                .to_numpy()
+                .T[4:]
+            )
+            fwhm = f_high - f_low
+            Qs[i] = f_mid/fwhm
+
+        args = [[radius, Q, ccat_mp.check_max_workers(max_workers), ex] for radius, Q in zip(radii, Qs)]
+        self.targ.transform(
+            [Detector._calc_linear_frac_f] * num_prefix,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
+        )
+
+        col_names = [f"{prefix_enum.LINEAR.value}_{name_enum.FRACTIONAL_FREQUENCY.value}" for prefix_enum, name_enum in zip(prefix_enums, name_enums)]
+
+        self.targ.data = ccat_df.unnest(
+            self.targ, [f"struct_{name}" for name in col_names]
+        )
+        return self.targ.get_data(
+            col_name=col_names,
+            include=include,
+            exclude=exclude,
+        )
+
     # ==================#
     # Analysis Methods #
     # ==================#
@@ -1763,18 +1989,18 @@ class Detector:
                         method=method[inds],
                         params=params[inds],
                         R=radius[inds],
-                        window=window[inds],
                     ): all_tones[inds]
                     for i, inds in enumerate(calc_ind)
                 }
 
+                fit_result = det.fit_result.get(f"{fit_name_col}_{fit_result_col}", [None]*det.targ.num_tones)
                 for future in concurrent.futures.as_completed(future_to_batch):
                     tones = future_to_batch[future]
                     fit_cols = future.result()
                     for tone, fit_col in zip(tones, fit_cols):
                         if isinstance(fit_col, Exception):
                             log.log(
-                                "DEBUG",
+                                "INFO",
                                 "Fit failed for tone %s with exception: %s",
                                 tone,
                                 fit_col,
@@ -1793,6 +2019,7 @@ class Detector:
                                 f"init_{fit_name_col}_{param_names[k]}": float(v)
                                 for k, v in fit_col.init_values.items()
                             }
+                            fit_result[tone] = fit_col
 
                             properties_dict = best_vals_dict | init_vals_dict
                         det.targ._properties[ccat_df.add_tone("det", tone, padding)] = (
@@ -1801,9 +2028,10 @@ class Detector:
                         results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
                             best_fit
                         )
+                det.fit_result[f"{fit_name_col}_{fit_result_col}"] = fit_result
             return ccat_mp.package_results(results_dict)
 
-        if not len(args) == 8:
+        if not len(args) == 7:
             log.log(
                 "ERROR",
                 "nonlinear, params, window, and max_workers are required arguments.",
@@ -1815,18 +2043,16 @@ class Detector:
             nonlinear,
             method,
             params_list,
-            window,
             max_workers,
             ex,
         ) = args
         params = np.empty(len(params_list), dtype=object)
         for i in range(len(params_list)):
             params[i] = params_list[i]
-        radius, nonlinear, method, window = (
+        radius, nonlinear, method = (
             np.array(radius),
             np.array(nonlinear),
             np.array(method),
-            np.array(window),
         )
         det, max_workers, ex = (
             det[0],
@@ -1835,12 +2061,13 @@ class Detector:
         )
         all_tones = np.array(tones)
 
-        f_col, I_col, Q_col, phase_col, fit_name_col = (
+        f_col, I_col, Q_col, phase_col, fit_name_col, fit_result_col = (
             col_enum.FREQUENCY.value,
             col_enum.IN_PHASE.value,
             col_enum.QUADRATURE.value,
             col_enum.PHASE.value,
             prefix_enum.PHASE_FIT.value,
+            col_enum.FIT_RESULT.value
         )
 
         param_names = {
@@ -1848,6 +2075,8 @@ class Detector:
             "Qr": col_enum.TOTAL_QUALITY_FACTOR.value,
             "theta_0": col_enum.PHASE_FIT_THETA.value,
             "beta": col_enum.PHASE_FIT_BETA.value,
+            #"gamma": col_enum.PHASE_FIT_GAMMA.value,
+            #"delta": col_enum.PHASE_FIT_DELTA.value,
             "R": col_enum.IQ_CIRCLE_RADIUS.value,
         }
 
@@ -2173,6 +2402,164 @@ class Detector:
                 f_tone_col = ccat_df.add_tone(f_col, tone, padding)
                 exprs.append(((pl.col(f_tone_col) - f) / f).alias(ff_tone_col))
         return exprs
+
+    @staticmethod
+    def _calc_linear_frac_f(
+        schema,
+        *args,
+        tones: list[int],
+        padding: int = 4,
+        recalc: bool = False,
+        col_enum=None,
+        prefix_enum=None,
+    ):
+        def _linear_frac_f(df):
+            data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
+
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {
+                    executor.submit(
+                        ccat_mp.process_batches,
+                        ccat_fit.linear_frac_f,
+                        np.array(data[i][0]),
+                        np.array(data[i][1]),
+                        R[inds],
+                        Qr[inds]
+                    ): all_tones[inds]
+                    for i, inds in enumerate(calc_ind)
+                }
+
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tones = future_to_batch[future]
+                    frac_f_cols = future.result()
+                    for tone, frac_f_col in zip(tones, frac_f_cols):
+                        if isinstance(frac_f_col, Exception):
+                            log.log(
+                                "DEBUG",
+                                "Linear fractional frequency shift calculation failed for tone %s with exception: %s",
+                                tone,
+                                frac_f_col,
+                            )
+                            frac_f = np.full(df.len(), np.nan)
+                        else:
+                            frac_f = frac_f_col
+                            
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = frac_f
+            return ccat_mp.package_results(results_dict)
+
+        if not len(args) == 4:
+            log.log(
+                "ERROR",
+                "R, Qr, max_workers, and ex are required arguments.",
+            )
+        R, Qr, max_workers, ex = np.array(args)
+        max_workers, ex = (
+            int(max_workers[0]),
+            ex[0],
+        )
+        all_tones = np.array(tones)
+        I_col, Q_col, frac_f_col, linear_prefix = col_enum.IN_PHASE.value, col_enum.QUADRATURE.value, col_enum.FRACTIONAL_FREQUENCY.value, prefix_enum.LINEAR.value
+
+        return_col, return_type = (
+            [f"{linear_prefix}_{frac_f_col}"],
+            [pl.Float64],
+        )
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
+            _linear_frac_f,
+            tones,
+            schema,
+            input_col=[I_col, Q_col],
+            return_col=return_col,
+            return_type=return_type,
+            padding=padding,
+            max_workers=max_workers,
+            recalc=recalc,
+        )
+        return expr
+
+    @staticmethod
+    def _calc_dissipation_correction(
+        schema,
+        *args,
+        tones: list[int],
+        padding: int = 4,
+        recalc: bool = False,
+        col_enum=None,
+        prefix_enum=None,
+    ):
+        def _dissipation_correction(df):
+            data = ccat_mp.struct_batches(df, 3, batch_len, max_workers)
+
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {
+                    executor.submit(
+                        ccat_mp.process_batches,
+                        ccat_fit.dissipation_correction,
+                        np.array(data[i][0]),
+                        np.array(data[i][1]),
+                        np.array(data[i][2]),
+                        R[inds]
+                    ): all_tones[inds]
+                    for i, inds in enumerate(calc_ind)
+                }
+
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tones = future_to_batch[future]
+                    proj_cols = future.result()
+                    for tone, proj_col in zip(tones, proj_cols):
+                        if isinstance(proj_col, Exception):
+                            log.log(
+                                "DEBUG",
+                                "Dissipation correction projection failed for tone %s with exception: %s",
+                                tone,
+                                proj_col,
+                            )
+                            proj_I, proj_Q = (
+                                np.full(df.len(), np.nan),
+                                np.full(df.len(), np.nan),
+                            )
+                        else:
+                            proj_I, proj_Q = proj_col
+                            
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            proj_I
+                        )
+                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = (
+                            proj_Q
+                        )
+            return ccat_mp.package_results(results_dict)
+
+        if not len(args) == 3:
+            log.log(
+                "ERROR",
+                "R, max_workers, and ex are required arguments.",
+            )
+        R, max_workers, ex = np.array(args)
+        max_workers, ex = (
+            int(max_workers[0]),
+            ex[0],
+        )
+        all_tones = np.array(tones)
+        I_col, Q_col, mag_col, corr_prefix = col_enum.IN_PHASE.value, col_enum.QUADRATURE.value, col_enum.MAGNITUDE.value, prefix_enum.DISSIPATION_CORRECTION.value
+
+        return_col, return_type = (
+            [f"{corr_prefix}_{I_col}", f"{corr_prefix}_{Q_col}"],
+            [pl.Float64, pl.Float64],
+        )
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
+            _dissipation_correction,
+            tones,
+            schema,
+            input_col=[I_col, Q_col, mag_col],
+            return_col=return_col,
+            return_type=return_type,
+            padding=padding,
+            max_workers=max_workers,
+            recalc=recalc,
+        )
+        return expr
 
     def properties_histogram(
         self,

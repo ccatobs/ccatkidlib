@@ -57,81 +57,157 @@ def _(
     return
 
 
-@app.cell(disabled=True)
-def _(
-    Network,
-    analysis_cfg,
-    com_to_selector,
-    data_dirs,
-    root_data_dir,
-    viz_cfg,
-):
-    _data_dir, _date, _sess_id = data_dirs[0].parts[-3:]
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Theoretical KID
+    """)
+    return
 
-    network = Network(
-            com_to=com_to_selector.value[0],
-            sess_ids=_sess_id,
-            date=_date,
-            data_dir=_data_dir,
-            root_data_dir=root_data_dir,
-            analysis_cfg=analysis_cfg,
-            viz_cfg=viz_cfg,
+
+@app.cell
+def _(mo):
+    f_0_slider = mo.ui.slider(start=1, stop=1000, step=1, value=500, full_width=True, label='Resonant Frequency $f_0$ [MHz]', show_value=True, debounce=True)
+    Q_1_slider =  mo.ui.slider(start=1000, stop=1e6, step=100, value=30000, full_width=True, label='Total Quality Factor $Q_r$', show_value=True, debounce=True)
+    Q_2_slider =  mo.ui.slider(start=1000, stop=1e6, step=100, value=30000, full_width=True, label='Total Quality Factor $Q_r$', show_value=True, debounce=True)
+    Q_c_slider =  mo.ui.slider(start=1000, stop=1e6, step=100, value=60000, full_width=True, label='Coupling Quality Factor $Q_c$', show_value=True, debounce=True)
+    return Q_1_slider, Q_2_slider, Q_c_slider, f_0_slider
+
+
+@app.cell
+def _(Q_1_slider, Q_2_slider, Q_c_slider, f_0_slider, mo):
+    mo.vstack((f_0_slider, Q_1_slider, Q_2_slider, Q_c_slider))
+    return
+
+
+@app.cell
+def s21(
+    Q_1_slider,
+    Q_2_slider,
+    Q_c_slider,
+    f_0_slider,
+    hv,
+    np,
+    project_circle,
+):
+    _f_0 = f_0_slider.value*1e6
+    _Q_1, _Q_2 = Q_1_slider.value, Q_2_slider.value
+    _Q_c = Q_c_slider.value
+
+    _r_1, _r_2 = _Q_1/(2*_Q_c), _Q_2/(2*_Q_c)
+
+    _fs = np.linspace(_f_0 - 0.25e6, _f_0 + 0.25e6, 500)
+
+    _x = (_fs - _f_0)/_f_0
+
+    _s21_1 = 1 - (_Q_1/_Q_c)*(1/(1 + 2j*_Q_1*_x))
+    _s21_2 = 1 - (_Q_2/_Q_c)*(1/(1 + 2j*_Q_2*_x))
+
+    _I_1, _I_2 = -1*(np.real(_s21_1) - (1 - _r_2)), -1*(np.real(_s21_2) - (1 - _r_2))
+    _QQ_1, _QQ_2 = np.imag(_s21_1), np.imag(_s21_2)
+
+    _I_star = _r_2 - (2*_r_1*_r_2)/(_r_1+_r_2)
+
+    _I_proj, _Q_proj = project_circle(_I_1, _QQ_1, _r_1, 0.5)
+
+    _lines = -(_I_2 - _I_1)/(_QQ_2 - _QQ_1)*(_QQ_1) + _I_1 
+
+    print(_lines[0])
+    print(1 - (2*_r_1*_r_2)/(_r_1+_r_2))
+    (hv.Points((_I_1, _QQ_1)).opts(data_aspect=1)
+    *hv.Points((_I_2, _QQ_2)).opts(data_aspect=1)
+    *hv.Points((_I_proj, _Q_proj)).opts(data_aspect=1))
+    #*hv.Points((_lines, np.zeros(len(_lines)))))
+
+    #hv.Curve((_fs, ))
+    return
+
+
+@app.cell
+def _(np):
+    def project_circle(I, Q, r_1, r_2):
+        """
+        Project points on a smaller S21 circle onto the larger S21 circle.
+
+        Draws lines from the focus/intersection point I* through each point on
+        the smaller circle. Each line intersects the larger circle at the
+        corresponding projected point.
+
+        Parameters
+        ----------
+        I_small, Q_small : ndarray
+            I and Q components of the smaller circle
+        I_star : float
+            I-axis coordinate of the focus/intersection point (Q = 0)
+        r_large : float
+            Radius of the large S21 circle; its centre lies at (1 - r_large, 0)
+
+        Returns
+        -------
+        I_proj, Q_proj : ndarray
+            Projected I and Q components lying on the large circle
+        """
+
+        I_star = -1*(r_2 - (2*r_1*r_2)/(r_1+r_2))
+        #print(I_star)
+        m = Q/(I-I_star)
+        a = 1 + m**2
+        b = -2*(m**2 * I_star)
+        c = (m*I_star)**2 - r_2 ** 2 
+        #print(b**2 - 4*a*c)
+
+        I_proj_pos = (-b + np.sqrt(b**2 - 4*a*c))/(2*a)
+        I_proj_neg = (-b - np.sqrt(b**2 - 4*a*c))/(2*a)
+
+        mask =  (I_proj_neg <= I_star) & (I >= I_star)
+        I_proj = np.where(mask, I_proj_pos, I_proj_neg)
+
+        Q_proj = m*(I_proj-I_star)
+
+        return I_proj, Q_proj
+
+
+    return (project_circle,)
+
+
+@app.function
+def s21(x, Q, R):
+    return 2*R*(1/(1 + 2j*Q*x)) - R
+
+
+@app.cell
+def _(np):
+    def s21_diff(x, I_proj, Q_proj, Q, R):
+        return np.abs(2*R*(1/(1 + 2j*Q*x)) - R - (I_proj + 1j*Q_proj))
+
+    return (s21_diff,)
+
+
+@app.cell
+def _(np):
+    def consensus_solution(x_candidates):
+        """Find the two most similar solutions and average them."""
+        x_candidates = np.asarray(x_candidates)
+        distances = np.abs(np.subtract.outer(x_candidates, x_candidates))
+
+        # Find minimum non-zero distance
+        distances_nz = np.where(distances > 0, distances, np.inf)
+        idx_i, idx_j = np.unravel_index(
+            np.argmin(distances_nz), distances_nz.shape
         )
 
-    network.add_columns(
-            data_cols=[
-                "com_to",
-                "drive",
-                "sense",
-                "detector_type",
-                "network",
-            ],
-            max_workers=10,
-    )
-    return (network,)
+        #print(idx_i, idx_j)
 
+        return (x_candidates[idx_i] + x_candidates[idx_j]) / 2
 
-@app.cell(disabled=True)
-def _(dump_transform, network):
-    dump_transform(network)
-    return
+    return (consensus_solution,)
 
 
 @app.cell
-def _(network):
-    combined_properties = network.combine_properties(data_cols=['drive']).sort('drive')
-    return (combined_properties,)
+def _(np, pl):
+    a, b = np.arange(0, 10, 1), np.arange(10, 20, 1)
 
-
-@app.cell
-def _(combined_properties):
-    combined_properties
-    return
-
-
-@app.cell
-def _(tone_selector):
-    tone_selector
-    return
-
-
-@app.cell
-def _(
-    NAMES,
-    PREFIX,
-    combined_properties,
-    pl,
-    tone_selector,
-    trim_mismatch_prefix,
-):
-    combined_properties.filter(pl.col('det') == tone_selector.value).hvplot.line(x='drive', y=f"{PREFIX['phase_fit']}_{trim_mismatch_prefix}_{NAMES['ki_nonlinearity_parameter']}")
-    return
-
-
-@app.cell
-def _(PREFIX, network, tone_selector, trim_mismatch_prefix):
-    (network.plot('phase', 'targ', prefix=f"{PREFIX['phase_fit']}_{trim_mismatch_prefix}", include=tone_selector.value, data_cols=['drive'], cmap='viridis', grouping='groupby')
-    *network.plot('phase', 'targ', prefix=trim_mismatch_prefix, include=tone_selector.value, data_cols=['drive'], cmap='viridis', grouping='groupby'))
+    pl.Series(pl.DataFrame({'a': a, 'b': b}).select(pl.struct([pl.col('a'), pl.col('b')]))).struct.fields
     return
 
 
@@ -171,8 +247,8 @@ def _(circle_fit_workers_selector, det, routines, savgol_workers_selector):
         mismatch_mean_points=10,
         savgol_workers=savgol_workers_selector.value,
         circle_fit_workers=circle_fit_workers_selector.value,
-        normalize=True,
-        recalc=True,
+        normalize=False,
+        recalc=False,
     )
 
     get_centered_dfs = True
@@ -191,42 +267,140 @@ def _(det):
         det.analysis_cfg["convention"]["name"],
         det.analysis_cfg["convention"]["prefix"],
     )
-    return LABELS, NAMES, PREFIX
+    return LABELS, PREFIX
+
+
+@app.cell
+def _(PREFIX, circle_prefix, det, get_centered_dfs, mo):
+    mo.stop(not get_centered_dfs)
+
+    mismatch_prefix = f"{PREFIX['remove_impedance_mismatch']}_{PREFIX['rotate']}_\
+    {PREFIX['center_origin']}_{PREFIX['translate']}_\
+    {PREFIX['center_origin']}_{PREFIX['rotate']}_\
+    {PREFIX['remove_cable']}_{PREFIX['rotate']}"
+
+    circle_fit_prefix = f"{PREFIX['IQ_circle_fit']}_{PREFIX['trim_tail']}_{PREFIX['trim']}_{PREFIX['remove_cable']}_{PREFIX['rotate']}"
+
+    circle_origin_prefix = f"{PREFIX['center_origin']}_{PREFIX['translate']}_\
+    {PREFIX['center_origin']}_{PREFIX['rotate']}_\
+    {circle_prefix}"
+
+    mismatch_plot_dfs = get_plot_dfs(det, mismatch_prefix)
+    circle_plot_dfs = get_plot_dfs(det, circle_origin_prefix)
+    return (
+        circle_fit_prefix,
+        circle_plot_dfs,
+        mismatch_plot_dfs,
+        mismatch_prefix,
+    )
 
 
 @app.cell
 def _(PREFIX, det, get_centered_dfs, mo):
     mo.stop(not get_centered_dfs)
 
-    mismatch_prefix = f"{PREFIX['normalize']}_{PREFIX['scale']}_\
-    {PREFIX['remove_impedance_mismatch']}_{PREFIX['rotate']}_\
-    {PREFIX['center_origin']}_{PREFIX['translate']}_\
-    {PREFIX['center_origin']}_{PREFIX['rotate']}_\
-    {PREFIX['remove_cable']}_{PREFIX['rotate']}"
+    _cable_prefix = f"{PREFIX['remove_cable']}_{PREFIX['rotate']}"
+    _trim_prefix = f"{PREFIX['trim_tail']}_{PREFIX['trim']}_{_cable_prefix}"
+    circle_prefix = f"{PREFIX['IQ_circle_fit']}_{_trim_prefix}"
 
-    mismatch_plot_dfs = get_plot_dfs(det, mismatch_prefix)
-    return mismatch_plot_dfs, mismatch_prefix
+    det.IQ_circle_origin(
+            prefix=circle_prefix,
+            circle_fit_prefix=circle_prefix,
+            data='targ',
+        )
+    return (circle_prefix,)
 
 
 @app.cell
-def _(create_dashboard, mismatch_plot_dfs, plot_sweep):
+def _(circle_fit_prefix, det, mismatch_prefix):
+    det.targ.mag(prefix=mismatch_prefix, dB=False)
+    proj_df = det.IQ_circle_diss_corr(prefix=mismatch_prefix,
+                                                   circle_fit_prefix=circle_fit_prefix,
+                                                   recalc=False,
+                                                   max_workers=1)
+    return
+
+
+@app.cell
+def _(PREFIX, det, mismatch_prefix):
+    proj_prefix = f"{PREFIX['dissipation_correction']}_{mismatch_prefix}"
+    proj_plot_dfs = get_plot_dfs(det, proj_prefix)
+    return (proj_plot_dfs,)
+
+
+@app.cell
+def _(circle_plots_dashboard, create_dashboard, plot_sweep, proj_plot_dfs):
+    proj_plots, _mag_phase_opts, _IQ_opts = plot_sweep(
+        proj_plot_dfs, include_tones=True
+    )
+
+    proj_plots_dashboard = create_dashboard(
+        proj_plots, _mag_phase_opts, _IQ_opts
+    )
+
+    circle_plots_dashboard[0]*proj_plots_dashboard[0]
+    return
+
+
+@app.cell
+def _(circle_fit_prefix, det, mismatch_prefix):
+    det.linear_frac_f(prefix=mismatch_prefix, circle_fit_prefix=circle_fit_prefix, mag_prefix='savgol0')
+    det.frac_f(prefix='', data='targ', ref_f= 'mid_savgol0_FWHM_f')
+
+    _shifts = det.get_properties(col_name=f"{circle_fit_prefix}_R").to_numpy().T[1]
+    det.targ.IQ_shift(prefix=mismatch_prefix, shift_I = _shifts, name='off_res')
+    det.IQ_trim(prefix=f"off_res_shift_{mismatch_prefix}", window=2, mag_prefix='savgol0')
+    det.targ.mag(prefix=f"tail_trim_off_res_shift_{mismatch_prefix}", dB=False)
+    return
+
+
+@app.cell
+def _(det, hv, mismatch_prefix, pl, tone_selector):
+    _df = det.targ.get_data(['f', 'ff', f'tail_trim_off_res_shift_{mismatch_prefix}_mag'], include=tone_selector.value)
+
+    _df = _df.rename({_col : _name for _name, _col in zip(['f', 'proj_diss_lin_ff', 'nonlin_ff', 'off_res_dist', 'lin_ff'], _df.columns)}).filter(pl.col('off_res_dist').is_not_null())
+
+    _f, _x_lin_proj_diss, _x_nonlin, _off_res, _x_lin = _df
+    _x_diff = (_x_nonlin - _x_lin_proj_diss)*1e6
+    hv.Scatter((_off_res**2, _x_diff)).opts(s=10, c=_f, cmap='viridis', xlabel=r"$|z - z_{off}|^2 \propto I^2$", ylabel='$x_{measured} - x_{linear}$ [ppm]', show_grid=True)
+    return
+
+
+@app.cell
+def _(tone_selector):
+    tone_selector
+    return
+
+
+@app.cell
+def _(circle_plot_dfs, create_dashboard, mismatch_plot_dfs, plot_sweep):
     mismatch_plots, _mag_phase_opts, _IQ_opts = plot_sweep(
         mismatch_plot_dfs, include_tones=True
     )
+
+    circle_plots, _circle_mag_phase_opts, _circle_IQ_opts = plot_sweep(
+        circle_plot_dfs, include_tones=True
+    )
+
     mismatch_plots_dashboard = create_dashboard(
         mismatch_plots, _mag_phase_opts, _IQ_opts
     )
-    return mismatch_plots, mismatch_plots_dashboard
+
+    circle_plots_dashboard = create_dashboard(
+        circle_plots, _circle_mag_phase_opts, _circle_IQ_opts
+    )
+
+    mismatch_plots_dashboard[0]*circle_plots_dashboard[0]
+    return circle_plots_dashboard, mismatch_plots, mismatch_plots_dashboard
 
 
-@app.cell(hide_code=True)
-def _(mismatch_plots_dashboard, mo):
-    mo.md(rf"""
-    ### Centered IQ Circle (*Best Viewed as Fullscreen*)
+@app.cell
+def _(det, mismatch_prefix, tone_selector):
+    det.targ.mag(prefix=mismatch_prefix, dB=False)
+    fs, I, Q, mag = det.targ.get_data(['f', f'{mismatch_prefix}_mag', f'{mismatch_prefix}_I', f'{mismatch_prefix}_Q'], include=tone_selector.value, strict=True).to_numpy().T
 
-    {mismatch_plots_dashboard}
-    """)
-    return
+    R = det.get_properties(col_name=['circle_fit_tail_trim_unwind_rotate_R'], include=tone_selector.value).item(0, 1)
+    return I, Q, R, fs, mag
 
 
 @app.cell
@@ -236,14 +410,109 @@ def _(det):
 
 
 @app.cell
+def _():
+    from scipy.optimize import root_scalar
+
+    return (root_scalar,)
+
+
+@app.cell
 def _(
-    NAMES,
+    I_proj,
+    Q_proj,
+    R,
+    consensus_solution,
+    det,
+    fs,
+    hv,
+    mo,
+    np,
+    root_scalar,
+    s21_diff,
+    tone_selector,
+):
+    _f_low, _f_high = det.get_properties(col_name=['low_savgol0_FWHM_f', 'high_savgol0_FWHM_f'], include=tone_selector.value).to_numpy()[0][1:]
+    _fwhm = _f_high - _f_low
+    _f_0 = det.get_properties(col_name=['mid_savgol0_FWHM_f'], include=tone_selector.value).item(0, 1)
+
+    _Qr = _f_0/_fwhm
+
+    _x = (fs - _f_0)/_f_0
+
+    _s21 = s21(_x, _Qr, R)
+    _I, _Q = np.real(_s21), np.imag(_s21)
+    mo.output.append(hv.Scatter((_I, _Q)).opts(s=5) * hv.Scatter((I_proj, Q_proj)).opts(s=5))
+
+    _xx = []
+    for _I_proj, _Q_proj, _x0 in zip(I_proj, Q_proj, _x):
+        _xx.append(root_scalar(s21_diff, args=(_I_proj, _Q_proj, _Qr, R), x0=_x0).root)
+    print(_xx)
+
+    _x11 = 1/(2*_Qr)*np.sqrt((2*R)/(I_proj + R)-1)
+    _x12 = -1/(2*_Qr)*np.sqrt((2*R)/(I_proj + R)-1)
+
+    _a = 4*Q_proj*_Qr**2 
+    _b = 4*R*_Qr
+    _c = Q_proj
+
+    _x21 = (-_b + np.sqrt(_b**2 - 4*_a*_c))/(2*_a)
+    _x22 = (-_b - np.sqrt(_b**2 - 4*_a*_c))/(2*_a)
+
+    I_x = np.array([_x11, _x11, _x12, _x12])
+    Q_x = np.array([_x21, _x22, _x21, _x22])
+
+    diff = np.abs(I_x - Q_x)
+    #print(diff)
+    index_array = np.argmin(diff, axis=0, keepdims=True)
+    #print(index_array)
+    _xxx_I = np.take_along_axis(I_x, index_array, axis=0)[0]
+    _xxx_Q = np.take_along_axis(Q_x, index_array, axis=0)[0]
+
+
+    print(_xxx_I - _xxx_Q)
+    _xs = []
+    for _xx11, _xx12, _xx21, _xx22 in zip(_x11, _x12, _x21, _x22):
+        _xs.append(consensus_solution([_xx11, _xx12, _xx21, _xx22]))
+
+    off_res_dist = (Q_proj**2 + (I_proj + R)**2)**(1/2)
+    mo.output.append(hv.Scatter((off_res_dist, _x - _xx)).opts(c=fs, cmap='viridis', show_grid=True, colorbar=True, ylim=(-0.0001, 0.0001)))
+    return
+
+
+@app.cell
+def _(I, Q, R, fs, hv, mag, np, project_circle):
+    I_proj, Q_proj = [], []
+    I_shift = R - mag
+    I_corr = I - I_shift
+    f_proj = []
+
+    for _f, _mag, _I, _Q in zip(fs, mag, I_corr, Q):
+        _I_proj, _Q_proj = project_circle(_I, _Q, _mag, R)
+        I_proj.append(_I_proj), Q_proj.append(_Q_proj), f_proj.append(_f)
+    I_proj, Q_proj = np.array(I_proj), np.array(Q_proj)
+    #hv.Points((I_proj, Q_proj)).opts(data_aspect=1)
+    #hv.Scatter((I_proj, Q_proj)).opts(data_aspect=1, c=f_proj, cmap='viridis')
+    hv.Scatter((f_proj, np.arctan2(Q_proj,I_proj))).opts(s=1)*hv.Scatter((f_proj, np.arctan2(Q,I)    )).opts(s=1)#.opts(data_aspect=1)
+    return I_proj, Q_proj
+
+
+@app.cell(hide_code=True)
+def _(mismatch_plots_dashboard, mo):
+    mo.md(rf"""
+    ### Centered IQ Circle (*Best Viewed as Fullscreen*)
+
+    {mismatch_plots_dashboard[0]}
+    """)
+    return
+
+
+@app.cell(disabled=True)
+def _(
     PREFIX,
     det,
     mismatch_prefix,
     phase_fit_window,
     phase_fit_workers_selector,
-    pl,
 ):
     det.IQ_trim(
         prefix=mismatch_prefix,
@@ -258,17 +527,9 @@ def _(
     det.targ.phase(prefix=trim_mismatch_prefix, recalc=True)
 
     _circle_fit_prefix = f"{PREFIX['IQ_circle_fit']}_{PREFIX['trim_tail']}_{PREFIX['trim']}_{PREFIX['remove_cable']}_{PREFIX['rotate']}"
-
-    _scale = f"{PREFIX['remove_impedance_mismatch']}_{PREFIX['remove_cable']}_{PREFIX['rotate']}_{NAMES['magnitude']}"
-
-    _norm_circle_fit_prefix = f"{PREFIX['normalize']}_{PREFIX['scale']}_{_circle_fit_prefix}"
-    det.targ._properties_df = det.targ.properties.with_columns((pl.col([f"{_circle_fit_prefix}_{NAMES['IQ_circle_radius']}", f"{_circle_fit_prefix}_{NAMES['IQ_circle_center']}_{NAMES['magnitude']}"])/pl.col(_scale))
-                                                 .name.prefix(f"{PREFIX['normalize']}_{PREFIX['scale']}_")
-    )
-
     det.phase_fit(
         prefix=trim_mismatch_prefix,
-        circle_fit_prefix=_norm_circle_fit_prefix,
+        circle_fit_prefix=_circle_fit_prefix,
         nonlinear=True,
         max_workers=phase_fit_workers_selector.value,
         recalc=True
@@ -276,7 +537,7 @@ def _(
     return (trim_mismatch_prefix,)
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(PREFIX, det, trim_mismatch_prefix):
     phase_plot_df = det.targ.phase_plot(
         prefix=f"{PREFIX['phase_fit']}_{trim_mismatch_prefix}",
@@ -288,7 +549,7 @@ def _(PREFIX, det, trim_mismatch_prefix):
     return (phase_plot_df,)
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(LABELS, mismatch_plots, opts, phase_plot_df, pl, tone_selector):
     _fit_plot_opts = opts.Curve(
         xlabel=LABELS["phase"]["xlabel"], ylabel=LABELS["phase"]["ylabel"], color='orange'
@@ -312,7 +573,7 @@ def _(mo, phase_fit_plot, phase_fit_window, tone_selector):
     return
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(
     PREFIX,
     Parameters,
@@ -329,38 +590,16 @@ def _(
     _R = det.targ.get_properties(f"{_circle_fit_prefix}_R", include=tone_selector.value).to_numpy()[0][1]
 
     _params = Parameters()
-    _params.add("gamma", 5, True, -1e4, 1e4)
-    _params.add("beta", 3, True, -1e4, 1e4)
+    _params.add("gamma", -2, True, -1e4, 1e4)
+    _params.add("beta", 0, True, -1e4, 1e4)
 
 
     _result = ccat_fit.phase_fit_al(_f, _phase, I=_I, Q=_Q, R=_R, params=_params, nonlinear=True)
     _params = _result.params
-    #_params['gamma'].value = 0
-    #_params['beta'].value = 0
+    _params['gamma'].value = -0.2
     mo.output.append(hv.Curve((_f, _result.model.eval(params=_params, f=_f, I=_I, Q=_Q))).opts(linewidth=1, ms=1, marker='o'))
     #mo.output.append(_result.best_values)
     #mo.output.append(hv.Curve(_result.best_fit).opts(linewidth=1, ms=1, marker='o'))
-    return
-
-
-@app.cell
-def _():
-    _x = [1,2]
-    _y = [3,4]
-    list(zip(_x, _y))
-    [[1,2]]*2
-    return
-
-
-@app.cell
-def _(det, trim_mismatch_prefix):
-    det.targ.linear_fit(x_col_name='f', y_col_name='phase', y_prefix=trim_mismatch_prefix, recalc=True)
-    return
-
-
-@app.cell
-def _(det):
-    det.properties
     return
 
 
@@ -385,7 +624,7 @@ def _():
     import pickle
     from pathlib import Path
 
-    return Path, json, mo, os, tqdm
+    return Path, json, mo, os
 
 
 @app.cell
@@ -394,7 +633,7 @@ def _():
     import numpy as np
     import polars as pl
 
-    return (pl,)
+    return np, pl
 
 
 @app.cell
@@ -409,9 +648,8 @@ def _():
     from lmfit import Model, Parameters
 
     from ccatkidlib.analysis.core.detector import Detector
-    from ccatkidlib.analysis.core.network import Network
 
-    return Detector, Network, Parameters, ccat_fit, ccat_io, routines
+    return Detector, Parameters, ccat_fit, ccat_io, routines
 
 
 @app.cell
@@ -421,7 +659,7 @@ def _():
     from concurrent.futures import ProcessPoolExecutor
 
     mp.set_start_method("spawn", force=True)
-    return (ProcessPoolExecutor,)
+    return
 
 
 @app.cell
@@ -469,7 +707,7 @@ def _(analysis_cfg_browser, ccat_io, json, mo):
         max_height=_editor_height,
         placeholder="Configuration file contents will display here once a valid file is selected!",
     )
-    return analysis_cfg, cfg_editor, viz_cfg
+    return analysis_cfg, cfg_editor
 
 
 @app.cell
@@ -488,7 +726,7 @@ def _(HOME_DIR, analysis_cfg, mo):
         ignore_empty_dirs=True,
         label="Select data directory(ies)...",
     )
-    return data_browser, root_data_dir
+    return (data_browser,)
 
 
 @app.cell
@@ -714,7 +952,7 @@ def _(LABELS, opts, pl, tone_selector):
 
 
 @app.cell
-def _(hv, mo, tone_selector):
+def _(hv, mo):
     def create_dashboard(plots, mag_phase_opts, IQ_opts):
         mag_phase_layout = hv.Layout([plots["mag"], plots["phase"]]).cols(1)
         plot = mo.hstack(
@@ -724,124 +962,9 @@ def _(hv, mo, tone_selector):
             ],
             widths=[1, 1],
         )
-
-        return mo.vstack([tone_selector, plot])  # Best viewed in fullscreen mode
-
+        return plots["IQ"].opts(IQ_opts),
+        #return mo.vstack([tone_selector, plot])  # Best viewed in fullscreen mode
     return (create_dashboard,)
-
-
-@app.cell
-def _(
-    Network,
-    ProcessPoolExecutor,
-    circle_fit_workers_selector,
-    phase_fit_window,
-    phase_fit_workers_selector,
-    pl,
-    routines,
-    savgol_workers_selector,
-    tqdm,
-):
-    def dump_transform(network: Network) -> Network:
-        """
-        Transformations to run on Network objects before dumping to pickle files
-        """
-        from ccatkidlib.analysis.routines.common import (
-            IQ_circle_center,
-            IQ_noise,
-            phase_to_ff,
-        )
-        import ccatkidlib.analysis.routines.properties as property_routines
-        import ccatkidlib.analysis.routines.tune as tune_routines
-
-
-        NAMES, PREFIX = (
-            network.analysis_cfg["convention"]["name"],
-            network.analysis_cfg["convention"]["prefix"],
-        )
-
-        max_workers = max(
-            savgol_workers_selector.value,
-            circle_fit_workers_selector.value,
-            phase_fit_workers_selector.value,
-        )
-
-        mismatch_prefix = f"{PREFIX['normalize']}_{PREFIX['scale']}_{PREFIX['remove_impedance_mismatch']}_{PREFIX['rotate']}_{PREFIX['center_origin']}_{PREFIX['translate']}_{PREFIX['center_origin']}_{PREFIX['rotate']}_{PREFIX['remove_cable']}_{PREFIX['rotate']}"
-
-        trim_mismatch_prefix = f"{PREFIX['trim_tail']}_{PREFIX['trim']}_{mismatch_prefix}"
-
-        circle_fit_prefix = f"{PREFIX['IQ_circle_fit']}_{PREFIX['trim_tail']}_{PREFIX['trim']}_{PREFIX['remove_cable']}_{PREFIX['rotate']}"
-        norm_scale = f"{PREFIX['remove_impedance_mismatch']}_{PREFIX['remove_cable']}_{PREFIX['rotate']}_{NAMES['magnitude']}"
-        norm_circle_fit_prefix = f"{PREFIX['normalize']}_{PREFIX['scale']}_{circle_fit_prefix}"
-
-        params = None
-        with ProcessPoolExecutor(max_workers=max_workers) as ex:
-            for det in tqdm(network.data.sort("drive", descending=True)["detector"]):
-                det = network.det_dict[det]
-
-                # IQ Circle Center
-                # ----------------
-                routines.IQ_circle_center(det,
-                                          data="targ",
-                                          savgol_window=9,
-                                          savgol_order=1,
-                                          trim_window=10,
-                                          trim_mean_points=10,
-                                          mismatch_mean_points=10,
-                                          savgol_workers=savgol_workers_selector.value,
-                                          circle_fit_workers=circle_fit_workers_selector.value,
-                                          normalize=True,
-                                          ex=ex
-                                    )
-
-                # Phase Fit
-                # ---------
-                det.IQ_trim(
-                    prefix=mismatch_prefix,
-                    window=phase_fit_window.value,
-                    mean_points=15,
-                    use_fit=False,
-                    mag_prefix=f"{PREFIX['savgol_filter']}0",
-                    recalc=True
-                )
-                det.targ.phase(prefix=trim_mismatch_prefix, recalc=True)
-
-                det.targ._properties_df = det.targ.properties.with_columns(
-                    (
-                        pl.col(
-                            [
-                                f"{circle_fit_prefix}_{NAMES['IQ_circle_radius']}",
-                                f"{circle_fit_prefix}_{NAMES['IQ_circle_center']}_{NAMES['magnitude']}",
-                            ]
-                        )
-                        / pl.col(norm_scale)
-                    ).name.prefix(f"{PREFIX['normalize']}_{PREFIX['scale']}_")
-                )
-
-                det.fit_result = {}
-                det.phase_fit(
-                    prefix=trim_mismatch_prefix,
-                    circle_fit_prefix=norm_circle_fit_prefix,
-                    nonlinear=True,
-                    params=params,
-                    max_workers=phase_fit_workers_selector.value,
-                    recalc=True,
-                    ex=ex
-                )
-
-                result = det.fit_result[f"{PREFIX['phase_fit']}_{trim_mismatch_prefix}_{NAMES['fit_result']}"]
-                params = [res.params if res is not None else None for res in result]
-                for param in params: 
-                    if param is not None: param.pop('R')
-
-        return network
-
-    return (dump_transform,)
-
-
-@app.cell
-def _():
-    return
 
 
 if __name__ == "__main__":

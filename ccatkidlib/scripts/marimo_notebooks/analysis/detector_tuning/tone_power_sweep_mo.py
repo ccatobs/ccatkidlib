@@ -77,22 +77,8 @@ def _(
 
 
 @app.cell
-def _(targ_plot):
-    targ_plot
-    return
-
-
-@app.cell
-def _(vna_w_dets):
-    vna_w_dets
-    return
-
-
-@app.cell(disabled=True, hide_code=True)
-def _(mo, targ_stream_plot, vna_w_dets):
-    mo.md(rf"""
-    {mo.vstack([vna_w_dets, targ_stream_plot])}
-    """)
+def _(targ_stream_plot):
+    targ_stream_plot
     return
 
 
@@ -135,10 +121,10 @@ def _(
 
     _fig.set_layout_engine('constrained')
     targ_plot = _fig
-    return (targ_plot,)
+    return
 
 
-@app.cell(disabled=True)
+@app.cell
 def _(
     BoundaryNorm,
     ListedColormap,
@@ -159,7 +145,7 @@ def _(
     plt.figure(clear=True)
     _opts = [opts.Overlay(fontscale=1, fontsize={'xlabel':12, 'ylabel':12, 'legend':11, 'xticks':12, 'yticks':12})]
 
-    _layout = hv.Layout([targ_plots, stream_plots]).cols(3).opts(shared_axes=False, sublabel_size=18, sublabel_position=(-0.06, 0.82), fig_size=100, sublabel_format='').opts(*_opts)
+    _layout = hv.Layout([targ_plots, stream_plots]).cols(3).opts(shared_axes=False, sublabel_size=18, sublabel_position=(-0.06, 0.82), fig_size=100).opts(*_opts)
     _fig = hv.render(_layout, backend='matplotlib')
     _axs = _fig.get_axes()
 
@@ -181,7 +167,7 @@ def _(
     return (targ_stream_plot,)
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(hv):
     hv.output(fig='png', dpi=566)
     return
@@ -190,14 +176,6 @@ def _(hv):
 @app.cell
 def _(mo, targ_stream_plot, vna_w_dets):
     mo.vstack([mo.mpl.interactive(vna_w_dets.gca()), mo.mpl.interactive(targ_stream_plot.gca())])
-    return
-
-
-@app.cell
-def _(networks):
-    _network = networks['1.1']
-
-    list(_network.det_dict.values())[0].properties
     return
 
 
@@ -213,7 +191,7 @@ def _(dist_cmap_selector):
     return
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(
     cmap_range_selector,
     det_selector,
@@ -245,7 +223,7 @@ def _(cmap_range_selector):
     return
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(
     cmap_range_selector,
     det_selector,
@@ -269,17 +247,7 @@ def _(
     return
 
 
-@app.cell
-def _():
-    return
-
-
-@app.cell
-def _():
-    return
-
-
-@app.cell
+@app.cell(disabled=True)
 def _(
     cont_cmap_range_selector,
     cont_cmap_selector,
@@ -525,7 +493,7 @@ def _(
     _cmap_cycle = itercycle(viz_utils.cycle_cmap(dist_cmap_selector.value, num_colors = 2, cmap_range=cmap_range_selector.value).values)
 
     _vna = list(plot_network.det_dict.values())[0].vna
-    _vna.data_path[0] = ccat_pair.replace_root(_vna.data_path[0], _vna.analysis_cfg['file_paths']['original_root_data_dir'], _vna.analysis_cfg['file_paths']['root_data_dir'])
+    _vna.data_path[0] = ccat_pair.replace_root(_vna.data_path[0], _vna.analysis_cfg['file_paths']['original_root_data_dir'], '/mnt/ext/')
     _vna._configs = ccat_pair.get_config(_vna.data_path[0], all_cfg=False)
     _vna._root_dir = _vna.analysis_cfg['file_paths']['root_data_dir'] + '/'
 
@@ -597,7 +565,7 @@ def _(
     return (targ_plots,)
 
 
-@app.cell(disabled=True)
+@app.cell
 def _(
     all_network_props,
     cmap_range_selector,
@@ -605,6 +573,7 @@ def _(
     dist_cmap_selector,
     hv,
     itercycle,
+    np,
     opts,
     pl,
     plot_com_to_selector,
@@ -659,7 +628,9 @@ def _(
 
     _targ_plot = _det.targ.IQ_plot(prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=det_selector.value, tone_ms = 100)
 
-    _IQ_plot = _mm_rotate_stream*_noise_rotate_stream
+    _slope=0.7
+    _xs = np.linspace(310000, 340000, 1000)
+    _IQ_plot = _mm_rotate_stream*_noise_rotate_stream#*hv.Curve((_xs, _slope*(_xs - 322500) +232500 ))*hv.Curve((_xs, -1*1/_slope*(_xs - 322500) +232500 ))
 
     # TOD Plot
     # --------
@@ -678,7 +649,7 @@ def _(
 
     _psd_plot  =_mm_rotate_psd*_noise_rotate_psd
 
-    _IQ_opts = [opts.Curve(ms=3, alpha=0.95, show_legend=True, title='', show_grid=True, xticks=4), opts.Overlay(legend_position='bottom_left', xlabel='I [ADU]', ylabel='Q [ADU]')]
+    _IQ_opts = [opts.Curve(ms=3, alpha=0.95, show_legend=True, title='', show_grid=True, xticks=4, data_aspect=1), opts.Overlay(legend_position='bottom_left', xlabel='I [ADU]', ylabel='Q [ADU]')]
     _tod_opts  = [opts.Curve(ms=1, linewidth=1, xlabel='Time [s]', ylabel=r'$\delta f / f$ [ppm]', show_legend=True, title=f'Time-ordered Data with {best_drive} dB Drive Attenuation', show_grid=True), opts.Overlay(legend_position='bottom_left')]
     _psd_opts = [opts.Curve(aspect=1, ms=2, linewidth=1, xlabel='PSD Frequency [Hz]', ylabel=r'$\sqrt{S_{xx}}\ \ \left[Hz^{-1/2}\right]$', show_legend=True, title='', show_grid=True), opts.Overlay(legend_position='bottom_left')]
 

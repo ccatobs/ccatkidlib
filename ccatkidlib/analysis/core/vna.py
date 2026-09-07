@@ -233,7 +233,7 @@ class VNA(Sweep):
         f, phase = self.f(), self.stitch_phase()
 
         # Get cable delay in units of rad·s
-        cable_delay, intercept = linear_fit(
+        cable_delay, intercept, _ = linear_fit(
             f.to_numpy().T[0], phase.to_numpy().T[0]
         )  # Need to convert f and phase to 1D numpy arrays since linear_fit is njitted
 
@@ -304,19 +304,19 @@ def stitch_phase(f, phase, sweep_steps, threshold, stitch_percent, result):
     curr_shift = 0
     stitch_ends = int(sweep_steps / stitch_percent)
 
-    slope, intercept = linear_fit(
+    slope, intercept, _ = linear_fit(
         freq_bins[0, -1 * stitch_ends :], phase_bins[0, -1 * stitch_ends :]
     )
 
     prev = 0
     next = intercept + slope * freq_bins[0, -1]
     for i in range(len(phase_bins) - 1):
-        slope_prev, intercept_prev = linear_fit(
+        slope_prev, intercept_prev, _ = linear_fit(
             freq_bins[i + 1, :stitch_ends], phase_bins[i + 1, :stitch_ends]
         )
         prev = intercept_prev + slope_prev * freq_bins[i + 1, 0]
         diff = prev - next
-        slope_next, intercept_next = linear_fit(
+        slope_next, intercept_next, _ = linear_fit(
             freq_bins[i + 1, -1 * stitch_ends :], phase_bins[i + 1, -1 * stitch_ends :]
         )
         next = intercept_next + slope_next * freq_bins[i + 1, -1]
@@ -350,19 +350,19 @@ def stitch_mag(f, mag, sweep_steps, stitch_percent, med_win, result):
     curr_shift = 0
     stitch_ends = int(sweep_steps / stitch_percent)
 
-    slope, intercept = linear_fit(
+    slope, intercept, _ = linear_fit(
         freq_bins[0, -1 * stitch_ends :], mag_bins[0, -1 * stitch_ends :]
     )
 
     prev = 0
     next = intercept + slope * freq_bins[0, -1]
     for i in range(len(mag_bins) - 1):
-        slope_prev, intercept_prev = linear_fit(
+        slope_prev, intercept_prev, _ = linear_fit(
             freq_bins[i + 1, :stitch_ends], mag_bins[i + 1, :stitch_ends]
         )
         prev = intercept_prev + slope_prev * freq_bins[i + 1, 0]
         diff = prev - next
-        slope_next, intercept_next = linear_fit(
+        slope_next, intercept_next, _ = linear_fit(
             freq_bins[i + 1, -1 * stitch_ends :], mag_bins[i + 1, -1 * stitch_ends :]
         )
         next = intercept_next + slope_next * freq_bins[i + 1, -1]
@@ -388,6 +388,6 @@ def filter_det_f(f, phase, det_f, win):
             phase_win = np.ascontiguousarray(
                 phase[peak_idx - offset : peak_idx + offset + 1]
             )
-            slope, intercept = linear_fit(f_win, phase_win)
+            slope, intercept, _ = linear_fit(f_win, phase_win)
             slopes[i] = slope
     return slopes

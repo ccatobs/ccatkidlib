@@ -177,7 +177,26 @@ def _(det_selector, hv, mo, networks, np, pl, viz_utils):
 
     _det = int(det_selector.value)
 
-    _plot, _df = _network.plot('phase', 'targ', prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', data_cols=['drive'], overlay_cols=['drive'], filter_exprs=[pl.col('drive').mod(1) == 0, pl.col('drive') < 18], cmap='cividis', save_fig=False, dynamic=False, include=_det, return_df=True)
+    _plot, _df = _network.plot('phase', 'targ', prefix='phase_fit_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', data_cols=['drive'], overlay_cols=['drive'], filter_exprs=[pl.col('drive').mod(1) == 0, pl.col('drive') < 18], cmap='cividis', save_fig=False, dynamic=False, include=_det, return_df=True)
+
+    _cs = viz_utils.cycle_cmap('cividis', num_colors=18).values
+    _plots = []
+    for _c, _drive in zip(_cs, np.arange(0, 18)):
+        _plot = _df.filter(pl.col('drive') == _drive).hvplot.line(x='f', y='phase', label=f'Drive Attenuation: {_drive} dB').opts(show_legend=True, aspect=1, color = _c, xlabel='Frequency [Hz]', ylabel='Phase [rad]', marker='o', ms=1.5, linewidth=1)
+        _plots.append(_plot)
+
+    mo.vstack([det_selector, 
+    hv.Layout(_plots).cols(3).opts(sublabel_format='', shared_axes=True, fig_size=75)])
+    return
+
+
+@app.cell
+def _(det_selector, hv, mo, networks, np, pl, viz_utils):
+    _network = list(networks.values())[0]
+
+    _det = int(det_selector.value)
+
+    _plot, _df = _network.plot('phase', 'targ', prefix='phase_fit_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', data_cols=['drive'], overlay_cols=['drive'], filter_exprs=[pl.col('drive').mod(1) == 0, pl.col('drive') < 18], cmap='cividis', save_fig=False, dynamic=False, include=_det, return_df=True)
 
     _cs = viz_utils.cycle_cmap('cividis', num_colors=18).values
     _plots = []
@@ -258,7 +277,7 @@ def _(combined_properties, hv, pl):
     _filt_properties = (combined_properties.with_columns(pl.when(pl.col(_low_col).abs() > pl.col(_high_col).abs())
                                         .then(_low_col)
                                         .otherwise(_high_col).alias('max_lw'),
-                                        (-1*pl.col('phase_fit_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_a')).alias('fit_a')).filter(
+                                        (-1*pl.col('phase_fit_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_b')).alias('fit_a')).filter(
                                pl.col('fit_a') > -3,
                                pl.col('fit_a') < 3,
                                pl.col('freq/diss') > 1,
@@ -350,6 +369,112 @@ def _():
 
 
 @app.cell(column=1)
+def _(analysis_cfg):
+    # Define data transformation prefixes
+    # -----------------------------------
+
+    NAME, PREFIX = analysis_cfg['convention']['name'], analysis_cfg['convention']['prefix']
+
+    cable_prefix = '_'.join([PREFIX['remove_cable'],
+                             PREFIX['rotate']])
+
+    mismatch_prefix = '_'.join([PREFIX['remove_impedance_mismatch'],
+                                PREFIX['rotate'],
+                                PREFIX['center_origin'],
+                                PREFIX['translate'],
+                                PREFIX['center_origin'],
+                                PREFIX['rotate'],
+                                cable_prefix])
+
+    circle_fit_prefix = '_'.join([PREFIX['IQ_circle_fit'],
+                                  PREFIX['trim_tail'],
+                                  PREFIX['trim'],
+                                  cable_prefix])
+
+    norm_prefix = '_'.join([PREFIX['normalize'],
+                            PREFIX['scale'],
+                            mismatch_prefix])
+
+    readout_noise_prefix = "_".join([PREFIX['isolate_dissipation_noise'],
+                                     PREFIX['rotate'],
+                                     norm_prefix])
+
+    trim_prefix = "_".join([PREFIX['trim_tail'],
+                            PREFIX['trim'],
+                            norm_prefix])
+
+    proj_prefix = '_'.join([PREFIX['dissipation_correction'],
+                            norm_prefix])
+
+    mag_prefix = f"{PREFIX['savgol_filter']}0"
+    off_res_prefix = 'off_res'
+    off_res_shift_prefix = '_'.join([off_res_prefix,
+                                     PREFIX['translate']])
+    off_res_trim_prefix = '_'.join([PREFIX['trim_tail'],
+                             PREFIX['trim'],
+                             off_res_shift_prefix])
+
+    trim_norm, trim_readout =  (f"white_noise_{PREFIX['trim']}_{PREFIX['power_spectral_density']}_{norm_prefix}", 
+                                      f"white_noise_{PREFIX['trim']}_{PREFIX['power_spectral_density']}_{readout_noise_prefix}")
+
+    freq_wn, diss_wn = (f"freq_white_noise_{NAME['fractional_frequency']}",
+                          f"diss_white_noise_{NAME['fractional_frequency']}")
+
+    # Define property names
+    # ---------------------
+    scale_name = '_'.join([PREFIX['remove_impedance_mismatch'], 
+                           cable_prefix,
+                           NAME['magnitude']])
+
+    f_0_name = '_'.join([PREFIX['middle_frequency_point'],
+                        f"{PREFIX['savgol_filter']}0", 
+                        NAME['full_width_half_max'],
+                        NAME['frequency']])
+
+    norm_f_0 = '_'.join([PREFIX['middle_frequency_point'],
+                        'tail_shift',
+                         norm_prefix,
+                         NAME['full_width_half_max'],
+                         NAME['frequency']])
+
+
+    low_FWHM_name = '_'.join([PREFIX['low_frequency_side'],
+                        f"{PREFIX['savgol_filter']}0", 
+                        NAME['full_width_half_max'],
+                        NAME['frequency']])
+    high_FWHM_name = '_'.join([PREFIX['high_frequency_side'],
+                        f"{PREFIX['savgol_filter']}0", 
+                        NAME['full_width_half_max'],
+                        NAME['frequency']])
+
+    R_name = '_'.join([circle_fit_prefix,
+                       NAME['IQ_circle_radius']])
+
+    circle_center_name = '_'.join([circle_fit_prefix,
+                                   NAME['IQ_circle_center'],
+                                   NAME['magnitude']])
+    return (
+        NAME,
+        PREFIX,
+        R_name,
+        circle_center_name,
+        circle_fit_prefix,
+        diss_wn,
+        f_0_name,
+        freq_wn,
+        mag_prefix,
+        norm_f_0,
+        norm_prefix,
+        proj_prefix,
+        readout_noise_prefix,
+        scale_name,
+        trim_norm,
+        trim_prefix,
+        trim_readout,
+    )
+
+
+@app.cell
 def transform_data(
     Network,
     analysis_cfg,
@@ -388,9 +513,11 @@ def transform_data(
                 "sense",
                 "detector_type",
                 "network",
+                "coldload_temp"
             ],
             max_workers=10,
         )
+        mo.output.append(_network.data)
 
         ccat_pickle.multi_dump(
             _network,
@@ -434,15 +561,51 @@ def load_pickle(
 
 @app.cell
 def _(networks):
-    _network = list(networks.values())[0]
-    NAME, PREFIX = _network.analysis_cfg["convention"]["name"], _network.analysis_cfg["convention"]["prefix"]
-    return (NAME,)
+    network = networks['1.1']
+    #network.data = network.data.filter(pl.col('coldload_temp') == 63.25)
+    return (network,)
 
 
 @app.cell
-def _(networks):
-    combined_properties = list(networks.values())[0].combine_properties(data_cols=['drive']).sort('drive')
+def _(network, pl):
+    list(network.det_dict.values())[0].frac_f(data='targ', prefix='')
+    x_diff = list(network.det_dict.values())[0].targ.get_data('ff', include=0).select(pl.col('ff_000000').diff())[-1].item()*1e5
+    return
+
+
+@app.cell
+def _(mo, network, pl):
+    combined_properties = network.combine_properties(data_cols=['drive']).sort('drive')
+
+    _m_col = 'linear_fit_tail_trim_tail_shift_norm_scale_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_lw_ff_m'
+    _y_col_low = "low_max_diff_tail_trim_tail_shift_norm_scale_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_lw"
+    _y_col_high = "high_max_diff_tail_trim_tail_shift_norm_scale_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_lw"
+
+    mo.output.append(combined_properties.columns)
+
+    #_low_power_slopes = combined_properties.select('det', _m_col, norm_f_0, 'drive').filter(pl.col('drive') == 30).drop('drive').rename({_m_col:'low_power_m', norm_f_0: 'low_power_f'})
+    _low_power_slopes = combined_properties.select('det', _m_col, 'drive').filter(pl.col('drive') == 30).drop('drive').rename({_m_col:'low_power_m'})
+
+
+    combined_properties = combined_properties.join(_low_power_slopes, on='det').with_columns((1e4*pl.col(_y_col_low)/pl.col(_m_col)).alias('low_norm_diff_lw'),
+                                                                                             (1e4*pl.col(_y_col_high)/pl.col(_m_col)).alias('high_norm_diff_lw'))
     return (combined_properties,)
+
+
+@app.cell
+def _(combined_properties, network, pl):
+    for _drive, _det in network.data.select('drive', 'detector').iter_rows():
+        _det = network.det_dict[_det]
+        _props = combined_properties.filter(pl.col('drive') == _drive)
+        _shifts = _props.sort('det')['f_diff'].to_numpy()
+        _det.targ.shift(col_name='f', prefix='', shift=-1*_shifts, name='low_power', recalc=True)
+    return
+
+
+@app.cell
+def _(combined_properties, pl):
+    combined_properties.filter(pl.col('drive') != 6).hvplot.scatter(x='drive', y='f_diff', groupby='det').opts(show_grid=True)
+    return
 
 
 @app.cell
@@ -456,7 +619,219 @@ def _(networks, pl):
 
 @app.cell
 def _(combined_properties):
-    combined_properties
+    combined_properties['norm_circle_fit_tail_trim_unwind_rotate_R'].median()
+    return
+
+
+@app.cell
+def _(network, norm_prefix, pl, proj_prefix):
+    (network.plot('IQ', 'targ', prefix=proj_prefix, include=2, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='red', ms = 0.5, filter_exprs=[pl.col('drive') == 20]).opts(xlim=(-0.25, 0.25), ylim=(-0.25,0.25), data_aspect=1)*
+    network.plot('IQ', 'targ', prefix=norm_prefix, include=2, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='blue', ms = 0.5, filter_exprs=[pl.col('drive') == 20]).opts(xlim=(-0.25, 0.25), ylim=(-0.30,0.25), data_aspect=1))
+    return
+
+
+@app.cell
+def _(network, pl, proj_prefix):
+    network.plot('IQ', 'targ', prefix=f"tail_shift_{proj_prefix}", include=1, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='blue', ms = 1, filter_exprs=[pl.col('drive') == 20]).opts(xlim=(-0.12, 0.12), ylim=(-0.12,0.12), data_aspect=1, show_legend=False, legend_position='right')
+    return
+
+
+@app.cell
+def _(network, norm_prefix, pl, trim_prefix):
+    _drive = 15
+    _det = 38
+    (network.plot('phase', 'targ', prefix=norm_prefix, include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='viridis', ms = 1, filter_exprs=[pl.col('drive')==_drive])
+    *network.plot('phase', 'targ', prefix=f"phase_fit_{trim_prefix}", include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, color='red', ms = 1, filter_exprs=[pl.col('drive')==_drive]))
+    return
+
+
+@app.cell
+def _(mo):
+    drive_selector = mo.ui.slider(start=0, stop=25, step=1)
+    return (drive_selector,)
+
+
+@app.cell
+def _(combined_properties, pl, trim_prefix):
+    _det = 2
+
+    combined_properties.filter(pl.col('det') == _det).with_columns((-1*pl.col(f'phase_fit_{trim_prefix}_a')).alias(f'phase_fit_{trim_prefix}_a')).hvplot(x='drive', y=f'phase_fit_{trim_prefix}_a')#*combined_properties.filter(pl.col('det') == _det).with_columns((-1*pl.col(f'phase_fit_{trim_prefix}_b')).alias(f'phase_fit_{trim_prefix}_b')).hvplot(x='drive', y=f'phase_fit_{trim_prefix}_b')
+    return
+
+
+@app.cell
+def _(drive_selector):
+    drive_selector
+    return
+
+
+@app.cell
+def _():
+    0.1/8e-5
+    return
+
+
+@app.cell
+def _(network, norm_prefix, opts, pl):
+    _drive = 0
+    _det = 20
+    network.plot('plot', 'targ', x_dim='ff', y_dim='lw', y_prefix=f"tail_trim_tail_shift_{norm_prefix}", include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='viridis', ms = 1, filter_exprs=[pl.col('drive') == _drive]).opts(ylim=(-50, 50), show_grid=True).opts(opts.Curve(show_grid=True)).opts(xlabel='Frequency [Hz]', ylabel=r'$y \propto Q_c\left(\frac{f - f_0}{f_0}\right)$')*network.plot('plot', 'targ', x_dim='ff', y_dim='lw', y_prefix=f"linear_fit_tail_trim_tail_shift_{norm_prefix}", include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='reds', ms = 1, filter_exprs=[pl.col('drive') == _drive]).opts(ylim=(-50, 50), show_grid=True).opts(opts.Curve(show_grid=True)).opts(xlabel='Frequency [Hz]', ylabel=r'$y \propto Q_c\left(\frac{f - f_0}{f_0}\right)$')
+    return
+
+
+@app.cell
+def _(network, norm_prefix):
+    _det = list(network.det_dict.values())[5]
+    _det.targ.mag(prefix=f"tail_shift_{norm_prefix}")
+    _det.targ.mag_plot(prefix=f"tail_shift_{norm_prefix}", include=38)
+    return
+
+
+@app.cell
+def _(combined_properties, f_0_name, pl):
+    _norm_f_0 = "mid_tail_shift_norm_scale_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_FWHM_f"
+
+    combined_properties.select(f_0_name, _norm_f_0).select(pl.col(f_0_name) - pl.col(_norm_f_0))
+    return
+
+
+@app.cell
+def _(network, norm_prefix, opts, pl):
+    _drive = 0
+    _det = 154
+    network.plot('plot', 'targ', x_dim='f', y_dim='lw', y_prefix=f"tail_trim_tail_shift_{norm_prefix}", include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='viridis', ms = 1, tone_ms=100,  filter_exprs=[pl.col('drive') != 6, pl.col('drive')%2 == 0]).opts(ylim=(-15, 25), show_grid=True, ).opts(opts.Curve(show_grid=True)).opts(xlabel='Frequency [Hz]', ylabel=r'$y \propto Q_c\left(\frac{f - f_0}{f_0}\right)$')
+    return
+
+
+@app.cell
+def _(combined_properties, norm_f_0, pl):
+
+    _df = combined_properties.filter(pl.col('det') == 38).select(norm_f_0, 'drive')
+    _low_f = _df.filter(pl.col('drive') == 30)[norm_f_0].item()
+
+    _df.with_columns(pl.col(norm_f_0) - _low_f).hvplot.scatter(x='drive', y=norm_f_0)
+    return
+
+
+@app.cell
+def _(network, norm_prefix, opts, pl):
+    _drive = 0
+    _det = 38
+    network.plot('plot', 'targ', x_dim='f', y_dim='lw', y_prefix=f"tail_trim_tail_shift_{norm_prefix}", include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='viridis', ms = 1, tone_ms=100,  filter_exprs=[pl.col('drive') != 6]).opts(ylim=(-15, 15), xlim=(-10e-5, 10e-5), show_grid=True).opts(opts.Curve(show_grid=True)).opts(xlabel='Frequency [Hz]', ylabel=r'$y \propto Q_c\left(\frac{f - f_0}{f_0}\right)$')
+    return
+
+
+@app.cell
+def _(combined_properties):
+    _y_col = "linear_fit_tail_trim_tail_shift_proj_diss_norm_scale_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_lw_ff_m"
+
+    combined_properties.hvplot.line(x='drive', y=_y_col, groupby='det')
+    return
+
+
+@app.cell
+def _(combined_properties, pl):
+    _y_col_low = "low_max_diff_tail_trim_tail_shift_proj_diss_norm_scale_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_lw"
+    _y_col_high = "high_max_diff_tail_trim_tail_shift_proj_diss_norm_scale_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_lw"
+
+
+    combined_properties.filter(pl.col(_y_col_low).abs() < 4).hvplot.line(x='drive', y=_y_col_low, groupby='det')*combined_properties.filter(pl.col(_y_col_high).abs() < 1).hvplot.line(x='drive', y=_y_col_high, groupby='det')
+    return
+
+
+@app.cell
+def _(combined_properties, hv, opts, pl, trim_prefix):
+    _x_col = f"phase_fit_{trim_prefix}_a"
+    _y_col = 'low_norm_diff_lw'
+    _z_col = 'tone_freq'#f"phase_fit_{trim_prefix}_Q_c"
+
+
+    (combined_properties.filter(pl.col(_x_col) < -0.1, pl.col(_x_col) > -6, pl.col(_y_col) < 0, pl.col(_y_col) > -10, pl.col('freq/diss') < 50, pl.col('freq/diss') > 1, pl.col('drive') < 20, pl.col( f"phase_fit_{trim_prefix}_Q")<7e4, pl.col( f"phase_fit_{trim_prefix}_Q")>0.1e4).with_columns((-1*pl.col(_x_col)).alias(_x_col), (-1*pl.col(_y_col)).alias(_y_col)).hvplot.scatter(x=f"phase_fit_{trim_prefix}_a", y='low_norm_diff_lw', c=_z_col, cmap='viridis', s=10)*hv.VLine(0.77).opts(c='k', linestyle='--')).opts(logx=True, logy=True, show_grid=True, xlabel='Nonlinearity Parameter', ylabel=r'Max $\frac{1}{Q_c}\frac{dy}{dx}$').opts(opts.Scatter(logz=True, clabel='Resonant Frequency [Hz]' ))
+    return
+
+
+@app.cell
+def _(combined_properties, hv, opts, pl, trim_prefix):
+    _x_col = f"phase_fit_{trim_prefix}_a"
+    _y_col = 'low_norm_diff_lw'
+
+    (combined_properties.filter(pl.col(_x_col) < 1, pl.col(_x_col) > -2, pl.col(_y_col) < 0.1, pl.col(_y_col) > -1, pl.col('freq/diss') < 30, pl.col('freq/diss') > 1, pl.col('drive') < 20).with_columns((-1*pl.col(_x_col)).alias(_x_col), (-1*pl.col(_y_col)).alias(_y_col)).hvplot.scatter(x=f"phase_fit_{trim_prefix}_a", y='low_norm_diff_lw', c='freq/diss', cmap='viridis', s=10)*hv.VLine(0.77)).opts(logx=False, logy=False, show_grid=True, xlabel='Nonlinearity Parameter', ylabel=r'Max $\frac{1}{Q_c}\frac{dy}{dx}$').opts(opts.Scatter(logz=True, clabel='Drive Attenuation [dB]' ))
+    return
+
+
+@app.cell
+def _(combined_properties, hv, opts, pl, trim_prefix):
+    _x_col = f"phase_fit_{trim_prefix}_a"
+    _y_col = 'high_norm_diff_lw'
+
+    (combined_properties.filter(pl.col(_x_col) < 1, pl.col(_x_col) > -2, pl.col(_y_col)>0, pl.col(_y_col) < 0.15, pl.col('freq/diss') < 30, pl.col('freq/diss') > 1, pl.col('drive') < 20).with_columns((-1*pl.col(_x_col)).alias(_x_col)).hvplot.scatter(x=f"phase_fit_{trim_prefix}_a", y=_y_col, c='tone_freq', cmap='viridis', s=10)*hv.VLine(0.77)).opts(logx=False, logy=False, show_grid=True, xlabel='Nonlinearity Parameter', ylabel=r'Max $\frac{1}{Q_c}\frac{dy}{dx}$').opts(opts.Scatter(logz=True, clabel='Drive Attenuation [dB]' ))
+    return
+
+
+@app.cell
+def _(combined_properties, hv, opts, pl, trim_prefix):
+    _x_col = f"phase_fit_{trim_prefix}_a"
+    _y_col = 'high_norm_diff_lw'
+
+    (combined_properties.filter(pl.col(_x_col) > 0.05, pl.col(_x_col) < 1, pl.col(_y_col) > -0.2, pl.col(_y_col) < 0.1, pl.col('freq/diss') < 30, pl.col('freq/diss') > 0, pl.col('drive') < 20).hvplot.scatter(x=f"phase_fit_{trim_prefix}_a", y=_y_col, c='tone_freq', cmap='viridis', s=10)*hv.VLine(0.77)).opts(logx=True, logy=True, show_grid=True, xlabel='Nonlinearity Parameter', ylabel=r'Max $\frac{1}{Q_c}\frac{dy}{dx}$').opts(opts.Scatter(logz=True, clabel='Drive Attenuation [dB]' ))
+    return
+
+
+@app.cell
+def _(combined_properties, hv, pl, trim_prefix):
+    _y_col_low = "low_norm_diff_lw"
+    _y_col_high = f"phase_fit_{trim_prefix}_a"
+
+
+    (combined_properties.filter(pl.col(_y_col_low).abs() < 4).hvplot.line(x='drive', y=_y_col_low, groupby='det', label=r'Max $\frac{1}{Q_c}\frac{dy}{dx}$')*combined_properties.filter(pl.col(_y_col_high).abs() < 4).hvplot.line(x='drive', y=_y_col_high, groupby='det', label='Nonlinearity Parameter')*hv.HLine(-0.77).opts(c='k', linestyle='--')).opts(xlabel='Drive Attenuation [dB]', ylabel='')
+    return
+
+
+@app.cell
+def _(combined_properties, pl):
+    combined_properties.filter(pl.col('det') == 38)
+    return
+
+
+@app.cell
+def _(network):
+    list(network.det_dict.values())[0].properties
+    return
+
+
+@app.cell
+def _():
+    return
+
+
+@app.cell
+def _(network, pl, proj_prefix):
+    _drive = 20
+    _det = 38
+    (network.plot('plot', 'targ', x_dim='ff', y_dim='lw', y_prefix=f"linear_fit_tail_trim_tail_shift_{proj_prefix}", include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, color='red', ms = 0, filter_exprs=[pl.col('drive')==_drive])*network.plot('plot', 'targ', x_dim='ff', y_dim='lw', y_prefix=f"tail_trim_tail_shift_{proj_prefix}", include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, cmap='viridis', ms = 1, filter_exprs=[pl.col('drive')==_drive])
+    ).opts(xlim=(-10e-5, 15e-5), ylim=(-1, 1))
+    return
+
+
+@app.cell
+def _(network, pl, proj_prefix):
+    _drive = 20
+    _det = 38
+    (network.plot('plot', 'targ', x_dim='ff', y_dim='lw', y_prefix=f"diff_tail_trim_tail_shift_{proj_prefix}", include=_det, data_cols=['drive'], overlay_cols=['drive'], save_fig=False, return_df=False, color='red', ms = 0, filter_exprs=[pl.col('drive')==_drive]))
+    return
+
+
+@app.cell
+def _(f_0_name, network, pl):
+    _det = network.det_dict[network.data.filter(pl.col('drive') == 25)['detector'].item()]
+
+    _det.frac_f(prefix='', 
+                       data='targ', 
+                       ref_f= f_0_name)
+
+    _det.targ.properties
+
+    #_det.targ.plot(x_dim='ff', y_dim='lw', y_prefix=f"FWHM_Q_scale_tail_trim_tail_shift_{proj_prefix}", include=38).opts(xlim=(-7.5e-5, 7.5e-5))
     return
 
 
@@ -666,9 +1041,19 @@ def _(combined_properties, pl):
 
 
 @app.cell
-def _(networks):
+def _(combined_properties, det_selector, mo, networks, opts, pl):
+    _det = det_selector.value
     _network = list(networks.values())[0]
-    _network.plot('mag','targ', prefix='', include=131, data_cols=['drive'], cmap='viridis', save_fig=False)
+
+    _plot = _network.plot('phase','targ', prefix='tail_trim_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_det, data_cols=['drive'], cmap='viridis', save_fig=False).opts(opts.Curve(linewidth=0, ms=0.1))
+    _fit = _network.plot('phase','targ', prefix='phase_fit_tail_trim_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_det, data_cols=['drive'], cmap='viridis', save_fig=False).opts(opts.Curve(ms=0, linewidth=1))
+
+    _nonlin_a = combined_properties.filter(pl.col('det') == _det).hvplot.scatter(x='drive', y='phase_fit_tail_trim_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_a').opts(xlabel='Drive', ylabel='Nonlinearity Parameter', aspect=1)
+    _nonlin_b = combined_properties.filter(pl.col('det') == _det).hvplot.scatter(x='drive', y='phase_fit_tail_trim_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_b').opts(xlabel='Drive', ylabel='Nonlinearity Parameter', aspect=1)
+
+
+    mo.output.append(det_selector)
+    mo.output.append((_plot*_fit + _nonlin_a*_nonlin_b).cols(1))
     return
 
 
@@ -1290,25 +1675,41 @@ def _():
 
 @app.cell(column=3)
 def dump_transform(
+    NAME,
     Network,
+    PREFIX,
     ProcessPoolExecutor,
+    R_name,
     cable_fit_workers_selector,
+    circle_center_name,
+    circle_fit_prefix,
     circle_fit_workers_selector,
+    diss_wn,
+    f_0_name,
+    freq_wn,
     interp_workers_selector,
+    mag_prefix,
     mismatch_mean_points_selector,
+    norm_f_0,
+    norm_prefix,
     phase_fit_window_selector,
     phase_fit_workers_selector,
     pl,
     psd_trim_slider,
     psd_workers_selector,
+    readout_noise_prefix,
     savgol_order_selector,
     savgol_window_selector,
     savgol_workers_selector,
+    scale_name,
     spline_bounds_selector,
     spline_k_selector,
     spline_workers_selector,
     tqdm,
     trim_mean_points_selector,
+    trim_norm,
+    trim_prefix,
+    trim_readout,
     trim_window_selector,
 ):
     def dump_transform(network: Network) -> Network:
@@ -1318,54 +1719,7 @@ def dump_transform(
         from ccatkidlib.analysis.routines.common import IQ_circle_center, IQ_noise, phase_to_ff
         import ccatkidlib.analysis.routines.properties as property_routines
         import ccatkidlib.analysis.routines.tune as tune_routines
-
-        _name, _prefix = network.analysis_cfg["convention"]["name"], network.analysis_cfg["convention"]["prefix"]
-
-        _mismatch_prefix = "_".join([
-            _prefix["remove_impedance_mismatch"],
-            _prefix["rotate"],
-            _prefix["center_origin"],
-            _prefix["translate"],
-            _prefix["center_origin"],
-            _prefix["rotate"],
-            #_prefix["normalize"],
-            #_prefix["scale"],
-            _prefix["remove_cable"],
-            _prefix["rotate"],
-        ])
-
-        _readout_noise_prefix = "_".join([_prefix['isolate_readout_noise'],
-                                          _prefix['rotate'],
-                                          _mismatch_prefix])
-
-        _trim_mismatch, _trim_readout =  (f"white_noise_{_prefix['trim']}_{_prefix['power_spectral_density']}_{_mismatch_prefix}", 
-                                          f"white_noise_{_prefix['trim']}_{_prefix['power_spectral_density']}_{_readout_noise_prefix}")
-
-        _freq_wn, _diss_wn = (f"freq_white_noise_{_name['fractional_frequency']}",
-                              f"diss_white_noise_{_name['fractional_frequency']}")
-
-        _circle_fit_prefix = "_".join([
-            _prefix["IQ_circle_fit"],
-            _prefix["trim_tail"],
-            _prefix["trim"],
-            #_prefix["normalize"],
-            #_prefix["scale"],
-            _prefix["remove_cable"],
-            _prefix["rotate"],
-        ])
-
-        _low_f, _ref_f, _high_f = ("_".join([_prefix['low_frequency_side'],
-                                             f"{_prefix['savgol_filter']}0",
-                                             _name['full_width_half_max'],
-                                             _name['frequency']]),
-                                  "_".join([_prefix['middle_frequency_point'],
-                                             f"{_prefix['savgol_filter']}0",
-                                             _name['full_width_half_max'],
-                                             _name['frequency']]),
-                                  "_".join([_prefix['high_frequency_side'],
-                                             f"{_prefix['savgol_filter']}0",
-                                             _name['full_width_half_max'],
-                                             _name['frequency']]))
+        import ccatkidlib.analysis.fit as ccat_fit
 
         _max_workers = max(
             savgol_workers_selector.value,
@@ -1385,91 +1739,158 @@ def dump_transform(
                            "PSD Trim",
                            "Linewidth Shift"]
 
+        params = None
         with ProcessPoolExecutor(max_workers=_max_workers) as _ex:
             for det_idx, (det) in enumerate(tqdm(
-                network.det_dict.values(),
+                network.data.sort('drive', descending=True)['detector'],
                 desc="Processing Detectors",
                 total=len(network.det_dict),
                 unit="Detector",
             )):
-                # IQ Circle Center
-                tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[0]}")
-                IQ_circle_center(
-                    det,
-                    normalize=False,
-                    data="both",
-                    savgol_window=savgol_window_selector.value,
-                    savgol_order=savgol_order_selector.value,
-                    trim_window=trim_window_selector.value,
-                    trim_mean_points=trim_mean_points_selector.value,
-                    mismatch_mean_points=mismatch_mean_points_selector.value,
-                    savgol_workers=savgol_workers_selector.value,
-                    circle_fit_workers=circle_fit_workers_selector.value,
-                    cable_fit_workers=cable_fit_workers_selector.value,
-                    ex=_ex,
-                )
+                try:
+                    det = network.det_dict[det]
 
-                # IQ Noise
-                tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[1]}")
-                IQ_noise(det,
-                         prefix=_mismatch_prefix)
+                    # IQ Circle Center
+                    # ----------------
+                    tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[0]}")
+                    IQ_circle_center(
+                        det,
+                        normalize=True,
+                        data="both",
+                        savgol_window=savgol_window_selector.value,
+                        savgol_order=savgol_order_selector.value,
+                        trim_window=trim_window_selector.value,
+                        trim_mean_points=trim_mean_points_selector.value,
+                        mismatch_mean_points=mismatch_mean_points_selector.value,
+                        savgol_workers=savgol_workers_selector.value,
+                        circle_fit_workers=circle_fit_workers_selector.value,
+                        cable_fit_workers=cable_fit_workers_selector.value,
+                        ex=_ex,
+                    )
 
-                # Phase to FF
-                tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[2]}")
-                phase_to_ff(det,
-                            prefix=[_mismatch_prefix, _readout_noise_prefix],
-                            spline_prefix=_mismatch_prefix,
-                            spline_bounds=spline_bounds_selector.value,
-                            spline_k=spline_k_selector.value,
-                            spline_workers=spline_workers_selector.value,
-                            interp_workers=interp_workers_selector.value,
-                            ref_f=_ref_f,
-                            ex=_ex)
+                    # IQ Noise
+                    # --------
+                    tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[1]}")
+                    IQ_noise(det,
+                             prefix=norm_prefix)
 
-                # Phase Fit
-                tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[3]}")
-                det.phase_fit(
-                    prefix=_mismatch_prefix,
-                    circle_fit_prefix=_circle_fit_prefix,
-                    nonlinear=True,
-                    window=phase_fit_window_selector.value,
-                    max_workers=phase_fit_workers_selector.value,
-                    ex=_ex,
-                )
+                    # Phase to FF
+                    # -----------
+                    tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[2]}")
+                    phase_to_ff(det,
+                                prefix=[norm_prefix, readout_noise_prefix],
+                                spline_prefix=norm_prefix,
+                                spline_bounds=spline_bounds_selector.value,
+                                spline_k=spline_k_selector.value,
+                                spline_workers=spline_workers_selector.value,
+                                interp_workers=interp_workers_selector.value,
+                                ref_f=f_0_name,
+                                ex=_ex)
 
-                # PSD Calculation
-                tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[4]}")
-                det.stream.psd(col_name=_name['fractional_frequency'],
-                               prefix=[_mismatch_prefix, _readout_noise_prefix],
-                               nperseg=512,
-                               max_workers=psd_workers_selector.value,
-                               ex=_ex)
+                    # Phase Fit
+                    # ---------
+                    tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[3]}")
+                    det.IQ_trim(
+                        prefix=norm_prefix,
+                        window=phase_fit_window_selector.value,
+                        mean_points=trim_mean_points_selector.value,
+                        use_fit=False,
+                        mag_prefix=mag_prefix,
+                    )
 
-                # PSD Trim
-                tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[5]}")
-                det.stream.psd_trim(col_name=_name['fractional_frequency'],
-                                    prefix=[_mismatch_prefix, _readout_noise_prefix],
-                                    low_f=psd_trim_slider.value[0],
-                                    high_f=psd_trim_slider.value[1],
-                                    name='white_noise')
+                    det.targ._properties_df = det.targ.properties.with_columns((pl.col(R_name)/pl.col(scale_name)).alias(f"{PREFIX['normalize']}_{R_name}"), (pl.col(circle_center_name)/pl.col(scale_name)).alias(f"{PREFIX['normalize']}_{circle_center_name}"), pl.lit(0.05).alias(f"const_{R_name}"))
 
-                # Calc freq/diss ratio
-                property_routines.agg(det.stream, "median", col_name = _name['fractional_frequency'], prefix=_trim_mismatch)
-                property_routines.agg(det.stream, "median", col_name = _name['fractional_frequency'], prefix=_trim_readout)
-                det.stream._properties_df = (det.stream.properties.rename({
-                    f"median_stream_{_trim_mismatch}_{_name['fractional_frequency']}": _freq_wn,
-                    f"median_stream_{_trim_readout}_{_name['fractional_frequency']}": _diss_wn})
-                                                .with_columns((pl.col(_freq_wn)/pl.col(_diss_wn)).alias('freq/diss'))
-                                            )  
+                    det.targ.phase(prefix=trim_prefix)
 
-                tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[6]}")
-                det.targ._properties_df = det.targ.properties.with_columns((pl.col(_ref_f)/ (pl.col(_high_f) - pl.col(_low_f))).alias('FWHM_Q'),
-                pl.col(f"{_prefix['phase_fit']}_{_mismatch_prefix}_{_name['total_quality_factor']}").alias('fit_Q'))
+                    det.fit_result = {}
+                    det.phase_fit(
+                        prefix=trim_prefix,
+                        circle_fit_prefix=f"{PREFIX['normalize']}_{circle_fit_prefix}",
+                        nonlinear=True,
+                        params=params,
+                        max_workers=phase_fit_workers_selector.value,
+                        ex=_ex,
+                    )
 
-                tune_routines.max_linewidth_dist_f(det, prefix=_mismatch_prefix, Q_col='FWHM_Q', trim_window=1.5, trim_mag_prefix=f"{_prefix['savgol_filter']}0", savgol_window=1, savgol_k=2, max_workers=savgol_workers_selector.value)
-                tune_routines.max_linewidth_dist_f(det, prefix=_mismatch_prefix, Q_col='fit_Q', trim_window=1.5, trim_mag_prefix=f"{_prefix['savgol_filter']}0", savgol_window=1, savgol_k=2, max_workers=savgol_workers_selector.value)
-                tune_routines.max_linewidth_dist_f(det, prefix=_mismatch_prefix, Q_col='', trim_window=1.5, trim_mag_prefix=f"{_prefix['savgol_filter']}0", savgol_window=1, savgol_k=2, max_workers=savgol_workers_selector.value)  
+                    result = det.fit_result[f"{PREFIX['phase_fit']}_{trim_prefix}_{NAME['fit_result']}"]
+                    params = [res.params if res is not None else None for res in result]
+                    for param in params: 
+                        if param is not None: param.pop('R')
 
+
+                    # PSD Calculation
+                    # ---------------
+                    tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[4]}")
+                    det.stream.psd(col_name=NAME['fractional_frequency'],
+                                   prefix=[norm_prefix, readout_noise_prefix],
+                                   nperseg=512,
+                                   max_workers=psd_workers_selector.value,
+                                   ex=_ex)
+
+                    # PSD Trim
+                    # --------
+                    tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[5]}")
+                    det.stream.psd_trim(col_name=NAME['fractional_frequency'],
+                                        prefix=[norm_prefix, readout_noise_prefix],
+                                        low_f=psd_trim_slider.value[0],
+                                        high_f=psd_trim_slider.value[1],
+                                        name='white_noise')
+
+                    # Calc freq/diss ratio
+                    # --------------------
+                    property_routines.agg(det.stream, "median", col_name = NAME['fractional_frequency'], prefix=trim_norm)
+                    property_routines.agg(det.stream, "median", col_name = NAME['fractional_frequency'], prefix=trim_readout)
+                    det.stream._properties_df = (det.stream.properties.rename({
+                        f"median_stream_{trim_norm}_{NAME['fractional_frequency']}": freq_wn,
+                        f"median_stream_{trim_readout}_{NAME['fractional_frequency']}": diss_wn})
+                                                    .with_columns((pl.col(freq_wn)/pl.col(diss_wn)).alias('freq/diss'))
+                                                )  
+
+                    # Project data
+                    # ------------
+                    #det.targ.mag(prefix=norm_prefix, dB=False)
+                    #proj_df = det.IQ_circle_diss_corr(prefix=norm_prefix,
+                    #                                  circle_fit_prefix=f"const_{circle_fit_prefix}",
+                    #                                  max_workers=2,
+                    #                                  ex=_ex)
+
+                    # Calc y = Qx
+                    # -----------
+                    tqdm.write(f"  [Detector {det_idx}] Running: {_pipeline_steps[6]}")
+                    #det.targ._properties_df = det.targ.properties.with_columns((pl.col(f_0_name)/ (pl.col(high_FWHM_name)-pl.col(low_FWHM_name))).alias('FWHM_Q'),
+                    #pl.col(f"{PREFIX['phase_fit']}_{trim_prefix}_{NAME['total_quality_factor']}").alias('fit_Q'))
+
+                    #tune_routines.max_linewidth_dist_f(det, prefix=proj_prefix, Q_col='FWHM_Q', trim_window=1.5, 
+                    #                                   trim_mag_prefix=mag_prefix, savgol_window=1, savgol_k=2, 
+                    #                                   max_workers=savgol_workers_selector.value)
+                    #tune_routines.max_linewidth_dist_f(det, prefix=proj_prefix, Q_col='fit_Q', trim_window=1.5, 
+                    #                                  trim_mag_prefix=mag_prefix, savgol_window=1, savgol_k=2, 
+                    #                                   max_workers=savgol_workers_selector.value)
+                    #tune_routines.max_linewidth_dist_f(det, prefix=proj_prefix, Q_col='', trim_window=5, 
+                    #                                   trim_mag_prefix=mag_prefix, savgol_window=1, savgol_k=2, 
+                    #                                   max_workers=savgol_workers_selector.value, ex=_ex)  
+                    #det.targ.linear_fit(x_col_name=NAME['fractional_frequency'], 
+                    ##                    y_col_name=NAME['linewidth_shift'], 
+                    #                    y_prefix=f"tail_trim_tail_shift_{proj_prefix}",
+                    #                    max_workers=15,
+                    #                    ex=_ex)
+
+                    tune_routines.max_linewidth_dist_f(det, prefix=norm_prefix, Q_col='', trim_window=2.5, 
+                                       trim_mag_prefix=mag_prefix, savgol_window=1, savgol_k=2, 
+                                       max_workers=savgol_workers_selector.value, ex=_ex) 
+                    det.targ.mag(prefix=f"tail_shift_{norm_prefix}", dB=False)
+                    property_routines.fwhm(det.targ, mag_prefix=f"tail_shift_{norm_prefix}", peak=True)
+                    det.frac_f(prefix='', 
+                               data='targ', 
+                               ref_f= norm_f_0)
+
+                    det.targ.linear_fit(x_col_name=NAME['fractional_frequency'], 
+                                        y_col_name=NAME['linewidth_shift'], 
+                                        y_prefix=f"tail_trim_tail_shift_{norm_prefix}",
+                                        max_workers=15,
+                                        ex=_ex)
+                except Exception as e:
+                    print(e)
         return network
 
     return (dump_transform,)

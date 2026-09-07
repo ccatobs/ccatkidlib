@@ -60,19 +60,6 @@ def IQ_circle_center(
         )
         savgol_prefix = f"{prefix_dict['savgol_filter']}0"
 
-        if normalize:
-            det.complex_fit(include=include,
-                            exclude=exclude,
-                            recalc=recalc,
-                            max_workers=cable_fit_workers,
-                            ex=ex)
-            complex_fit_cable = f"{prefix_dict['complex_fit_cable']}_{prefix_dict['complex_fit']}"
-
-            det.targ.mag(prefix=complex_fit_cable, dB=False, include=include, exclude=exclude, recalc=recalc)
-            det.IQ_norm(norm_prefix=complex_fit_cable, prefix=cable_prefix, data='both', include=include, exclude=exclude, recalc=recalc)
-            cable_prefix = f"{prefix_dict['normalize']}_{prefix_dict['scale']}_{cable_prefix}"
-
-
         det.IQ_trim(
             prefix=cable_prefix,
             window=trim_window,
@@ -119,6 +106,26 @@ def IQ_circle_center(
         recalc=recalc,
     )
 
+    mismatch_prefix = f"{prefix_dict['remove_impedance_mismatch']}_{prefix_dict['rotate']}_{center_prefix}"
+
+    # Normalize IQ Circle by Removing Cable Gain
+    # ------------------------------------------
+    if normalize:
+        scale = properties_routines.mismatch_dist(det.targ, 
+                                                prefix=cable_prefix, 
+                                                include=include, 
+                                                exclude=exclude,
+                                                recalc=recalc).to_numpy().T[1]
+
+        data_objs, data_types = det._get_data_obj(data)
+        centered_df = [None]*len(data_objs)
+        for i, data_obj in enumerate(data_objs):
+            centered_df[i] = data_obj.IQ_scale(prefix=mismatch_prefix,
+                                               name=prefix_dict['normalize'],
+                                               scale=1/scale,
+                                               include=include,
+                                               exclude=exclude,
+                                               recalc=recalc)
     return centered_df
 
 def phase_to_ff(det,
@@ -300,7 +307,7 @@ def IQ_noise(
             #     exclude=exclude,
             #)
         else:
-            noise_prefix = f'{prefix_dict['isolate_readout_noise']}_{prefix_dict['rotate']}_{pre}'
+            noise_prefix = f'{prefix_dict['isolate_dissipation_noise']}_{prefix_dict['rotate']}_{pre}'
             noise_names[i] = noise_prefix
             median_I, median_Q = (
                 properties_routines.agg(det.stream, "median", name_dict['in_phase'], prefix=pre, include=include, exclude=exclude, recalc=recalc)
