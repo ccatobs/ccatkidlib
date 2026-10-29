@@ -5,9 +5,7 @@ import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 from ccatkidlib.analysis.core.network import Network
-from ccatkidlib.analysis.routines.common import IQ_circle_center
-from ccatkidlib.analysis.routines.properties import mismatch_dist
-
+from ccatkidlib.analysis.routines.common import IQ_circle_origin
 
 # Tone Power Tuning
 # -----------------
@@ -24,14 +22,12 @@ class TonePowerNetwork(Network):
 
         return
 
-
 def max_linewidth_dist_f(det,
                          prefix="",
                          Q_col = "",
                          trim_mag_prefix = "",
                          trim_window = 2,
-                         trim_mean_points = 10,
-                         mismatch_mean_points = 10, 
+                         mean_points=10,
                          savgol_window: int = 21,
                          savgol_k: int = 1,
                          include=None,
@@ -45,7 +41,7 @@ def max_linewidth_dist_f(det,
         det.targ.analysis_cfg["convention"]["prefix"],
     )
     
-    mismatch_dist(det.targ, prefix=prefix, mean_points=mismatch_mean_points, include=include, exclude=exclude, recalc=recalc)
+    det.targ.mismatch_dist(prefix=prefix, mean_points=mean_points, include=include, exclude=exclude, recalc=recalc)
     I_shifts = det.targ.get_properties(f"{prefix_dict['remove_impedance_mismatch']}_{prefix}_{name_dict['magnitude']}", include=include, exclude=exclude, strict=True).to_numpy().T[1]
     
     det.targ.IQ_shift(prefix=prefix, shift_I = I_shifts, name=prefix_dict['center_tail'], include=include, exclude=exclude, recalc=recalc)
@@ -53,7 +49,7 @@ def max_linewidth_dist_f(det,
     
     det.IQ_trim(prefix=shift_prefix, 
                 window=trim_window, 
-                mean_points=trim_mean_points, 
+                mean_points=meam_points, 
                 mag_prefix=trim_mag_prefix,
                 include=include,
                 exclude=exclude,
@@ -93,7 +89,7 @@ def max_linewidth_dist_f(det,
                                                                                        f"{prefix_dict['high_frequency_side']}_max_{lw_col}",
                                                                                        f"{prefix_dict['low_frequency_side']}_max_{lw_col}_{freq_col}",
                                                                                        f"{prefix_dict['high_frequency_side']}_max_{lw_col}_{freq_col}",
-)
+    )
 
     include_subset = ccat_df.check_properties(
         det,

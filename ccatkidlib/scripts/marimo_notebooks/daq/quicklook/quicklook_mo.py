@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.2"
+__generated_with = "0.25.1"
 app = marimo.App(width="columns")
 
 
@@ -59,7 +59,14 @@ def _(mo, targ_dashboards):
 
 
 @app.cell
-def _():
+def _(hv):
+    hv.extension('matplotlib')
+    return
+
+
+@app.cell
+def _(Target, data_p):
+    Target(data_p)
     return
 
 
@@ -237,7 +244,7 @@ def _():
     from ccatkidlib.analysis.core.target import Target
     from ccatkidlib.analysis.core.detector import Detector
 
-    return Detector, R, ccat_io
+    return Detector, R, Target, ccat_io
 
 
 @app.cell
@@ -261,7 +268,7 @@ def _():
     from holoviews import opts
 
     hv.extension("matplotlib")
-    return
+    return (hv,)
 
 
 @app.cell

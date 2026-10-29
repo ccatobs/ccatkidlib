@@ -65,7 +65,6 @@ class Detector:
         cfg_path: str = str(Path(__file__).parents[1] / "analysis_config.yaml"),
         dets: int | list[int] = -1,
         noise_tones: int | list[int] | None = None,
-        cable_delay: float | None = None,
         stream: Timestream | None = None,
         stream_path: str
         | pathlib.PosixPath
@@ -95,7 +94,6 @@ class Detector:
             analysis_cfg (str, optional): Path to analysis configuration file. Defaults to analysis configuration file in *ccatkidlib/ccatkidlib/analysis*
             dets (int | list[int], optional): Which detectors to load; -1 to load all detectors. Defaults to -1
             noise_tones (int | list[int] | None, optional): Indicies of noise tones (tones not placed on detectors). Defaults to *None*
-            cable_delay (float | None, optional): Cable delay of full network. Defaults to *None*
 
             stream (Timestream | None, optional): Detector ``Timestream`` object. Defaults to *None*
             stream_path (str | pathlib.PosixPath | list[str] | list[pathlib.PosixPath] | None, optional): Data path to detector timestream files. Defaults to *None*
@@ -241,7 +239,6 @@ class Detector:
 
         # Create internal attributes corresponding to lazily loaded attributes
         # --------------------------------------------------------------------
-        self._cable_delay = cable_delay
         self._properties_df = None
         self.fit_result = {}
 
@@ -297,31 +294,38 @@ class Detector:
         if isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._properties_df = value
 
-    @property
-    def cable_delay(self):
-        self._cable_delay = (
-            self.vna.cable_delay
-            if self._cable_delay is None and isinstance(self.vna, VNA)
-            else self._cable_delay
-        )
-        if not isinstance(self._cable_delay, Iterable):
-            self._properties_df = self.properties.with_columns(
-                pl.lit(self._cable_delay).alias(
-                    f"vna_{self.analysis_cfg['convention']['name']['cable_delay']}"
-                )
-            )
-            # Get cable delays for individual detectors using target sweep data. The target sweep cable delays tend to be too large so average with the overall network cable delay
-            # self.targ._properties = {det: {'det_cable_delay': 0.4*delay + 0.6*self._cable_delay} for det, delay in self.targ.cable_delay.items()}
+    def cable_delay(self, 
+                    prefix = "",
+                    mag_prefix = "",
+                    window: int | list[int] = 5, 
+                    mean_points: int | list[int] = 10, 
+                    include=None, 
+                    exclude=None, 
+                    recalc=False, 
+                    stitch_workers = 1, 
+                    linear_fit_workers=1, 
+                    ex=None):
+        delay_col = self.analysis_cfg['convention']['name']['cable_delay']
+        vna_col, targ_col = "_".join(["vna", delay_col]), "_".join(["targ", delay_col])
 
-            # Replace cable delays that are far from the overall network cable delay with the network cable delay
-            # threshold = pl.lit(100) # TODO: Make this accessible
-            # self._properties_df = (self.properties.lazy()#.with_columns(pl.when((pl.col('det_cable_delay') - self._cable_delay).abs() > threshold)
-            #                                             #                .then(pl.lit(self._cable_delay))
-            #                                             #                .otherwise(pl.col('det_cable_delay'))
-            #                                             #               .alias('det_cable_delay'))
-            #                                            .with_columns(pl.lit(self._cable_delay).alias('network_cable_delay'))
-            #                                            .collect())
-        return self._cable_delay
+        self.targ.cable_delay(prefix=prefix, 
+                              mag_prefix=mag_prefix, 
+                              window=window, 
+                              mean_points=mean_points, 
+                              include=include, 
+                              exclude=exclude, 
+                              recalc=recalc, 
+                              stitch_workers=stitch_workers, 
+                              linear_fit_workers=linear_fit_workers, 
+                              ex=ex)
+        vna_delay = self.vna.cable_delay() if isinstance(self.vna, VNA) else 0
+        self._properties_df = (self.properties.with_columns(pl.lit(vna_delay).alias(vna_col))
+                                              .with_columns(pl.when(pl.col(targ_col).is_nan())
+                                                              .then(pl.col(vna_col))
+                                                              .otherwise(pl.col(targ_col)) 
+                                                              .alias(targ_col)))
+        
+        return self.get_properties([vna_col, targ_col], strict=True, include=include, exclude=exclude)
 
     @cached_property
     def fig_dir(self) -> str:
@@ -543,6 +547,7 @@ class Detector:
         | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
         circle_fit_prefix: str = "circle_fit_unwind_rotate",
         nonlinear: bool = False,
+        normalized = False,
         method: str = "least_squares",
         params: lmfit.Parameters = None,
         include: int | list[int] | None = None,
@@ -584,6 +589,7 @@ class Detector:
         num_prefix = len(name_enums)
         params = ccat_df.check_args(params, num_prefix, lmfit.parameter.Parameters)
         nonlinear = ccat_df.check_args(nonlinear, num_prefix, bool)
+        normalized = ccat_df.check_args(normalized, num_prefix, bool)
         method = ccat_df.check_args(method, num_prefix, str)
         circle_fit_prefix = ccat_df.check_args(circle_fit_prefix, num_prefix, str)
 
@@ -612,13 +618,14 @@ class Detector:
                 self,
                 radius,
                 nonlin,
+                norm,
                 meth,
                 param,
                 ccat_mp.check_max_workers(max_workers),
                 ex,
             ]
-            for radius, nonlin, param, meth in zip(
-                radii, nonlinear, params, method
+            for radius, nonlin, norm, param, meth in zip(
+                radii, nonlinear, normalized, params, method
             )
         ]
         self.targ.transform(
@@ -632,19 +639,20 @@ class Detector:
         )
 
         col_names = []
-        for prefix_enum, name_enum, circle_enum in zip(
-            prefix_enums, name_enums, circle_name_enums
+        for prefix_enum, name_enum, circle_enum, norm in zip(
+            prefix_enums, name_enums, circle_name_enums, normalized
         ):
             col_names += [
                 f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE.value}",
             ]
 
+            scale_factor = 1e6 if norm else 1e-8
             self.targ._properties_df = (
                 self.targ.properties.lazy()
                 .with_columns(
                     [
                         (
-                            1e6
+                            scale_factor
                             * (
                                 pl.col(
                                     f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_BETA.value}"
@@ -814,60 +822,6 @@ class Detector:
             exclude=exclude,
         )
 
-    def nonlinearity_parameter(self,
-                               prefix: str | list[str] = "",
-                               m: str | float | list[float],
-                               b: str | float | list[float],
-                               f_shift: str | float | list[float] = 0,
-                               include: int | list[int] | None = None,
-                               exclude: int | list[int] | None = None,
-                               recalc: bool = False,
-                               **kwargs,):
-        name_enums, prefix_enums = ccat_df.create_enums(
-            ["linewidth_shift", "ki_nonlinearity_parameter"],
-            prefix,
-            [],
-            self.analysis_cfg,
-            no_prefix=[],
-        )
-
-        num_prefix = len(name_enums)
-        m = ccat_df.check_args(f_shift, num_prefix, str)
-        b = ccat_df.check_args(f_shift, num_prefix, str)
-        f_shift = ccat_df.check_args(f_shift, num_prefix, str)
-
-        for i, f_0 in enumerate(ref_f):
-            if isinstance(f_0, str):
-                ref_f[i] = (
-                    self.get_properties(
-                        f_0, include=include, exclude=exclude, strict=True
-                    )
-                    .to_numpy()
-                    .T[1]
-                )  # Get reference frequencies from .properties DataFrame
-
-        frac_f_dfs, args = [], [[f] for f in ref_f]
-        for data_obj in data_objs:
-            data_obj.transform(
-                [Detector._calc_frac_f] * num_prefix,
-                *args,
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-                col_enum=name_enums,
-                prefix_enum=prefix_enums,
-            )
-
-            frac_f_dfs.append(
-                data_obj.get_data(
-                    col_name=[name_enum.FRACTIONAL_FREQUENCY.value for name_enum in name_enums],
-                    include=include,
-                    exclude=exclude,
-                    strict=True
-                    ))
-
-        return frac_f_dfs
-
     # IQ transformations
     # ------------------
 
@@ -908,7 +862,7 @@ class Detector:
         )
 
         # TODO: Allow different delay cols for each prefix
-        data_objs, data_types = self._get_data_obj(data)
+        data_objs = self._get_data_obj(data)
         if not data_objs:
             error = (
                 f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
@@ -927,12 +881,12 @@ class Detector:
 
         delays = -2 * np.pi * 1e-9 * delays
         unwind_dfs = []
-        for data_obj, data_type in zip(data_objs, data_types):
+        for data_obj in data_objs:
             angle = (
                 [
                     delay * tone_freq
                     for tone_freq, delay in zip(
-                        self.targ.get_data(
+                        data_obj.get_data(
                             name_enums[0].FREQUENCY.value,
                             include=include,
                             exclude=exclude,
@@ -943,11 +897,11 @@ class Detector:
                         delays,
                     )
                 ]
-                if data_type == "targ"
+                if data_obj.data_type == 'targ'
                 else [
                     delay * tone_freq
                     for tone_freq, delay in zip(
-                        self.stream.comb[name_enums[0].TONE_FREQUENCY.value].to_numpy().T, delays
+                        data_obj.comb[name_enums[0].TONE_FREQUENCY.value].to_numpy().T, delays
                     )
                 ]
             )
@@ -999,7 +953,7 @@ class Detector:
             no_prefix=["frequency", "magnitude", 'tone_frequency'],
         )
 
-        data_objs, data_types = self._get_data_obj(data)
+        data_objs = self._get_data_obj(data)
         if not data_objs:
             error = (
                 f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
@@ -1012,7 +966,7 @@ class Detector:
         )
 
         norm_dfs = []
-        for data_obj, data_type in zip(data_objs, data_types):
+        for data_obj in data_objs:
             # TODO: Allow different norm_prefix for each prefix
             cable_mags = self.targ.get_data(
                 f"{norm_prefix}{'_' if norm_prefix else ''}{name_enums[0].MAGNITUDE.value}",
@@ -1020,7 +974,7 @@ class Detector:
                 exclude=exclude,
                 strict=True,
             )
-            if data_type == "targ":
+            if data_obj.data_type == 'targ':
                 scale = 1 / cable_mags.to_numpy().T
             else:
                 # TODO: Probably unnecessary computation to find data point corresponding to tone. Should always be sample = num_samples/2 (unless timestream tone frequency is changed without retaking target sweep)
@@ -1040,15 +994,15 @@ class Detector:
                     tone_freqs, on="det", how="left", coalesce=True
                 )
                 scale = (
-                    1
-                    / (
+                  1/
+                  (
                         f_cable_df.lazy()
-                        .sort((pl.col(f_col) - pl.col(name_enums[0].TONE_FREQUENCY.value)).abs())
-                        .select(pl.col("cable").first().over("det"))
+                        .with_columns((pl.col(f_col) - pl.col(name_enums[0].TONE_FREQUENCY.value)).abs().alias('diff'))
+                        .filter(pl.col("diff") == pl.col("diff").min().over('det'))
+                        .select('cable')
                         .collect()
-                    )
-                    .to_numpy()
-                    .T
+                    ).to_numpy().T[0]
+   
                 )
 
             data_obj.IQ_scale(
@@ -1076,102 +1030,6 @@ class Detector:
                 )
             )
         return norm_dfs
-
-    def IQ_trim(
-        self,
-        prefix: str | list[str] = "",
-        window: float | list[float] = 1.5,
-        use_fit: bool = False,
-        f_0_col: str = "complex_fit_f_0",
-        Q_col: str = "complex_fit_Q",
-        mean_points: int = 10,
-        mag_prefix: str = "",
-        invert: bool = False,
-        include: int | list[int] | None = None,
-        exclude: int | list[int] | None = None,
-        recalc: bool = False,
-    ) -> pl.DataFrame:
-        """
-        Trim off-resonance target sweep I & Q data
-
-        Args:
-            prefix:
-            window (float | list[float], optional): How many linewidths of data to include around the magnitude minimum. Defaults to 1.5
-            use_fit (bool): Whether to use resonant frequency and total quality factor from a fit to determine linewidth. Defaults to False
-            f_0_col (str): Name of column in ``properties`` DataFrame with resonant frequencies to use if ``use_fit`` is True.
-            Q_col (str): Name of column in ``properties`` DataFrame with total quality factors to use if ``use_fit`` is True.
-            mean_points (int): Number of points to average to determine max magnitude of resonator profile. Used if ``use_fit`` is False. Defaults to 10
-        Returns:
-            return (pl.DataFrame): Polars DataFrame with trimmed I & Q data
-        """
-
-        name_enums, prefix_enums = ccat_df.create_enums(
-            [
-                "sample",
-                "in_phase",
-                "quadrature",
-            ],
-            prefix,
-            ["trim", "trim_tail"],
-            self.analysis_cfg,
-            no_prefix=["sample"],
-        )
-
-        num_prefix = len(name_enums)
-        use_fit = ccat_df.check_args(use_fit, num_prefix, bool)
-        window = ccat_df.check_args(window, num_prefix, int)
-        mean_points = ccat_df.check_args(mean_points, num_prefix, int)
-        mag_prefix = ccat_df.check_args(mag_prefix, num_prefix, str)
-
-        lower_bounds, upper_bounds = [[]] * num_prefix, [[]] * num_prefix
-        for i, (fit, mag_pre, mean_point, win) in enumerate(
-            zip(use_fit, mag_prefix, mean_points, window)
-        ):
-            if fit:
-                if f_0_col in self.properties.schema:
-                    pass
-                    # TODO: Add trimming based on fit FWHM
-            else:
-                HM_low, HM_mid, HM_high = (
-                    property_routines.fwhm(
-                        self.targ,
-                        mag_pre,
-                        mean_points=mean_point,
-                        include=include,
-                        exclude=exclude,
-                        recalc=recalc,
-                    )
-                    .to_numpy()
-                    .T[1:4]
-                )
-
-            lower_bounds[i] = np.maximum((HM_mid - (HM_mid - HM_low) * win).astype(int), 0)
-            upper_bounds[i] = (HM_mid + (HM_high - HM_mid) * win).astype(int)
-
-        self.targ.IQ_trim(
-            prefix=prefix,
-            lower_index=lower_bounds,
-            upper_index=upper_bounds,
-            name=[prefix_enum.TRIM_TAIL.value for prefix_enum in prefix_enums],
-            invert=invert,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-        )
-
-        col_names = []
-        for name_enum, prefix_enum in zip(name_enums, prefix_enums):
-            col_names += [
-                f"{prefix_enum.TRIM_TAIL.value}_{prefix_enum.TRIM.value}_{name_enum.IN_PHASE.value}",
-                f"{prefix_enum.TRIM_TAIL.value}_{prefix_enum.TRIM.value}_{name_enum.QUADRATURE.value}",
-            ]
-
-        return self.targ.get_data(
-            col_name=col_names,
-            include=include,
-            exclude=exclude,
-            strict=True,
-        )
 
     def IQ_circle_origin(
         self,
@@ -1310,7 +1168,7 @@ class Detector:
             angles[i] = np.pi - center_angle
             shifts[i] = center_mag
 
-        data_objs, _ = self._get_data_obj(data)
+        data_objs = self._get_data_obj(data)
         if not data_objs:
             error = (
                 f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
@@ -1330,7 +1188,7 @@ class Detector:
             )
             data_obj.IQ_shift(
                 prefix=[
-                    f"{prefix_enum.CENTER_ORIGIN.value}_{prefix_enum.ROTATE.value}_{pre}"
+                    "_".join([prefix_enum.CENTER_ORIGIN.value, prefix_enum.ROTATE.value, pre])
                     for pre, prefix_enum in zip(prefix, prefix_enums)
                 ],
                 shift_I=shifts,
@@ -1343,8 +1201,8 @@ class Detector:
             col_names = []
             for name_enum, prefix_enum in zip(name_enums, prefix_enums):
                 col_names += [
-                    f"{prefix_enum.CENTER_ORIGIN.value}_{prefix_enum.TRANSLATE.value}_{prefix_enum.CENTER_ORIGIN.value}_{prefix_enum.ROTATE.value}_{name_enum.IN_PHASE.value}",
-                    f"{prefix_enum.CENTER_ORIGIN.value}_{prefix_enum.TRANSLATE.value}_{prefix_enum.CENTER_ORIGIN.value}_{prefix_enum.ROTATE.value}_{name_enum.QUADRATURE.value}",
+                    "_".join([prefix_enum.CENTER_ORIGIN.value, prefix_enum.TRANSLATE.value, prefix_enum.CENTER_ORIGIN.value, prefix_enum.ROTATE.value, name_enum.IN_PHASE.value]),
+                    "_".join([prefix_enum.CENTER_ORIGIN.value, prefix_enum.TRANSLATE.value, prefix_enum.CENTER_ORIGIN.value, prefix_enum.ROTATE.value, name_enum.QUADRATURE.value])
                 ]
 
             shift_dfs.append(
@@ -1394,8 +1252,7 @@ class Detector:
         ):
             if rot == "mismatch":
                 angles[i] = (
-                    property_routines.mismatch_angle(
-                        self.targ,
+                    self.targ.mismatch_angle(
                         pre,
                         mean_points=mean_point,
                         include=include,
@@ -1408,8 +1265,7 @@ class Detector:
                 rot_names[i] = prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value
             elif rot == "timestream":
                 angles[i] = (
-                    property_routines.timestream_angle(
-                        self.stream,
+                    self.stream.timestream_angle(
                         pre,
                         include=include,
                         exclude=exclude,
@@ -1424,14 +1280,7 @@ class Detector:
                 log.log("ERROR", error)
                 raise ValueError(error)
 
-        data_objs, _ = self._get_data_obj(data)
-        if not data_objs:
-            error = (
-                f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
-            )
-            log.log("ERROR", error)
-            raise ValueError(error)
-
+        data_objs = self._get_data_obj(data)
         rotation_dfs = []
         for data_obj in data_objs:
             data_obj.IQ_rotate(
@@ -1448,8 +1297,8 @@ class Detector:
                 name_enums, prefix_enums, rot_names
             ):
                 col_names += [
-                    f"{rot_name}_{prefix_enum.ROTATE.value}_{name_enum.IN_PHASE.value}",
-                    f"{rot_name}_{prefix_enum.ROTATE.value}_{name_enum.QUADRATURE.value}",
+                    "_".join([rot_name, prefix_enum.ROTATE.value, name_enum.IN_PHASE.value]),
+                    "_".join([rot_name, prefix_enum.ROTATE.value, name_enum.QUADRATURE.value])
                 ]
 
             rotation_dfs.append(
@@ -1461,6 +1310,103 @@ class Detector:
                 )
             )
         return rotation_dfs
+
+    def IQ_circle_natural(
+                          self,
+                          prefix="",
+                          data="both",
+                          mean_points = 10,
+                          include=None,
+                          exclude=None,
+                          recalc=False):
+        '''
+        Transform IQ circle centered at the origin to the natural coordinates for a resonator (off-resonance at (1, 0)).
+        '''
+        if isinstance(prefix, str):
+            prefix = [prefix]
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature"],
+            prefix,
+            ["center_natural", "rotate"],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+
+        num_prefix = len(name_enums)
+        mean_points = ccat_df.check_args(mean_points, num_prefix, int)
+
+        dists = [None]*num_prefix
+        for i, (pre, mean_point) in enumerate(zip(prefix, mean_points)):
+            dist = self.targ.mismatch_dist(prefix=pre, 
+                                          mean_points=mean_point, 
+                                          include=include, 
+                                          exclude=exclude, 
+                                          recalc=recalc).to_numpy().T[1]
+            dists[i] = 1 - dist
+
+        data_objs = self._get_data_obj(data)
+        nat_dfs = [None]*len(data_objs)
+        for i, data_obj in enumerate(data_objs):
+            data_obj.IQ_rotate(prefix=prefix,
+                               angle=np.pi,
+                               name="half",
+                               include=include,
+                               exclude=exclude,
+                               recalc=recalc)
+            nat_df = data_obj.IQ_shift(prefix=[f"half_{prefix_enums[0].ROTATE.value}{'_' if pre else ''}{pre}" for pre in prefix],
+                                        shift_I = dists,
+                                        shift_Q = 0,
+                                        name = prefix_enums[0].CENTER_NATURAL.value,
+                                        include=include,
+                                        exclude=exclude,
+                                        recalc=recalc)
+            nat_dfs[i] = nat_df
+        return nat_dfs
+
+    def IQ_circle_tail(self,
+                       prefix="",
+                       data="both",
+                       mean_points = 10,
+                       include=None,
+                       exclude=None,
+                       recalc=False):
+        '''
+        Transform IQ circle centered at the origin to the natural coordinates for a resonator (off-resonance at (1, 0)).
+        '''
+        if isinstance(prefix, str):
+            prefix = [prefix]
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature"],
+            prefix,
+            ["center_tail"],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+
+        num_prefix = len(name_enums)
+        mean_points = ccat_df.check_args(mean_points, num_prefix, int)
+
+        dists = [None]*num_prefix
+        for i, (pre, mean_point) in enumerate(zip(prefix, mean_points)):
+            dists[i] = self.targ.mismatch_dist(prefix=pre, 
+                                                mean_points=mean_point, 
+                                                include=include, 
+                                                exclude=exclude, 
+                                                recalc=recalc).to_numpy().T[1]
+
+        data_objs = self._get_data_obj(data)
+        tail_dfs = [None]*len(data_objs)
+        for i, data_obj in enumerate(data_objs):
+            tail_dfs[i] = data_obj.IQ_shift(prefix=prefix,
+                                        shift_I = dists,
+                                        shift_Q = 0,
+                                        name = prefix_enums[0].CENTER_TAIL.value,
+                                        include=include,
+                                        exclude=exclude,
+                                        recalc=recalc)
+        return tail_dfs
 
     def IQ_circle_diss_corr(
         self,
@@ -1524,7 +1470,7 @@ class Detector:
             exclude=exclude,
         )
 
-    # Timestream conversion
+    # Timesteream conversion
     # ---------------------
     def phase_spline(
         self,
@@ -1726,7 +1672,7 @@ class Detector:
             no_prefix=[],
         )
 
-        data_objs, _ = self._get_data_obj(data)
+        data_objs = self._get_data_obj(data)
         if not data_objs:
             error = (
                 f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
@@ -1769,7 +1715,7 @@ class Detector:
 
         return frac_f_dfs
 
-    def linear_frac_f(self,
+    def linar_frac_f(self,
                       prefix: str | list[str] = "",
                       circle_fit_prefix: str | list[str] = "circle_fit_unwind_rotate",
                       mag_prefix: str = "",
@@ -1814,8 +1760,7 @@ class Detector:
         Qs = [[]]*num_prefix
         for i, (mag_pre, mean_point) in enumerate(zip(mag_prefix, mean_points)):
             f_low, f_mid, f_high = (
-                property_routines.fwhm(
-                    self.targ,
+                self.targ.fwhm(
                     mag_pre,
                     mean_points=mean_point,
                     include=include,
@@ -1986,6 +1931,7 @@ class Detector:
                         I=data[i][2],
                         Q=data[i][3],
                         nonlinear=nonlinear[inds],
+                        normalized=normalized[inds],
                         method=method[inds],
                         params=params[inds],
                         R=radius[inds],
@@ -2031,7 +1977,7 @@ class Detector:
                 det.fit_result[f"{fit_name_col}_{fit_result_col}"] = fit_result
             return ccat_mp.package_results(results_dict)
 
-        if not len(args) == 7:
+        if not len(args) == 8:
             log.log(
                 "ERROR",
                 "nonlinear, params, window, and max_workers are required arguments.",
@@ -2041,6 +1987,7 @@ class Detector:
             det,
             radius,
             nonlinear,
+            normalized,
             method,
             params_list,
             max_workers,
@@ -2049,9 +1996,10 @@ class Detector:
         params = np.empty(len(params_list), dtype=object)
         for i in range(len(params_list)):
             params[i] = params_list[i]
-        radius, nonlinear, method = (
+        radius, nonlinear, normalized, method = (
             np.array(radius),
             np.array(nonlinear),
+            np.array(normalized),
             np.array(method),
         )
         det, max_workers, ex = (
@@ -2787,22 +2735,26 @@ class Detector:
     # Helper Methods #
     # ================#
 
-    def _get_data_obj(self, data: str):
+    def _get_data_obj(self, data: Literal["targ", "timestream", "both"]):
         """
         Get data object (Target, Timestream, or both) corresponding to string
 
         data (
 
         """
+
         data_objs = []
-        data_types = []
         if data == "targ" or data == "both":
             data_objs.append(self.targ)
-            data_types.append("targ")
         if data == "timestream" or data == "both":
             data_objs.append(self.stream)
-            data_types.append("stream")
-        return data_objs, data_types
+        if not data_objs:
+            error = (
+                f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
+            )
+            log.log("ERROR", error)
+            raise ValueError(error)
+        return data_objs
 
     @staticmethod
     def _load_data(

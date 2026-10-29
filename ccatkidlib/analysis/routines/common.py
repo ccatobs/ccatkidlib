@@ -6,22 +6,26 @@ import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.routines.properties as properties_routines
 
+from typing import Literal
 
-def IQ_circle_center(
+def IQ_circle_origin(
     det,
-    data="both",
-    normalize=False,
+    data: Literal["targ", "timestream", "both"] ="both",
+    cable_delay: Literal['vna', 'targ'] = 'vna',
+    normalize: bool =False,
+    normalization: Literal['constant', 'linear'] = 'constant',
     savgol_window=9,
     savgol_order=1,
-    trim_window=2,
-    trim_mean_points=10,
-    mismatch_mean_points=10,
+    cable_trim_window = 5,
+    fit_trim_window=2,
+    mean_points = 10,
     include=None,
     exclude=None,
     recalc=False,
     savgol_workers=1,
     circle_fit_workers=1,
-    cable_fit_workers=1,
+    stitch_workers=1,
+    linear_fit_workers=1,
     ex=None,
 ):
     name_dict, prefix_dict = (
@@ -29,47 +33,55 @@ def IQ_circle_center(
         det.analysis_cfg["convention"]["prefix"],
     )
 
-    # Remove Cable Delay
-    # ------------------
-    det.vna.phase(recalc=recalc)
-    det.cable_delay
-    det.IQ_unwind(
-        delay_col=f"vna_{name_dict['cable_delay']}",
-        data=data,
-        include=include,
-        exclude=exclude,
-        recalc=recalc,
-    )
-    cable_prefix = f"{prefix_dict['remove_cable']}_{prefix_dict['rotate']}"
-
     # Fit IQ Circle
     # -------------
     det.targ.mag(include=include, exclude=exclude, recalc=recalc)
+    with ccat_mp.optional_executor(max_workers=max(savgol_workers, circle_fit_workers, linear_fit_workers, stitch_workers), ex=ex) as ex:
+        savgol_prefix = ""
+        if savgol_window > 1:
+            det.targ.savgol(
+                col_name=name_dict["magnitude"],
+                deriv=0,
+                window=savgol_window,
+                k=savgol_order,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+                max_workers=savgol_workers,
+                ex=ex,
+            )
+            savgol_prefix = f"{prefix_dict['savgol_filter']}0"
 
-    with ccat_mp.optional_executor(max_workers=max(savgol_workers, circle_fit_workers, cable_fit_workers), ex=ex) as ex:
-        det.targ.savgol(
-            col_name=name_dict["magnitude"],
-            deriv=0,
-            window=savgol_window,
-            k=savgol_order,
+        # Remove Cable Delay
+        # ------------------
+        det.cable_delay(mag_prefix=savgol_prefix,
+                        window=cable_trim_window, 
+                        mean_points=mean_points, 
+                        include=include, 
+                        exclude=exclude, 
+                        recalc=recalc,
+                        stitch_workers=stitch_workers,
+                        linear_fit_workers=linear_fit_workers,
+                        ex=ex)
+        
+        det.IQ_unwind(
+            delay_col="_".join([cable_delay, name_dict["cable_delay"]]),
+            data=data,
             include=include,
             exclude=exclude,
             recalc=recalc,
-            max_workers=savgol_workers,
-            ex=ex,
         )
-        savgol_prefix = f"{prefix_dict['savgol_filter']}0"
+        cable_prefix = "_".join([prefix_dict['remove_cable'], prefix_dict['rotate']])
 
-        det.IQ_trim(
-            prefix=cable_prefix,
-            window=trim_window,
-            mean_points=trim_mean_points,
-            use_fit=False,
-            mag_prefix=savgol_prefix,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-        )
+        det.targ.res_IQ_trim(
+                prefix=cable_prefix,
+                window=fit_trim_window,
+                mean_points=mean_points,
+                mag_prefix=savgol_prefix,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+            )
         trim_prefix = f"{prefix_dict['trim_tail']}_{prefix_dict['trim']}_{cable_prefix}"
 
         det.IQ_circle_fit(
@@ -82,51 +94,72 @@ def IQ_circle_center(
         )
         circle_prefix = f"{prefix_dict['IQ_circle_fit']}_{trim_prefix}"
 
-    # Center IQ Circle
-    # ----------------
-    det.IQ_circle_origin(
-        prefix=cable_prefix,
-        circle_fit_prefix=circle_prefix,
-        data=data,
-        include=include,
-        exclude=exclude,
-        recalc=recalc,
-    )
-    center_prefix = f"{prefix_dict['center_origin']}_{prefix_dict['translate']}_{prefix_dict['center_origin']}_{prefix_dict['rotate']}_{cable_prefix}"
+        # Center IQ Circle
+        # ----------------
+        det.IQ_circle_origin(
+            prefix=cable_prefix,
+            circle_fit_prefix=circle_prefix,
+            data=data,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
+        center_prefix = f"{prefix_dict['center_origin']}_{prefix_dict['translate']}_{prefix_dict['center_origin']}_{prefix_dict['rotate']}_{cable_prefix}"
 
-    # Remove Impedance Mismatch
-    # -------------------------
-    centered_df = det.IQ_circle_rotate(
-        prefix=center_prefix,
-        data=data,
-        rotation="mismatch",
-        mean_points=mismatch_mean_points,
-        include=include,
-        exclude=exclude,
-        recalc=recalc,
-    )
+        # Remove Impedance Mismatch
+        # -------------------------
+        output_df = det.IQ_circle_rotate(
+            prefix=center_prefix,
+            data=data,
+            rotation="mismatch",
+            mean_points=mean_points,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
 
-    mismatch_prefix = f"{prefix_dict['remove_impedance_mismatch']}_{prefix_dict['rotate']}_{center_prefix}"
+        mismatch_prefix = f"{prefix_dict['remove_impedance_mismatch']}_{prefix_dict['rotate']}_{center_prefix}"
+        scale = det.targ.mismatch_dist(prefix=cable_prefix, 
+                                       include=include, 
+                                       exclude=exclude,
+                                       recalc=recalc).to_numpy().T[1]
 
-    # Normalize IQ Circle by Removing Cable Gain
-    # ------------------------------------------
-    if normalize:
-        scale = properties_routines.mismatch_dist(det.targ, 
-                                                prefix=cable_prefix, 
-                                                include=include, 
-                                                exclude=exclude,
-                                                recalc=recalc).to_numpy().T[1]
+        # Normalize IQ Circle by Removing Cable Gain
+        # ------------------------------------------
+        if normalize:
+            if normalization == 'constant':
+                data_objs = det._get_data_obj(data)
+                output_df = [None]*len(data_objs)
+                for i, data_obj in enumerate(data_objs):
+                    output_df[i] = data_obj.IQ_scale(prefix=mismatch_prefix,
+                                                    name=prefix_dict['normalize'],
+                                                    scale=1/scale,
+                                                    include=include,
+                                                    exclude=exclude,
+                                                    recalc=recalc)
+            elif normalization == 'linear':
+                det.targ.cable_gain(mag_prefix=savgol_prefix,
+                                    window=cable_trim_window, 
+                                    mean_points=mean_points, 
+                                    err_fill = scale,
+                                    include=include, 
+                                    exclude=exclude, 
+                                    recalc=recalc,
+                                    linear_fit_workers=linear_fit_workers,
+                                    ex=ex)
 
-        data_objs, data_types = det._get_data_obj(data)
-        centered_df = [None]*len(data_objs)
-        for i, data_obj in enumerate(data_objs):
-            centered_df[i] = data_obj.IQ_scale(prefix=mismatch_prefix,
-                                               name=prefix_dict['normalize'],
-                                               scale=1/scale,
-                                               include=include,
-                                               exclude=exclude,
-                                               recalc=recalc)
-    return centered_df
+                output_df = det.IQ_norm(norm_prefix = "_".join([prefix_dict['linear_fit'], 
+                                                                prefix_dict['trim_resonance'], 
+                                                                prefix_dict['trim']]),
+                                        prefix = mismatch_prefix,
+                                        data=data, 
+                                        include=include,
+                                        exclude=exclude,
+                                        recalc=recalc)
+            else:
+                error = "Invalid 'normalization' specified, not normalizing IQ data. Must be one of 'constant' or 'linear'."
+            norm_prefix = "_".join([prefix_dict['normalize'], prefix_dict['scale'], mismatch_prefix])
+    return output_df
 
 def phase_to_ff(det,
                 prefix: str | list[str] = '',
@@ -139,7 +172,9 @@ def phase_to_ff(det,
                 include=None,
                 exclude=None,
                 recalc=False,
-                ex=None):
+                ex=None) -> pl.DataFrame:
+        '''
+        '''
 
         name_dict, prefix_dict = (
             det.analysis_cfg["convention"]["name"],
@@ -151,10 +186,10 @@ def phase_to_ff(det,
         det.stream.phase(prefix=prefix, include=include, exclude=exclude, recalc=recalc)
 
         min_phase, max_phase = (
-            properties_routines.agg(det.stream, "min", name_dict['phase'], prefix=spline_prefix, include=include, exclude=exclude, recalc=recalc)
+            det.stream.agg("min", name_dict['phase'], prefix=spline_prefix, include=include, exclude=exclude, recalc=recalc)
             .to_numpy()
             .T[1],
-            properties_routines.agg(det.stream, "max", name_dict['phase'], prefix=spline_prefix, include=include, exclude=exclude, recalc=recalc)
+            det.stream.agg("max", name_dict['phase'], prefix=spline_prefix, include=include, exclude=exclude, recalc=recalc)
             .to_numpy()
             .T[1],
         )
@@ -310,10 +345,10 @@ def IQ_noise(
             noise_prefix = f'{prefix_dict['isolate_dissipation_noise']}_{prefix_dict['rotate']}_{pre}'
             noise_names[i] = noise_prefix
             median_I, median_Q = (
-                properties_routines.agg(det.stream, "median", name_dict['in_phase'], prefix=pre, include=include, exclude=exclude, recalc=recalc)
+                det.stream.agg("median", name_dict['in_phase'], prefix=pre, include=include, exclude=exclude, recalc=recalc)
                 .to_numpy()
                 .T[1],
-                properties_routines.agg(det.stream, "median", name_dict['quadrature'], prefix=pre, include=include, exclude=exclude, recalc=recalc)
+                det.stream.agg("median", name_dict['quadrature'], prefix=pre, include=include, exclude=exclude, recalc=recalc)
                 .to_numpy()
                 .T[1],
             )
@@ -357,7 +392,7 @@ def IQ_noise(
                         pl.col(f"^{final_prefix}.*$")
                     ).columns
                 ]
-            )
+            ).drop(pl.col(f"^tmp.*$"))
         
         col_names = []
         for noise_name in noise_names:

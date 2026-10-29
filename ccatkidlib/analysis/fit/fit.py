@@ -248,7 +248,6 @@ def y_to_x_spline(
         x_to_y_spline = make_interp_spline(x, y, k=k)
         return None, x_to_y_spline
 
-
 def y_to_x_interp(ys, y_to_x_spline=None, x_to_y_spline=None):
     if y_to_x_spline is not None:
         xs = y_to_x_spline(ys)
@@ -280,6 +279,7 @@ def phase_fit(
     unwrap_threshold=1.9 * np.pi,
     params: Parameters | None = None,
     nonlinear: bool = False,
+    normalized: bool = False,
     method: str = "least_squares",
 ):
     """Method for fitting to the phase of a kinetic inductance detector (KID)
@@ -358,7 +358,7 @@ def phase_fit(
             dist = (I - I_off) ** 2 + (Q - Q_off) ** 2
 
             # Shift resonant frequency using nonlinear term
-            beta *= 1e6
+            beta *= 1e6 if normalized else 1e-8 
             f_0 = f_0 - beta * dist
 
         x = (f - f_0) / f_0
@@ -423,8 +423,10 @@ def phase_fit(
     )
     params = fit.params
 
+    scale_factor = 1
     if nonlinear:
-        a_conv = 1e-6*(params["f_0"].value / params["Qr"].value)/ (2 * params["R"].value) ** 2
+        scale_factor = 1e-6 if normalized else 1e8
+        a_conv = scale_factor*(params["f_0"].value / params["Qr"].value)/ (2 * params["R"].value) ** 2
 
         if beta_guess == 0:
             beta_guess = 0.1*a_conv
@@ -565,15 +567,7 @@ def phase_fit_al(
     )
     ref_phase = phase[zero_phase_ind_up]
 
-    curr_shift = 0
-    for i in range(len(phase) - 1):
-        diff = phase[i + 1] - phase[i]
-        phase[i] -= curr_shift
-        if diff > unwrap_threshold:
-            curr_shift += 2 * np.pi
-        elif diff < -1 * unwrap_threshold:
-            curr_shift -= 2 * np.pi
-    phase[-1] -= curr_shift
+    phase = np.unwrap(phase, period = 2*np.pi)
     phase += ref_phase - phase[zero_phase_ind_up]
 
     # Create/validate params for model
@@ -640,6 +634,95 @@ def phase_fit_al(
         f=f,
         I=I,
         Q=Q,
+        method=method,
+    )
+    fit.mask = mask
+
+    # Fit model
+    # ---------
+    return fit
+
+def linewidth_fit(
+    y: np.ndarray,
+    y_shift: np.ndarray,
+    params: Parameters | None = None,
+    method: str = "least_squares",
+):
+    """Method for fitting to the phase of a kinetic inductance detector (KID)
+
+    Notes:
+        Using method from https://doi.org/10.1117/12.3019161.
+
+    Args:
+        f (np.ndarray): Array of frequencies (in Hz)
+        phase (np.ndarray): Array of phases (in rad)
+        I (np.ndarray, optional): Array of in-phase components of complex transmission. Required for nonlinear fit
+        Q (np.ndarray, optional): Array of quadrature components of complex transmission. Required for nonlinear fit
+        params (lmfit.Parameters, optional): lmfit Parameters object to use as initial guess for fit
+        R (float, optional): Radius of the IQ circle. Only required for nonlinear fit and if not passed as a lmfit.Parameter in params
+        nonlinear (bool, optional): Whether to use nonlinear fit. Defaults to False
+    """
+    # TODO: Should switch out lmfit for curve_fit for faster fitting and don't really need lmfit features, Also don't want data trimming in this function since can just use IQ_trim instead
+
+    @njit(cache=True)
+    def _guess_params(y, y_shift):
+
+        # Create param tuples in form (name, value, vary, min, max)
+        a_param = ("a", 0, True, -5, 5)
+        b_param = ("b", 0, True, -5, 5)
+        y_ki_param = ("y_ki", 0, True, -0.25, 0.25)
+        y_qp_param = ("y_qp", 0, True, -0.25, 0.25)
+        y_off_param = ("y_off", 0, True, -0.5, 0.5)
+        y_exp_param = ("y_exp", 4, False, 0, 10 )
+
+        return a_param, b_param, y_off_param, y_exp_param, y_ki_param, y_qp_param
+
+    @njit(cache=True)
+    def _linewidth_fit(y, a, b, y_off, y_exp, y_ki, y_qp):
+        """Calculates phases for the given frequencies for a nonlinear KID
+        Args:
+            f (np.ndarray): Array of frequencies (in Hz)
+            I (np.ndarray): Array of in-phase components of complex transmission
+            Q (np.ndarray): Array of quadrature components of complex transmission
+            f_0 (float): KID resonant frequency
+            Q (float): KID total quality factor
+            theta_0 (float): KID phase angle
+            beta (float): Factor related to KID kinetic inductance nonlinearity. Use a = 0 for a linear resonator.
+            R (float): Radius of KID IQ circle.
+
+        Returns:
+            np.ndarray: Array of calculated phases for the given frequencies
+        """
+        #return y_off + a/(1 + (y - y_ki)**2) - b/(1 + (y - y_qp)**2)
+        return y_off + a/(1 + (y - y_ki)**2) - b/(1 + (y - y_qp)**y_exp)
+
+    
+    mask = np.logical_and(~np.isnan(y_shift), np.abs(y_shift) < 10)
+    y, y_shift = y[mask], y_shift[mask]
+
+    # Create/validate params for model
+    # --------------------------------
+    if params is None:
+        params = Parameters()
+
+    #in_params = [param in params for param in ["a", "b", "y_off", "y_ki", "y_qp"]]
+    in_params = [param in params for param in ["a", "b", "y_off", "y_ki", "y_qp", "y_exp"]]
+    if not all(in_params):
+        guess_params = _guess_params(y, y_shift)
+
+        for incl, guess in zip(in_params, guess_params):
+            if not incl:
+                params.add(*guess)
+
+    # Create lmfit model for phase fit
+    # --------------------------------
+    lw_model = Model(_linewidth_fit, independent_vars=["y"])
+
+    fit = lw_model.fit(
+        y_shift,
+        params=params,
+        nan_policy="omit",
+        y = y,
         method=method,
     )
     fit.mask = mask

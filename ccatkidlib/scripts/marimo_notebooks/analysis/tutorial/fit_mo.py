@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.10"
+__generated_with = "0.25.1"
 app = marimo.App(width="columns")
 
 
@@ -161,14 +161,13 @@ def _(
 
 @app.cell
 def _(circle_fit_workers_selector, det, routines, savgol_workers_selector):
-    routines.IQ_circle_center(
+    routines.IQ_circle_origin(
         det,
         data="targ",
         savgol_window=9,
         savgol_order=1,
-        trim_window=10,
-        trim_mean_points=10,
-        mismatch_mean_points=10,
+        fit_trim_window=10,
+        mean_points=10,
         savgol_workers=savgol_workers_selector.value,
         circle_fit_workers=circle_fit_workers_selector.value,
         normalize=True,
@@ -245,11 +244,10 @@ def _(
     phase_fit_workers_selector,
     pl,
 ):
-    det.IQ_trim(
+    det.targ.res_IQ_trim(
         prefix=mismatch_prefix,
         window=phase_fit_window.value,
         mean_points=15,
-        use_fit=False,
         mag_prefix=f"{PREFIX['savgol_filter']}0",
         recalc=True
     )
@@ -270,6 +268,7 @@ def _(
         prefix=trim_mismatch_prefix,
         circle_fit_prefix=_norm_circle_fit_prefix,
         nonlinear=True,
+        normalized=True,
         max_workers=phase_fit_workers_selector.value,
         recalc=True
     )
@@ -747,13 +746,8 @@ def _(
         Transformations to run on Network objects before dumping to pickle files
         """
         from ccatkidlib.analysis.routines.common import (
-            IQ_circle_center,
-            IQ_noise,
-            phase_to_ff,
+            IQ_circle_origin,
         )
-        import ccatkidlib.analysis.routines.properties as property_routines
-        import ccatkidlib.analysis.routines.tune as tune_routines
-
 
         NAMES, PREFIX = (
             network.analysis_cfg["convention"]["name"],
@@ -781,7 +775,7 @@ def _(
 
                 # IQ Circle Center
                 # ----------------
-                routines.IQ_circle_center(det,
+                routines.IQ_circle_origin(det,
                                           data="targ",
                                           savgol_window=9,
                                           savgol_order=1,
@@ -796,13 +790,12 @@ def _(
 
                 # Phase Fit
                 # ---------
-                det.IQ_trim(
-                    prefix=mismatch_prefix,
-                    window=phase_fit_window.value,
-                    mean_points=15,
-                    use_fit=False,
-                    mag_prefix=f"{PREFIX['savgol_filter']}0",
-                    recalc=True
+                det.targ.res_IQ_trim(prefix=mismatch_prefix,
+                                    window=phase_fit_window.value,
+                                    mean_points=15,
+                                    use_fit=False,
+                                    mag_prefix=f"{PREFIX['savgol_filter']}0",
+                                    recalc=True
                 )
                 det.targ.phase(prefix=trim_mismatch_prefix, recalc=True)
 

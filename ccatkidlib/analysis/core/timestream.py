@@ -126,6 +126,68 @@ class Timestream(Data):
 
         self.spline_dict = {"None": None}
 
+    # ========== #
+    # Properties #
+    # ========== #
+
+    
+    def timestream_angle(self, prefix="", include=None, exclude=None, recalc=False):
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature", "phase"],
+            prefix,
+            ["center_timestream"],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+
+        name_enum, prefix_enum = name_enums[0], prefix_enums[0]
+        timestream_col_name = (
+            f"{prefix_enum.CENTER_TIMESTREAM.value}_{name_enum.PHASE.value}"
+        )
+
+        # Calculate angle of center of timestream (center determined using I and Q medians)
+        include_subset = ccat_df.check_properties(
+            self,
+            timestream_col_name,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
+        if not len(include_subset) == 0:
+            pi = pl.lit(np.pi)
+            I_df = self.get_data(
+                name_enum.IN_PHASE.value,
+                include=include_subset,
+                strict=True,
+            )
+            Q_df = self.get_data(
+                name_enum.QUADRATURE.value,
+                include=include_subset,
+                strict=True,
+            )
+            I_cols, Q_cols = I_df.columns, Q_df.columns
+            IQ_df = pl.concat([I_df, Q_df], how="horizontal")
+            timestream_df = (
+                IQ_df.lazy()
+                .select(pl.all().median())
+                .select(
+                    [
+                        (pl.arctan2(pl.col(Q_col), pl.col(I_col)) % (2 * pi)).alias(
+                            I_col.split("_")[-1]
+                        )
+                        for I_col, Q_col in zip(I_cols, Q_cols)
+                    ]
+                )
+                .collect()
+            )
+            ccat_df.add_data_to_properties(self, timestream_df, timestream_col_name)
+        return self.get_properties(
+            timestream_col_name,
+            include=include,
+            exclude=exclude,
+            strict=True,
+        )
+
     # ==================#
     # Plotting Methods #
     # ==================#

@@ -222,14 +222,13 @@ class VNA(Sweep):
     # Lazily Loaded Attributes #
     # ==========================#
 
-    @cached_property
     def cable_delay(self) -> float:
         """Get the cable delay of the RF chain using the phase data
 
         Returns:
             float: The cable delay in nanoseconds
         """
-
+        self.phase()
         f, phase = self.f(), self.stitch_phase()
 
         # Get cable delay in units of rad·s

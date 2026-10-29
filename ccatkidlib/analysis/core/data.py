@@ -17,6 +17,7 @@ import concurrent.futures
 
 from pathlib import Path
 from scipy.signal import savgol_filter
+from scipy.stats import linregress
 
 from functools import cached_property
 from abc import abstractmethod
@@ -94,6 +95,7 @@ class Data:
         # Define data attributes
         # -----------------------
         self.bid, self.drid = com_to.split(".")  # Board and drone data was taken with
+        self.data_type = data_type
 
         self.tones = None
         self._data = None
@@ -113,6 +115,7 @@ class Data:
 
         # If full data path is None, [], or "", find data file based on timestamp and (optional) file path parts
         # ------------------------------------------------------------------------------------------------------
+        
         if not data_path:
             if data_type is None or timestamp is None:
                 error = (
@@ -437,30 +440,6 @@ class Data:
                 else name_enum.MAGNITUDE.value
                 for d, name_enum, prefix_enum in zip(dB, name_enums, prefix_enums)
             ],
-            include=include,
-            exclude=exclude,
-            strict=True,
-        )
-
-    def linewidth_shift(self,
-                        prefix: str | list[str] = "",
-                        include: int | list[int] | None = None,
-                        exclude: int | list[int] | None = None,
-                        recalc: bool = False,):
-        name_enums, prefix_enums = ccat_df.create_enums(
-            ["in_phase", "quadrature", "linewidth_shift"], prefix, [], self.analysis_cfg
-        )
-
-        self.transform(
-            [Data._calc_linewidth_shift] * len(name_enums),
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            col_enum=name_enums,
-            prefix_enum=prefix_enums,
-        )
-        return self.get_data(
-            col_name=[name_enum.LINEWIDTH_SHIFT.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
             strict=True,
@@ -1020,6 +999,7 @@ class Data:
         y_col_name: str,
         x_prefix: str | list[str] = "",
         y_prefix: str | list[str] = "",
+        err_fill: float | list[float] = np.nan,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -1077,8 +1057,9 @@ class Data:
             error = f"Number of prefixes must match for the x and y columns."
             log.log("ERROR", error)
             raise KeyError(error)
+        err_fill = ccat_df.check_args(err_fill, num_prefix, float)
 
-        args = [[x_enum_key, self, ccat_mp.check_max_workers(max_workers), ex]]*num_prefix
+        args = [[x_enum_key, self, e_fill, ccat_mp.check_max_workers(max_workers), ex] for e_fill in err_fill]
         self.transform(
             [Data._calc_linear_fit] * num_prefix,
             *args,
@@ -1101,6 +1082,7 @@ class Data:
             include=include,
             exclude=exclude,
         )
+    
     # ==================#
     # Analysis Methods #
     # ==================#
@@ -1367,45 +1349,6 @@ class Data:
         return exprs
 
     @staticmethod
-    def _calc_linewidth_shift(
-        schema: pl.Schema,
-        *args,
-        tones: list[int] | None = None,
-        padding: int = 4,
-        recalc: bool = False,
-        col_enum: Enum | None = None,
-        prefix_enum: Enum | None = None,
-    ) -> list[pl.Expr]:
-        """Generates pl.Expr for calculating the phase of a tone using I & Q data
-
-        Args:
-            schema (pl.Schema)
-        """
-        if tones is None:
-            tones = [tones]
-
-        I_col, Q_col, linewidth_col = (
-            col_enum.IN_PHASE.value,
-            col_enum.QUADRATURE.value,
-            col_enum.LINEWIDTH_SHIFT.value,
-        )
-        exprs = []
-        for tone in tones:
-            if (
-                linewidth_tone_col := ccat_df.add_tone(linewidth_col, tone, padding)
-            ) not in schema or recalc:
-                I_tone_col, Q_tone_col = (
-                    ccat_df.add_tone(I_col, tone, padding),
-                    ccat_df.add_tone(Q_col, tone, padding),
-                )
-                exprs.append(
-                    ((pl.col(Q_tone_col)/(-2*pl.col(I_tone_col)))/((1 + (pl.col(Q_tone_col)/pl.col(I_tone_col))**2)*pl.col(I_tone_col))                              ).alias(
-                        linewidth_tone_col
-                    )
-                )
-        return exprs
-
-    @staticmethod
     def _calc_IQ_rotate(
         schema: pl.Schema,
         *args,
@@ -1569,7 +1512,7 @@ class Data:
                     )
                     .then(then_expr)
                     .otherwise(oth_expr)
-                    .name.prefix(f"{trim_prefix}_")
+                    .alias("_".join([trim_prefix, data_tone_col]))
                 )
         return exprs
 
@@ -1699,17 +1642,18 @@ class Data:
                 future_to_batch = {
                     executor.submit(
                         ccat_mp.process_batches,
-                        ccat_fit.linear_fit,
+                        linregress,
                         data[i][0],
-                        data[i][1]
-                    ): all_tones[inds]
+                        data[i][1],
+                        nan_policy=len(inds)*['omit'],
+                    ): (i, inds, all_tones[inds])
                     for i, inds in enumerate(calc_ind)
                 }
 
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tones = future_to_batch[future]
+                    index, inds, tones = future_to_batch[future]
                     fit_cols = future.result()
-                    for tone, fit_col in zip(tones, fit_cols):
+                    for tone, fit_col, e_fill, dat in zip(tones, fit_cols, err_fill[inds], data[index][0]):
                         if isinstance(fit_col, Exception):
                             log.log(
                                 "WARNING",
@@ -1717,10 +1661,11 @@ class Data:
                                 tone,
                                 fit_col,
                             )
-                            fit_data = np.full(df.len(), np.nan)
+                            fit_data = np.full(df.len(), float(e_fill))
                             properties_dict = {}
                         else:
-                            m, b, fit_data = fit_col
+                            result = fit_col
+                            m, b = result.slope, result.intercept
                             properties_dict = {f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_slope}": m, 
                                                f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_intercept}": b}
 
@@ -1729,16 +1674,16 @@ class Data:
                         )
 
                         results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
-                            fit_data
-                        )
+                            m * dat + b
+                        ) if not np.isnan(m) else np.full(df.len(), float(e_fill))
             return ccat_mp.package_results(results_dict)
 
-        if not len(args) == 4:
+        if not len(args) == 5:
             log.log(
                 "ERROR", "max_workers, and ex are required arguments."
             )
 
-        x_key, obj, max_workers, ex = np.array(args)
+        x_key, obj, err_fill, max_workers, ex = np.array(args)
         x_key, obj, max_workers, ex = (
             x_key[0],
             obj[0],
@@ -1975,6 +1920,68 @@ class Data:
     # ================#
     # Helper Methods #
     # ================#
+
+    def agg(self, 
+            operation: str, 
+            col_name: str, 
+            prefix: str = "", 
+            include: int | list[int] | None = None, 
+            exclude: int | list[int] | None = None, 
+            recalc: bool =False):
+        AGGS = {
+            "mean": pl.all().mean(),
+            "median": pl.all().median(),
+            "max": pl.all().max(),
+            "min": pl.all().min(),
+            "std": pl.all().std(),
+        }
+        agg = AGGS.get(operation, None)
+        if agg is None:
+            error = f"Invalid operation specified, must be one of {', '.join(AGGS.keys())}"
+            log.log("ERROR", error)
+            raise ValueError(error)
+
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == col_name:
+                enum_key = key
+                break
+
+        if enum_key is None:
+            error = f"Could not find column '{col_name}'. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [enum_key],
+            prefix,
+            [],
+            self.analysis_cfg,
+        )
+
+        name_enum, prefix_enum = name_enums[0], prefix_enums[0]
+        agg_name = f"{operation}_{self.data_type}_{name_enum[enum_key.upper()].value}"
+
+        include_subset = ccat_df.check_properties(
+            self,
+            agg_name,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
+        if not len(include_subset) == 0:
+            df = self.get_data(
+                name_enum[enum_key.upper()].value, include=include_subset, strict=True
+            )
+            agg_df = df.select([agg.name.map(lambda s: s.split("_")[-1])])
+            ccat_df.add_data_to_properties(self, agg_df, agg_name)
+
+        return self.get_properties(
+            agg_name,
+            include=include,
+            exclude=exclude,
+            strict=True,
+        )
 
     def unpivot(
         self, df: pl.DataFrame, data_name: str, index_cols: list[str] = ["sample"]
