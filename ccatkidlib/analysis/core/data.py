@@ -1663,13 +1663,12 @@ class Data:
                                 tone,
                                 fit_col,
                             )
-                            fit_data = np.full(df.len(), float(e_fill))
-                            properties_dict = {}
+                            m, b = np.nan, np.nan
                         else:
                             result = fit_col
                             m, b = result.slope, result.intercept
-                            properties_dict = {f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_slope}": m, 
-                                               f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_intercept}": b}
+                        properties_dict = {f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_slope}": m, 
+                                           f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_intercept}": b}
 
                         obj._properties[ccat_df.add_tone("det", tone, padding)] = (
                             properties_dict
