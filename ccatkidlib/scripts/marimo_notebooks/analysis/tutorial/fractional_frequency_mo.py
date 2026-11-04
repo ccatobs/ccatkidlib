@@ -142,21 +142,16 @@ def _(mismatch_plots_dashboard, mo):
 
 
 @app.cell
-def _(
-    det,
-    mismatch_prefix,
-    phase_spline_workers_selector,
-    properties_routines,
-):
+def _(det, mismatch_prefix, phase_spline_workers_selector):
     det.stream.phase(
         prefix=mismatch_prefix,
     )
 
     _min_phase, _max_phase = (
-        properties_routines.agg(det.stream, "min", "phase", prefix=mismatch_prefix)
+        det.stream.agg( "min", "phase", prefix=mismatch_prefix)
         .to_numpy()
         .T[1],
-        properties_routines.agg(det.stream, "max", "phase", prefix=mismatch_prefix)
+        det.stream.agg("max", "phase", prefix=mismatch_prefix)
         .to_numpy()
         .T[1],
     )
@@ -179,11 +174,22 @@ def _(
 def _(PREFIX, det, mismatch_prefix, mo, routines, spline_calculated):
     mo.stop(not spline_calculated)
 
-    routines.IQ_noise(det, prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate')
-    noise_prefix = f"{PREFIX['isolate_readout_noise']}_{PREFIX['rotate']}_{mismatch_prefix}"
+    routines.IQ_noise(det, prefix=mismatch_prefix)
+    noise_prefix = "_".join([PREFIX['isolate_dissipation_noise'], PREFIX['rotate'], mismatch_prefix])
     det.stream.phase(prefix=noise_prefix)
     noise_rotated = True
     return noise_prefix, noise_rotated
+
+
+@app.cell
+def _(det, mismatch_prefix, mo, noise_prefix, noise_rotated, tone_selector):
+    mo.stop(not noise_rotated)
+
+    _tone = tone_selector.value
+    _plot = (det.stream.IQ_plot(prefix=mismatch_prefix, include=_tone, datashade=False)
+    *det.stream.IQ_plot(prefix=noise_prefix, include=_tone, datashade=False))
+    mo.vstack([tone_selector, _plot])
+    return
 
 
 @app.cell
@@ -208,85 +214,87 @@ def _(
         prefix=[mismatch_prefix, noise_prefix],
         recalc=True,
     )
+
+    ff_calculated = True
+    return (ff_calculated,)
+
+
+@app.cell
+def _(det, ff_calculated, mismatch_prefix, mo, noise_prefix, tone_selector):
+    mo.stop(not ff_calculated)
+
+    _tone = tone_selector.value
+    _plot = (det.stream.stream_plot(col_name='ff', prefix=mismatch_prefix, time_col='zt', include=_tone, datashade=False)
+    *det.stream.stream_plot(col_name='ff', prefix=noise_prefix, time_col='zt', include=_tone, datashade=False)).opts(ylabel='Fractional Frequency Shift')
+    mo.vstack([tone_selector, _plot])
     return
+
+
+@app.cell
+def _(det, ff_calculated, mismatch_prefix, mo, noise_prefix):
+    mo.stop(not ff_calculated)
+
+    det.stream.psd(col_name='ff', prefix=[mismatch_prefix, noise_prefix], nperseg=512, recalc=True)
+    psd_calculated = True
+    return (psd_calculated,)
+
+
+@app.cell
+def _(det, mismatch_prefix, mo, noise_prefix, psd_calculated, tone_selector):
+    mo.stop(not psd_calculated)
+
+    _tone = tone_selector.value
+    (det.stream.psd_plot(col_name='ff', prefix=mismatch_prefix, include=_tone)*
+    det.stream.psd_plot(col_name='ff', prefix=noise_prefix, include=_tone)).opts(aspect=2, fig_size=250, ylabel=r'$\sqrt{S_{xx}}\ \ [\text{Hz}^{-1/2}]$')
+    return
+
+
+@app.cell
+def _(PREFIX, det, mismatch_prefix, mo, noise_prefix, psd_calculated):
+    mo.stop(not psd_calculated)
+
+    det.stream.psd_trim(col_name='ff', prefix=[mismatch_prefix, noise_prefix], low_f=100, name='white_noise', recalc=True)
+    trimmed_mismatch_prefix = "_".join(['white_noise', PREFIX['trim'], 'psd', mismatch_prefix])
+    trimmed_noise_prefix = "_".join(['white_noise', PREFIX['trim'], 'psd', noise_prefix])
+
+    psd_trimmed = True
+    return psd_trimmed, trimmed_mismatch_prefix, trimmed_noise_prefix
 
 
 @app.cell
 def _(det):
-    _tone = 10
-    (det.stream.stream_plot(col_name='ff', prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', time_col='zt', include=_tone, datashade=False)
-    *det.stream.stream_plot(col_name='ff', prefix='readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', time_col='zt', include=_tone, datashade=False))
+    det.stream.get_data(include=0)
     return
 
 
 @app.cell
-def _(det):
-    _tone = 10
-    (det.stream.IQ_plot(prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone, datashade=False)
-    *det.stream.IQ_plot(prefix='readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone, datashade=False))
+def _(
+    det,
+    mismatch_prefix,
+    mo,
+    noise_prefix,
+    psd_trimmed,
+    tone_selector,
+    trimmed_mismatch_prefix,
+    trimmed_noise_prefix,
+):
+    mo.stop(not psd_trimmed)
+
+    _tone = tone_selector.value
+    (det.stream.psd_plot(col_name='ff', prefix=mismatch_prefix, include=_tone)*
+     det.stream.plot(x_dim='ff', y_dim='ff', x_prefix="_".join(['psd_f', mismatch_prefix]), y_prefix=trimmed_mismatch_prefix, datashade=False, include=_tone)*
+    det.stream.psd_plot(col_name='ff', prefix=noise_prefix, include=_tone)*
+    det.stream.plot(x_dim='ff', y_dim='ff', x_prefix="_".join(['psd_f', noise_prefix]), y_prefix=trimmed_noise_prefix, datashade=False, include=_tone)).opts(aspect=2, fig_size=250, ylabel=r'$\sqrt{S_{xx}}\ \ [\text{Hz}^{-1/2}]$')
     return
 
 
 @app.cell
-def _(det):
-    det.stream.psd(col_name='ff', prefix=['mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 'readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'], nperseg=512, recalc=True)
+def _(det, mo, psd_trimmed, trimmed_mismatch_prefix, trimmed_noise_prefix):
+    mo.stop(not psd_trimmed)
+
+    mo.output.append(det.stream.agg('median', col_name='ff', prefix=trimmed_mismatch_prefix))
+    mo.output.append(det.stream.agg('median', col_name='ff', prefix=trimmed_noise_prefix))
     return
-
-
-@app.cell
-def _(det, hv, np):
-    _f = np.linspace(0.5, 200, 1000)
-    _l = 1e-8*_f**-1/2
-    _tone = 162
-    (det.stream.psd_plot(col_name='ff', prefix='mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone)*
-     det.stream.plot(x_dim='ff', y_dim='ff', x_prefix='psd_f_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', y_prefix='white_noise_trim_psd_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone, datashade=False, logx=True, logy=True)*
-    det.stream.psd_plot(col_name='ff', prefix='readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', include=_tone)*hv.Curve((_f, _l))).opts(aspect=2, fig_size=250)
-    return
-
-
-@app.cell
-def _(det, properties_routines):
-    properties_routines.fwhm(det.targ, mag_prefix='savgol0', recalc=True)
-    return
-
-
-@app.cell
-def _(det):
-    det.frac_f(prefix='', data='targ', ref_f='mid_savgol0_FWHM_f')[0]
-    return
-
-
-@app.cell
-def _(det):
-    det.targ.plot(x_dim='ff', y_dim='mag', ms=1, linewidth=0)
-    return
-
-
-@app.cell
-def _(det):
-    det.targ.scale('f', scale=1/1e6, name='MHz', recalc=True)
-    return
-
-
-@app.cell
-def _(det, pl):
-    det.stream.get_data(['sample', 'psd_f_mismatch.*_ff']).unpivot(index='sample', value_name='frequency', variable_name='det').with_columns(pl.col('det').str.strip_prefix(f'psd_f_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_ff_').cast(pl.Int32)).filter(pl.col('frequency').is_between(200, 250)).with_columns(pl.col('sample').get(pl.col('frequency').arg_min().over('det')).alias('low_index'),
-                       pl.col('sample').get(pl.col('frequency').arg_max()).alias('upper_index')).select('det', 'low_index', 'upper_index').unique().sort('det')
-    return
-
-
-@app.cell
-def _(det):
-    det.stream.psd_trim(col_name='ff', prefix=['mismatch_rotate_origin_shift_origin_rotate_unwind_rotate', 'readout_noise_rotate_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'], low_f=100, name='white_noise', recalc=True)
-    return
-
-
-app._unparsable_cell(
-    r"""
-    properties_routines.agg(det.stream, 'median', col_name='ff', prefix='white_noise_trim_psd_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'])
-    """,
-    name="_"
-)
 
 
 @app.cell
@@ -319,7 +327,7 @@ def _():
     import numpy as np
     import polars as pl
 
-    return np, pl
+    return (pl,)
 
 
 @app.cell
@@ -334,7 +342,7 @@ def _():
 
     from ccatkidlib.analysis.core.detector import Detector
 
-    return Detector, ccat_io, properties_routines, routines
+    return Detector, ccat_io, routines
 
 
 @app.cell
@@ -359,6 +367,13 @@ def _():
 
     hv.extension("matplotlib")
     return hv, opts
+
+
+@app.cell
+def _():
+    import wigglystuff
+
+    return (wigglystuff,)
 
 
 @app.cell
@@ -547,16 +562,18 @@ def _(mo, os):
 
 
 @app.cell
-def _(det, mo):
+def _(det, mo, wigglystuff):
     mo.stop(not det)
 
     tone_selector = mo.ui.slider(
         steps=det.targ.tones,
         debounce=True,
         show_value=True,
-        full_width=True,
+        full_width=False,
         label="Tone",
     )
+
+    wigglystuff.FloatingPanel(tone_selector)
     return (tone_selector,)
 
 
