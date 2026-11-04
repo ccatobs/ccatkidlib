@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.10"
+__generated_with = "0.25.1"
 app = marimo.App(width="columns")
 
 
@@ -92,17 +92,14 @@ def _(det):
 
 
 @app.cell
-def _(circle_fit_workers_selector, det, routines, savgol_workers_selector):
-    routines.IQ_circle_center(
+def _(det, routines, savgol_workers_selector):
+    routines.IQ_circle_origin(
         det,
         data="both",
         savgol_window=9,
         savgol_order=1,
-        trim_window=10,
-        trim_mean_points=10,
-        mismatch_mean_points=10,
+        mean_points=10,
         savgol_workers=savgol_workers_selector.value,
-        fit_workers=circle_fit_workers_selector.value,
         recalc=True,
     )
 

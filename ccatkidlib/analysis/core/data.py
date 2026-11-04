@@ -476,12 +476,10 @@ class Data:
             prefix,
             ["rotate"],
             self.analysis_cfg,
-        )
-
+        )   
         num_prefix = len(name_enums)
         angle = ccat_df.check_args(angle, num_prefix, float)
         name = ccat_df.check_args(name, num_prefix, str)
-
         prefix_enums = [
             Enum("Prefix", [(enum.ROTATE.name, f"{n}_{enum.ROTATE.value}")])
             if n
@@ -1134,12 +1132,16 @@ class Data:
                     elif not isinstance(arg, Iterable) or isinstance(arg, str):
                         f_arg[i] = [arg] * num_tones
                     elif not len(f_arg[i]) == num_tones:
-                        f_arg = [[None] * num_tones for _ in range(len(f_arg))]
-                        log.log(
-                            "ERROR",
-                            "Number of arguments and tones specified do not match",
-                        )
-                        break
+                        # Handle common edge case when processing a single tone
+                        if num_tones == 1:
+                            f_arg[i] = [f_arg[i]]
+                        else:
+                            f_arg = [[None] * num_tones for _ in range(len(f_arg))]
+                            log.log(
+                                "ERROR",
+                                "Number of arguments and tones specified do not match",
+                            )
+                            break
 
                 exp = func(
                     schema,

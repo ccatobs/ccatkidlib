@@ -12,7 +12,7 @@ def IQ_circle_origin(
     det,
     data: Literal["targ", "timestream", "both"] ="both",
     cable_delay: Literal['vna', 'targ'] = 'vna',
-    normalize: bool =False,
+    normalize: bool = False,
     normalization: Literal['constant', 'linear'] = 'constant',
     savgol_window=9,
     savgol_order=1,
@@ -342,7 +342,7 @@ def IQ_noise(
             #     exclude=exclude,
             #)
         else:
-            noise_prefix = f'{prefix_dict['isolate_dissipation_noise']}_{prefix_dict['rotate']}_{pre}'
+            noise_prefix = f"{prefix_dict['isolate_dissipation_noise']}_{prefix_dict['rotate']}_{pre}"
             noise_names[i] = noise_prefix
             median_I, median_Q = (
                 det.stream.agg("median", name_dict['in_phase'], prefix=pre, include=include, exclude=exclude, recalc=recalc)
@@ -371,7 +371,7 @@ def IQ_noise(
                 exclude=exclude,
                 recalc=recalc,
             )
-            rotate_prefix = f'tmp_{prefix_dict['rotate']}_{shift_prefix}'
+            rotate_prefix = "_".join(['tmp', prefix_dict['rotate'], shift_prefix])
             det.stream.IQ_shift(
                 prefix=rotate_prefix,
                 shift_I=median_I,
@@ -381,7 +381,7 @@ def IQ_noise(
                 exclude=exclude,
                 recalc=recalc,
             )
-            final_prefix = f'tmp_{prefix_dict['translate']}_{rotate_prefix}'
+            final_prefix = "_".join(['tmp', prefix_dict['translate'], rotate_prefix])
 
             det.stream.data = det.stream.data.with_columns(
                 [
@@ -397,8 +397,9 @@ def IQ_noise(
         col_names = []
         for noise_name in noise_names:
             col_names += [
-                f"{noise_name}_{name_dict['in_phase']}",
-                f"{noise_name}_{name_dict['quadrature']}",
+                "_".join([noise_name, name_dict['in_phase']]),
+                "_".join([noise_name, name_dict['quadrature']])
+
             ]
 
         return det.stream.get_data(

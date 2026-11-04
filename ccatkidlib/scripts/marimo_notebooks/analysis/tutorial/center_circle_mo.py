@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.10"
+__generated_with = "0.25.1"
 app = marimo.App(width="columns")
 
 
@@ -56,6 +56,11 @@ def _(com_to_selector, mo, run_pipeline_button, targ_selector):
     return
 
 
+@app.cell
+def _():
+    return
+
+
 @app.cell(column=1)
 def _(
     Detector,
@@ -71,6 +76,7 @@ def _(
         com_to=com_to_selector.value[0],
         targ_path=targ_selector.value[0],
         analysis_cfg=analysis_cfg,
+        dets=[0]
     )
     return (det,)
 
@@ -116,11 +122,33 @@ def _(mo, raw_plots_dashboard):
 
 
 @app.cell
-def _(NAMES, det):
+def _(
+    NAMES,
+    det,
+    savgol_k_selector,
+    savgol_max_workers_selector,
+    savgol_window_selector,
+):
+    det.targ.savgol(
+        col_name=NAMES["magnitude"],
+        prefix=det.analysis_cfg["convention"]["prefix"]["decible"],
+        deriv=0,
+        window=savgol_window_selector.value,
+        k=savgol_k_selector.value,
+        max_workers=savgol_max_workers_selector.value,
+        recalc=True,
+    )
+
+    savgol_prefix = f"{det.analysis_cfg['convention']['prefix']['savgol_filter']}0_{det.analysis_cfg['convention']['prefix']['decible']}"
+    return (savgol_prefix,)
+
+
+@app.cell
+def _(NAMES, det, savgol_prefix):
     det.vna.phase()  # Use VNA sweep phase data to calculate cable delay
-    det.cable_delay
+    det.cable_delay(mag_prefix=savgol_prefix)
     det.IQ_unwind(
-        delay_col=f"vna_{NAMES['cable_delay']}", data="targ"
+        delay_col=f"vna_{NAMES['cable_delay']}", data="targ", include=0, recalc=True
     )  # Remove cable delay from target sweeps
 
     get_cable_dfs = True
@@ -158,37 +186,22 @@ def _(mo, unwind_plots_dashboard):
 
 @app.cell
 def _(
-    NAMES,
     cable_prefix,
     det,
-    savgol_k_selector,
-    savgol_max_workers_selector,
-    savgol_window_selector,
+    savgol_prefix,
     trim_mean_points_selector,
     trim_window_selector,
 ):
-    det.targ.savgol(
-        col_name=NAMES["magnitude"],
-        prefix=det.analysis_cfg["convention"]["prefix"]["decible"],
-        deriv=0,
-        window=savgol_window_selector.value,
-        k=savgol_k_selector.value,
-        max_workers=savgol_max_workers_selector.value,
-        recalc=True,
-    )
-
-    savgol_prefix = f"{det.analysis_cfg['convention']['prefix']['savgol_filter']}0_{det.analysis_cfg['convention']['prefix']['decible']}"
-    det.IQ_trim(
+    det.targ.res_IQ_trim(
         prefix=cable_prefix,
         window=trim_window_selector.value,
         mean_points=trim_mean_points_selector.value,
-        use_fit=False,
         mag_prefix=savgol_prefix,
         recalc=True,
     )
 
     get_trim_dfs = True
-    return get_trim_dfs, savgol_prefix
+    return (get_trim_dfs,)
 
 
 @app.cell
@@ -396,6 +409,11 @@ def _(center_prefix, det):
 
 
 @app.cell
+def _():
+    return
+
+
+@app.cell
 def _(PREFIX, center_prefix, det, get_mismatch_dfs, mo):
     mo.stop(not get_mismatch_dfs)
 
@@ -403,7 +421,13 @@ def _(PREFIX, center_prefix, det, get_mismatch_dfs, mo):
         f"{PREFIX['remove_impedance_mismatch']}_{PREFIX['rotate']}_{center_prefix}"
     )
     mismatch_plot_dfs = get_plot_dfs(det, mismatch_prefix)
-    return (mismatch_plot_dfs,)
+    return mismatch_plot_dfs, mismatch_prefix
+
+
+@app.cell
+def _(mismatch_prefix):
+    mismatch_prefix
+    return
 
 
 @app.cell
@@ -553,7 +577,7 @@ def _(HOME_DIR, Path, analysis_cfg, mo):
     )
 
     if not Path(root_data_dir).exists(): root_data_dir = HOME_DIR
-    
+
     # Create file browser for selecting target sweep file
     data_browser = mo.ui.file_browser(
         initial_path=root_data_dir,

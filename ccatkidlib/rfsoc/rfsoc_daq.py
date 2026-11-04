@@ -160,6 +160,7 @@ class R:
         self.config_dirs, self.targ_dirs, self.timestream_dirs, self.vna_dirs = (
             new_dir_paths
         )
+        io.create_dir(self.tmp_dir)
         self.noise_files = io.create_noise_files(
             self.drone_list, self.tmp_dir
         )  # Create tmp directory and noise tone files
