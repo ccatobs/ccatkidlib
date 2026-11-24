@@ -126,6 +126,73 @@ class Timestream(Data):
 
         self.spline_dict = {"None": None}
 
+    # ========== #
+    # Properties #
+    # ========== #
+
+    def timestream_angle(self, prefix="", include=None, exclude=None, recalc=False):
+        '''
+        '''
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature", "phase"],
+            prefix,
+            ["center_timestream"],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+
+        name_enum, prefix_enum = name_enums[0], prefix_enums[0]
+        timestream_col_name = (
+            f"{prefix_enum.CENTER_TIMESTREAM.value}_{name_enum.PHASE.value}"
+        )
+
+        # Calculate angle of center of timestream (center determined using I and Q medians)
+        include_subset = ccat_df.check_properties(
+            self,
+            timestream_col_name,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
+        if not len(include_subset) == 0:
+            pi = pl.lit(np.pi)
+            I_df = self.get_data(
+                name_enum.IN_PHASE.value,
+                include=include_subset,
+                strict=True,
+            )
+            Q_df = self.get_data(
+                name_enum.QUADRATURE.value,
+                include=include_subset,
+                strict=True,
+            )
+            I_cols, Q_cols = I_df.columns, Q_df.columns
+            IQ_df = pl.concat([I_df, Q_df], how="horizontal")
+            timestream_df = (
+                IQ_df.lazy()
+                .select(pl.all().median())
+                .select(
+                    [
+                        (pl.arctan2(pl.col(Q_col), pl.col(I_col)) % (2 * pi)).alias(
+                            I_col.split("_")[-1]
+                        )
+                        for I_col, Q_col in zip(I_cols, Q_cols)
+                    ]
+                )
+                .collect()
+            )
+            ccat_df.add_data_to_properties(self, timestream_df, timestream_col_name)
+
+        ret_df = self.get_properties(
+            timestream_col_name,
+            include=include,
+            exclude=exclude,
+            strict=True,
+        )
+
+        ret_pre = f"{prefix_enum.CENTER_TIMESTREAM.value}{'_' if prefix else ''}{prefix}"
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+
     # ==================#
     # Plotting Methods #
     # ==================#
@@ -583,15 +650,19 @@ class Timestream(Data):
                 np.array(Is, dtype=np.float64),
                 np.array(Qs, dtype=np.float64),
             )
-            data["sample"] = range(len(ts))
-            data["t"], data["dt"] = ts, dt
+
+            name_mapping = self.analysis_cfg["convention"]["name"]
+            data[name_mapping["sample"]] = range(len(ts))
+            data[name_mapping["time"]], data[name_mapping["datetime"]] = ts, dt
             for t, I, Q in zip(self.tones, Is, Qs):
-                data[f"I_{t:0{self.padding}d}"] = I
-                data[f"Q_{t:0{self.padding}d}"] = Q
+                data[ccat_df.add_tone(name_mapping["in_phase"], t, self.padding)] = I
+                data[ccat_df.add_tone(name_mapping["quadrature"], t, self.padding)] = Q
             self._data = pl.DataFrame(data)
             self._data = self._data.with_columns(
-                pl.col("dt").cast(pl.Datetime(unit)),
-                (pl.col("t") - pl.col("t").first()).alias("zt"),
+                pl.col(name_mapping["datetime"]).cast(pl.Datetime(unit)),
+                (
+                    pl.col(name_mapping["time"]) - pl.col(name_mapping["time"]).first()
+                ).alias(name_mapping["zerotime"]),
             )
         elif isinstance(self._data, pl.LazyFrame):
             self._data = self._data.collect()
@@ -622,7 +693,9 @@ class Timestream(Data):
         new_dict = {"det": []}
 
         props_dict = self._properties
-        self._properties = {f"det_{tone:0{self.padding}d}": {} for tone in self.tones}
+        self._properties = {
+            ccat_df.add_tone("det", tone, self.padding): {} for tone in self.tones
+        }
 
         all_props = set(
             [prop for props in props_dict.values() for prop in props.keys()]
@@ -656,14 +729,34 @@ class Timestream(Data):
     def sampling_freq(self):
         return self.io_cfg["boards"][f"b{self.bid}"]["sampling_freq"]
 
+    def get_properties(
+        self,
+        col_name: str | list[str] = ".*",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        strict: bool = False,
+    ):
+        """Get the specified data columns and rows from the ``properties`` Polars DataFrame
+
+        Args:
+            col_name (str | list[str], optional): Defaults to all columns
+            include (int | list[int] | None, optional): Defaults to *None*
+            exclude (int | list[int] | None, optional): Defaults to *None*
+            strict (bool, optional): Defaults to *False*
+
+        """
+        return ccat_df.get_properties(
+            self, col_name=col_name, include=include, exclude=exclude, strict=strict
+        )
+
     # =====================#
     # Data Getter Methods #
     # =====================#
 
     def psd(
         self,
+        col_name: str, 
         prefix: str | list[str] = "",
-        col_name: str = "phase",
         window="hann",
         nperseg=None,
         detrend=False,
@@ -674,30 +767,32 @@ class Timestream(Data):
         max_workers: int = 1,
         ex=None,
     ) -> pl.dataframe.frame.DataFrame:
+        
+        if isinstance(prefix, str): prefix = [prefix]
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == col_name:
+                enum_key = key
+                break
 
-        col_name = [col_name, "psd_f", "psd"]
+        if enum_key is None:
+            error = f"Could not find column {col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [enum_key],
+            prefix,
+            ["power_spectral_density", "power_spectral_density_frequency"],
+            self.analysis_cfg,
+        )
+
+        num_prefix = len(name_enums)
         sampling_freq, height = self.sampling_freq, self.data.height
-
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
-
-        if isinstance(window, str) or not len(window) == num_prefix:
-            window = [window] * num_prefix
-        if isinstance(average, str) or not len(average) == num_prefix:
-            average = [average] * num_prefix
-        if not isinstance(nperseg, Iterable) or not len(nperseg) == num_prefix:
-            nperseg = [nperseg] * num_prefix
-        if (
-            isinstance(detrend, str)
-            or not isinstance(detrend, Iterable)
-            or not len(detrend) == num_prefix
-        ):
-            detrend = [detrend] * num_prefix
-
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}"] + col_name[1:]
+        window = ccat_df.check_args(window, num_prefix, str)
+        average = ccat_df.check_args(average, num_prefix, str)
+        nperseg = ccat_df.check_args(nperseg, num_prefix, int)
+        detrend = ccat_df.check_args(detrend, num_prefix, str)
 
         args = [
             [
@@ -718,15 +813,111 @@ class Timestream(Data):
             include=include,
             exclude=exclude,
             recalc=recalc,
-            col_name=col_names,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        self.data = self._unnest([f"struct_{col_name[-1]}" for col_name in col_names])
-        return self.get_data(
-            col_name=[f"{col_name[-2]}_{col_name[0]}" for col_name in col_names]
-            + [f"{col_name[-1]}_{col_name[0]}" for col_name in col_names],
+
+        col_names = []
+        for prefix_enum, name_enum in zip(prefix_enums, name_enums):
+            col_names += [
+                f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{name_enum[enum_key.upper()].value}",
+                f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}_{name_enum[enum_key.upper()].value}",
+            ]
+
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
+
+        ret_df = self.get_data(
+            col_name=col_names,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [(f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}{'_' if pre else ''}{pre}", f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}{'_' if pre else ''}{pre}") for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+
+    def psd_trim(self,
+                 col_name: str,
+                 prefix: str | list[str] = "",
+                 low_f = 0, 
+                 high_f = 10000,
+                 name='',
+                 include=None,
+                 exclude=None,
+                 recalc=False
+                 ):
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == col_name:
+                enum_key = key
+                break
+
+        if enum_key is None:
+            error = f"Could not find column '{col_name}'. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ['sample', enum_key],
+            prefix,
+            ['trim', 'power_spectral_density', 'power_spectral_density_frequency'],
+            self.analysis_cfg,
+            no_prefix=['sample']
+        )
+        num_prefix = len(name_enums)
+
+        low_f = ccat_df.check_args(low_f, num_prefix, float)
+        high_f = ccat_df.check_args(high_f, num_prefix, float)
+
+        low_inds, up_inds = [None]*num_prefix, [None]*num_prefix
+        for i, (name_enum, prefix_enum, lf, hf) in enumerate(zip(name_enums, prefix_enums, low_f, high_f)):
+            sample_col, data_col, f_col = (name_enum.SAMPLE.value, 
+                                          f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{name_enum[enum_key.upper()].value}",
+                                          f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}_{name_enum[enum_key.upper()].value}")
+            low_index_col, up_index_col = (f"{name}{'_' if name else ''}{prefix_enum.TRIM.value}_{data_col}_lower_{sample_col}",
+                                           f"{name}{'_' if name else ''}{prefix_enum.TRIM.value}_{data_col}_upper_{sample_col}")
+            include_subset = ccat_df.check_properties(
+                self,
+                low_index_col,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+            )
+            if not len(include_subset) == 0:
+                index_df = (self.get_data([sample_col, f_col], strict=True, include=include_subset)
+                                .unpivot(index=sample_col,
+                                    variable_name="det",
+                                    value_name=f_col)
+                                .lazy()
+                                .with_columns(pl.col("det").str.strip_prefix(f"{f_col}_").cast(pl.Int32))
+                                .filter(pl.col(f_col).is_between(lf, hf))
+                                .with_columns(pl.col(sample_col).get(pl.col(f_col).arg_min().over('det')).alias(low_index_col),
+                                              pl.col(sample_col).get(pl.col(f_col).arg_max().over('det')).alias(up_index_col))   
+                                .select('det', low_index_col, up_index_col)
+                                .unique()
+                                .collect()
+                            )
+                shared_cols = [low_index_col, up_index_col] if low_index_col in self._properties_df.schema else []
+                self._properties_df = ccat_df.coalesce_join(
+                    self._properties_df,
+                    index_df,
+                    "det",
+                    shared_cols,
+                )
+            low_inds[i], up_inds[i] = self.get_properties([low_index_col, up_index_col], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
+        
+        if isinstance(prefix, str):
+            prefix = [prefix]
+
+        return self.trim(col_name=col_name,
+                         prefix=[f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{pre}" for prefix_enum, pre in zip(prefix_enums, prefix)],
+                         lower_index=low_inds,
+                         upper_index=up_inds,
+                         name=name,
+                         include=include,
+                         exclude=exclude,
+                         recalc=recalc)
 
     def fft(
         self,
@@ -740,19 +931,28 @@ class Timestream(Data):
         ex=None,
     ) -> pl.dataframe.frame.DataFrame:
 
-        col_name = [col_name, "fft_f", "fft"]
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == col_name:
+                enum_key = key
+                break
+
+        if enum_key is None:
+            error = f"Could not find column {col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [enum_key],
+            prefix,
+            ["fourier_transform", "fourier_transform_frequency"],
+            self.analysis_cfg,
+        )
+
+        num_prefix = len(name_enums)
         if sampling_freq is None:
             sampling_freq = self.sampling_freq
         height = self.data.height
-
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
-
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}"] + col_name[1:]
-
         args = [
             [sampling_freq, height, ccat_mp.check_max_workers(max_workers), ex]
         ] * num_prefix
@@ -762,15 +962,29 @@ class Timestream(Data):
             include=include,
             exclude=exclude,
             recalc=recalc,
-            col_name=col_names,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums
         )
-        self.data = self._unnest([f"struct_{col_name[-1]}" for col_name in col_names])
-        return self.get_data(
-            col_name=[f"{col_name[-2]}_{col_name[0]}" for col_name in col_names]
-            + [f"{col_name[-1]}_{col_name[0]}" for col_name in col_names],
+
+        col_names = []
+        for prefix_enum, name_enum in zip(prefix_enums, name_enums):
+            col_names += [
+                f"{prefix_enum.FOURIER_TRANSFORM.value}_{name_enum[enum_key.upper()].value}",
+                f"{prefix_enum.FOURIER_TRANSFORM_FREQUENCY.value}_{name_enum[enum_key.upper()].value}",
+            ]
+
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
+
+        ret_df =  self.get_data(
+            col_name=col_names,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [(f"{prefix_enum.FOURIER_TRANSFORM.value}{'_' if pre else ''}{pre}", f"{prefix_enum.FOURIER_TRANSFORM_FREQUENCY.value}{'_' if pre else ''}{pre}") for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
 
     # ==================#
     # Analysis Methods #
@@ -783,7 +997,8 @@ class Timestream(Data):
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name=["", "psd_f", "psd"],
+        col_enum=None,
+        prefix_enum=None
     ):
         def _mp_psd(df):
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
@@ -801,16 +1016,13 @@ class Timestream(Data):
                         nperseg=nperseg[inds],
                         detrend=detrend[inds],
                         average=average[inds],
-                    ): (tones, cols)
-                    for i, (tones, inds, (cols)) in enumerate(
-                        zip(to_calc, calc_ind, batches)
-                    )
+                    ): all_tones[inds]
+                    for i, inds in enumerate(calc_ind)
                 }
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tones, cols = future_to_batch[future]
+                    tones = future_to_batch[future]
                     psd_cols = future.result()
-
-                    for tone, col, psd_col in zip(tones, cols, psd_cols):
+                    for tone, psd_col in zip(tones, psd_cols):
                         if isinstance(psd_col, Exception):
                             log.log(
                                 "WARNING",
@@ -824,43 +1036,47 @@ class Timestream(Data):
                             )
                         else:
                             psd_f, psd = psd_col
-                        results_dict[f"{col_name[-2]}_{col[0]}"] = psd_f
-                        results_dict[f"{col_name[-1]}_{col[0]}"] = psd
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = psd
+                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = psd_f
             return ccat_mp.package_results(results_dict)
 
-        if len(args) == 8:
-            (
-                sampling_freq,
-                height,
-                window,
-                nperseg,
-                detrend,
-                average,
-                max_workers,
-                ex,
-            ) = np.array(args, dtype=object)
-            max_workers, ex = max_workers[0], ex[0]
-        else:
+        if not len(args) == 8:
             log.log(
                 "ERROR",
-                "sampling_freq, window, nperseg, detrend, average, and max_workers are required arguments",
+                "sampling_freq, height, window, nperseg, detrend, average, max_workers, and ex are required arguments",
             )
-        calc_col = [
-            f"{col_name[-1]}_{col_name[0]}_{tone:0{padding}d}" for tone in tones
-        ]
+
+        (
+            sampling_freq,
+            height,
+            window,
+            nperseg,
+            detrend,
+            average,
+            max_workers,
+            ex,
+        ) = np.array(args, dtype=object)
+        max_workers, ex = max_workers[0], ex[0]
+        all_tones = np.array(tones)
+
+        data_col, psd_prefix, psd_f_prefix = (
+            [name for name in col_enum][0].value, # Enum should only ever have one member so can extract without name. Could pass name as arg but would create more overhead
+            prefix_enum.POWER_SPECTRAL_DENSITY.value,
+            prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value
+        )
+            
         return_col, return_type = (
-            [f"{col_name[-2]}_{col_name[0]}", f"{col_name[-1]}_{col_name[0]}"],
+            [f"{psd_prefix}_{data_col}", f"{psd_f_prefix}_{data_col}"],
             [pl.Float64, pl.Float64],
         )
-        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
             _mp_psd,
             tones,
-            [col_name[0], col_name[-1]],
             schema,
-            padding=padding,
+            input_col=[data_col],
             return_col=return_col,
             return_type=return_type,
-            calc_col=calc_col,
+            padding=padding,
             max_workers=max_workers,
             recalc=recalc,
         )
@@ -873,7 +1089,8 @@ class Timestream(Data):
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name=["", "fft_f", "fft"],
+        col_enum=None,
+        prefix_enum=None
     ):
         def _mp_fft(df):
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
@@ -887,20 +1104,17 @@ class Timestream(Data):
                         data[i][0],
                         height[inds],
                         sampling_freq[inds],
-                    ): (tones, cols)
-                    for i, (tones, inds, (cols)) in enumerate(
-                        zip(to_calc, calc_ind, batches)
-                    )
+                    ): all_tones[inds]
+                    for i, inds in enumerate(calc_ind)
                 }
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tones, cols = future_to_batch[future]
+                    tones = future_to_batch[future]
                     fft_cols = future.result()
-
-                    for tone, col, fft_col in zip(tones, cols, fft_cols):
+                    for tone, fft_col in zip(tones, fft_cols):
                         if isinstance(fft_col, Exception):
                             log.log(
                                 "WARNING",
-                                "PSD calculation for tone %s failed with exception: %s",
+                                "FFT calculation for tone %s failed with exception: %s",
                                 tone,
                                 fft_col,
                             )
@@ -910,35 +1124,37 @@ class Timestream(Data):
                             )
                         else:
                             fft_f, fft = fft_col
-                        results_dict[f"{col_name[-2]}_{col[0]}"] = fft_f
-                        results_dict[f"{col_name[-1]}_{col[0]}"] = fft
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = fft
+                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = fft_f
             return ccat_mp.package_results(results_dict)
 
-        if len(args) == 4:
-            sampling_freq, height, max_workers, ex = np.array(args, dtype=object)
-            max_workers, ex = max_workers[0], ex[0]
-        else:
+        if not len(args) == 4:
             log.log(
                 "ERROR",
-                "sampling_freq, window, nperseg, detrend, average, and max_workers are required arguments",
+                "sampling_freq, height, max_workers and ex are required arguments",
             )
+        sampling_freq, height, max_workers, ex = np.array(args, dtype=object)
+        max_workers, ex = max_workers[0], ex[0]
+        all_tones = np.array(tones)
 
-        calc_col = [
-            f"{col_name[-1]}_{col_name[0]}_{tone:0{padding}d}" for tone in tones
-        ]
+        data_col, fft_prefix, fft_f_prefix = (
+            [name for name in col_enum][0].value, # Enum should only ever have one member so can extract without name. Could pass name as arg but would create more overhead
+            prefix_enum.FOURIER_TRANSFORM.value,
+            prefix_enum.FOURIER_TRANSFORM_FREQUENCY.value
+        )
+            
         return_col, return_type = (
-            [f"{col_name[-2]}_{col_name[0]}", f"{col_name[-1]}_{col_name[0]}"],
+            [f"{fft_prefix}_{data_col}", f"{fft_f_prefix}_{data_col}"],
             [pl.Float64, pl.Float64],
         )
-        expr, to_calc, calc_ind, calc_col, batches, batch_len = ccat_mp.create_batches(
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
             _mp_fft,
             tones,
-            [col_name[0], col_name[-1]],
             schema,
-            padding=padding,
+            input_col=[data_col],
             return_col=return_col,
             return_type=return_type,
-            calc_col=calc_col,
+            padding=padding,
             max_workers=max_workers,
             recalc=recalc,
         )
@@ -1002,6 +1218,7 @@ class Timestream(Data):
                 if not original_g3_root[-1] == "/":
                     original_g3_root += "/"
 
+                print(original_g3_root)
                 with open(path, "r") as file:
                     g3_files += file.readlines()
                     g3_files = [
@@ -1011,7 +1228,6 @@ class Timestream(Data):
                 break  # If user specifies multiple txt files only load the first one since there can only be one txt file per timestream
             else:
                 g3_files += [path]
-
         # Do initial pass through of frames in G3 file without fully loading the data to:
         # 1. Aggregate frames from different G3 files into one list
         # 2. Filter out frames that do not contain timestream data
@@ -1156,10 +1372,17 @@ class Timestream(Data):
     # =====================#
 
     def t(self):
-        return self.get_data(col_name="t")
+        return self.get_data(col_name=self.analysis_cfg["convention"]["name"]["time"])
 
     def dt(self):
-        return self.get_data(col_name="dt")
+        return self.get_data(
+            col_name=self.analysis_cfg["convention"]["name"]["datetime"]
+        )
+
+    def zt(self):
+        return self.get_data(
+            col_name=self.analysis_cfg["convention"]["name"]["zerotime"]
+        )
 
     def join(self, other, in_place=False):
         new_data = super().join(other, in_place=in_place)
@@ -1238,7 +1461,6 @@ def _psd(data, height, fs, window="hann", nperseg=None, detrend=False, average="
     except Exception as e:
         psd_f, psd = np.zeros(height), np.zeros(height)
     return psd_f, psd
-
 
 def _fft(data, height, fs):
     try:

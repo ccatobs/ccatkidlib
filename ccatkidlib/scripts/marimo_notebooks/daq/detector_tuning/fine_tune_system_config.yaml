@@ -20,18 +20,6 @@ boards:
     avail_space: null
     ps_temp: null
     pl_temp: null
-  b3:
-    avail_space: null
-    ps_temp: null
-    pl_temp: null
-  b4:
-    avail_space: null
-    ps_temp: null
-    pl_temp: null
-  b5:
-    avail_space: null
-    ps_temp: null
-    pl_temp: null
 ---
 
 # Create Jinja variables for values used more than once
@@ -146,7 +134,7 @@ board_file_names:
     comb_phi:  'p_tones_comb'
 
 clean:
-  threshold: 5       # * Remaining disk space in GB after which boards should be automatically cleaned (negative number for no auto cleaning)
+  threshold: 10       # * Remaining disk space in GB after which boards should be automatically cleaned (negative number for no auto cleaning)
   olderThanDaysAgo: 1 # * (days) Clean files older than specified number of days
   ftype: '.npy'       # * File type to clean
   tmp: True           # * Whether to clean tmp primecam_readout and ccatkidlib directories on control computer

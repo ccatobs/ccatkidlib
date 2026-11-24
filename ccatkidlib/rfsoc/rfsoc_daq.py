@@ -7,13 +7,13 @@ The data acquisition methods are tailored for frequency-division multiplexed rea
 """
 
 # Import Python modules
+import os
 import sys
 import ast
 import json
 import time
 import numpy as np
 import multiprocessing as mp
-import polars as pl
 
 from math import floor
 from pathlib import Path
@@ -26,12 +26,13 @@ from ccatkidlib.rfsoc.rfsoc_timestream import Streamer
 from ccatkidlib.analysis.core.vna import VNA
 from ccatkidlib.analysis.core.detector import Detector
 from ccatkidlib.analysis.core.target import Target
+from ccatkidlib.analysis.routines.tune import TonePowerNetwork
 
 import ccatkidlib.io as io
 import ccatkidlib.log as log
 import ccatkidlib.utils as utils
-import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.rfsoc.arg_utils as autils
+import ccatkidlib.analysis.routines.tune as tune_routines
 
 if mp.get_start_method(allow_none=True) is None:
     mp.set_start_method("fork")
@@ -86,7 +87,7 @@ class R:
     @log.method_timer
     def __init__(
         self,
-        cfg_path: str = f"{Path(__file__).parent}/system_config.yaml",
+        cfg_path: str | None = None,
         init_boards: bool | None = None,
         init_drones: bool | None = None,
         **kwargs,
@@ -95,7 +96,7 @@ class R:
         Constructor for R. Creates directories for data storage, configures logger, initializes RFSoC boards/drones, and starts RFSoC OCS agent.
 
         Args:
-            cfg_path (str, optional): Path to system configuration file. Defaults to *system_config.yaml* in *ccatkidlib/rfsoc* directory
+            cfg_path (str, optional): Path to system configuration file. Defaults to CCATKIDLIB_SYSTEM_CONFIG environment variable if set else to *system_config.yaml* in *ccatkidlib/rfsoc* directory
             init_boards (bool | None, optional): Whether to (re)initialize RFSoC boards. Defaults to None - Pulls from IO configuration file
             init_drones (bool | None, optional): Whether to (re)initialize RFSoC drones. Defaults to None - Pulls from IO configuration file
 
@@ -137,7 +138,7 @@ class R:
         # Create session id from first ten digits of current time
         new_measurement = (
             sess_id is None
-            or curr_date != self.curr_date
+            #or curr_date != self.curr_date
             or self.measurement_name != self.io_cfg["name"]
             or self.measurement_desc != self.io_cfg["desc"]
         )
@@ -158,6 +159,7 @@ class R:
         self.config_dirs, self.targ_dirs, self.timestream_dirs, self.vna_dirs = (
             new_dir_paths
         )
+        io.create_dir(self.tmp_dir)
         self.noise_files = io.create_noise_files(
             self.drone_list, self.tmp_dir
         )  # Create tmp directory and noise tone files
@@ -170,6 +172,7 @@ class R:
             self.io_cfg["io"]["terminal_level"],
             max_file_size=self.io_cfg["io"]["max_size"],
         )
+
         log.log(
             "INFO",
             f"{Style.INVERT}Date: {self.curr_date}; Session: {self.sess_id}{Style.DEFAULT}",
@@ -193,7 +196,10 @@ class R:
         # Initialize PCS clients
         # ----------------------
         self.rfsoc = OCSClient(self.io_cfg["pcs_agents"]["rfsoc_agent"], args=[])
-        log.log("INFO", f"Connected to RFSoC PCS agent!")
+        log.log("INFO", "Connected to queen_agent PCS agent.")
+
+        if new_measurement: 
+            self._update_measurement(name=self.io_cfg["name"], desc=self.io_cfg["desc"])
 
         # Setup boards
         # ------------
@@ -216,10 +222,6 @@ class R:
             self.setup_drones()
         log.log("INFO", f"Communicating with drones: {self.drone_list}!")
 
-        # Update Measurment Information
-        # -----------------------------
-        self._update_measurement(name=self.io_cfg["name"], desc=self.io_cfg["desc"])
-
         # Initialize streamer attribute (As None, since it is only used when g3=False)
         # ----------------------------------------------------------------------------
         self.streamer = None
@@ -238,22 +240,23 @@ class R:
 
         # Save init configs
         # -----------------
-        io.save_config(
-            self.log_dir / f"init_config_ext_{self.timestamp}.yaml",
-            self.ext_cfg,
-            self.save_cfg,
-        )
-        io.save_config(
-            self.log_dir / f"init_config_io_{self.timestamp}.yaml",
-            self.io_cfg,
-            self.save_cfg,
-        )
-        for rfsoc_dir, cfg in zip(self.config_dirs, self.drone_cfg):
+        if new_measurement:
             io.save_config(
-                rfsoc_dir / f"init_config_drone_{self.timestamp}.yaml",
-                cfg,
+                self.log_dir / f"init_config_ext_{self.timestamp}.yaml",
+                self.ext_cfg,
                 self.save_cfg,
             )
+            io.save_config(
+                self.log_dir / f"init_config_io_{self.timestamp}.yaml",
+                self.io_cfg,
+                self.save_cfg,
+            )
+            for rfsoc_dir, cfg in zip(self.config_dirs, self.drone_cfg):
+                io.save_config(
+                    rfsoc_dir / f"init_config_drone_{self.timestamp}.yaml",
+                    cfg,
+                    self.save_cfg,
+                )
 
     #################
     # Setup Methods #
@@ -295,7 +298,7 @@ class R:
         else:
             return None
 
-    def _load_system_config(self, cfg_path: str) -> None:
+    def _load_system_config(self, cfg_path: str | None) -> None:
         """
         Load the system (IO & external) and drone configuration files and setup file directory structure for saving data.
 
@@ -305,6 +308,8 @@ class R:
 
         # Load system configuration file
         # ------------------------------
+        if cfg_path is None:
+            cfg_path = env_path if (env_path := os.environ.get('CCATKIDLIB_SYSTEM_CONFIG', '')) else f"{Path(__file__).parent}/system_config.yaml"
 
         cfg = io.load_config(cfg_path)
         try:
@@ -348,7 +353,7 @@ class R:
                 # Iterate through list of drone_cfs backwords (since elements are removed during the loop)
                 for i, cfg in enumerate(drone_cfgs[::-1]):
                     # Remove drone config if drone not specified in drone list
-                    if not (cfg["com_to"] in self.drone_list):
+                    if cfg["com_to"] not in self.drone_list:
                         drone_cfgs.pop(num_drones - i - 1)
 
         # Flatten list of drone configs to match drone_list shape
@@ -402,10 +407,10 @@ class R:
                 log.log("INFO", f"Initializing board {board}!")
 
                 sudo_responder = Responder(
-                    pattern=r"\[sudo\] password:", response=f"xilinx\n"
+                    pattern=r"\[sudo\] password:", response="xilinx\n"
                 )  # Set up responder to run cmd with sudo
                 stdout = c.sudo(
-                    cmd, hide=True, watchers=[sudo_responder], pty=True, in_stream=False
+                    cmd, hide=True, watchers=[sudo_responder], pty=False, in_stream=False
                 )
                 log.log("DEBUG", stdout)
                 log.log("INFO", f"Finished initializing board {board}!")
@@ -493,7 +498,7 @@ class R:
         # Wait if any of the drones were started/restarted and make sure they are running
         # -------------------------------------------------------------------------------
         if wait:
-            log.wait(25, desc=f"For drones to start")
+            log.wait(25, desc="Drones (re)starting...")
 
             # Check that drones were properly started/restarted
             # -------------------------------------------------
@@ -722,17 +727,17 @@ class R:
             parallel_drones = self.parallel_drones
             self.parallel_drones = 1
 
-            # Group drones with the same attenuations
-            atten_dict = autils.group_args(new_com_to, new_attens)
-            for att, com in atten_dict.items():
-                args = [direction, float(att)]
-                kwargs["com_to"] = com
-                self._run_parallel(_set_atten, *args, **kwargs)
-
-            # Reset com_to and parallel_drones to what they were before
-            kwargs["com_to"] = com_to
-            self.parallel_drones = parallel_drones
-            # log.log('INFO', f'Successfully set {direction} attenuation to {list(attens)} for drones {list(com_to)}!')
+            try:
+                # Group drones with the same attenuations
+                atten_dict = autils.group_args(new_com_to, new_attens)
+                for att, com in atten_dict.items():
+                    args = [direction, float(att)]
+                    kwargs["com_to"] = com
+                    self._run_parallel(_set_atten, *args, **kwargs)
+            finally:
+                # Reset com_to and parallel_drones to what they were before
+                kwargs["com_to"] = com_to
+                self.parallel_drones = parallel_drones
 
             return attens
 
@@ -886,7 +891,7 @@ class R:
 
             # From primecam_readout alcove_base getADCrms function
             # ----------------------------------------------------
-            I, Q = data_dic["data"]  # Get I, Q Snap data
+            I, Q = data_dic["data"]  # Get I, Q Snap data  # noqa: E741
             z = np.array(I) + 1j * np.array(Q)  # Convert to complex number
             rms = float(
                 np.real(np.sqrt(np.mean(z * np.conj(z))))
@@ -1103,28 +1108,30 @@ class R:
             self.parallel_drones = 1
 
             args = [direction]
-            rtns = self._run_parallel(_get_atten, *args, **kwargs)
-            rtns = [drone for drones in rtns for drone in drones]
+            try:
+                rtns = self._run_parallel(_get_atten, *args, **kwargs)
+                rtns = [drone for drones in rtns for drone in drones]
 
-            attens, inds = [], []
-            for rtn in rtns:
-                atten = rtn["data"]
-                com = rtn["channel"].split("_")[-2]
-                ind = self.drone_list.index(com)
-                if not isinstance(atten, float):
-                    atten = None
-                    log.log(
-                        "ERROR",
-                        f"Failed to get {direction} attenuation for drone {com}.",
-                    )
-                inds.append(ind)
-                attens.append(atten)
+                attens, inds = [], []
+                for rtn in rtns:
+                    atten = rtn["data"]
+                    com = rtn["channel"].split("_")[-2]
+                    ind = self.drone_list.index(com)
+                    if not isinstance(atten, float):
+                        atten = None
+                        log.log(
+                            "ERROR",
+                            f"Failed to get {direction} attenuation for drone {com}.",
+                        )
+                    inds.append(ind)
+                    attens.append(atten)
 
-            # Create list of attenuations for all drones, sort by drone bid.drid
-            attens = [atten for _, atten in sorted(zip(inds, attens))]
-
-            # Reset parallel_drones to what it was before
-            self.parallel_drones = parallel_drones
+                # Create list of attenuations for all drones, sort by drone bid.drid
+                attens = [atten for _, atten in sorted(zip(inds, attens))]
+            finally:
+                # Reset parallel_drones to what it was before
+                self.parallel_drones = parallel_drones    
+            
             log.log(
                 "INFO",
                 f"Successfully got {direction} attenuations {attens} for drones {com_to}!",
@@ -1594,6 +1601,9 @@ class R:
             fname = self.io_cfg["save_file_names"]["timestream"]
             fname = f"{fname}_{self.timestamp}"
 
+            save_interval = 1.25*self.io_cfg['timestream']['save_interval']
+            mv_g3 = self.io_cfg["timestream"]["mv_g3"]
+
             stream_paths = []
             for com in com_to:
                 bid, drid = com.split(".")
@@ -1621,10 +1631,12 @@ class R:
                     tstream_num -= 1
                     g3_file = g3_tstream_dir / (tstream_name + f"_{tstream_num:03d}.g3")
 
-                if self.io_cfg["timestream"]["mv_g3"]:
+                if mv_g3:
                     tstream_file = [None] * len(g3_files)
                     for i, g3_file in enumerate(g3_files[::-1]):
                         save_file = timestream_dir / f"{fname}_{i:03d}.g3"
+                        while (time_diff := time.time() - io.get_creation_time(g3_file)) < save_interval:
+                            time.sleep(save_interval - time_diff)
                         data = io.get_array(g3_file, save_file, action="mv", load=False)
                         tstream_file[i] = save_file
                 else:
@@ -1672,7 +1684,7 @@ class R:
         if g3:
             self._run_parallel(_take_timestream_g3, *args, **kwargs)
             if save_data:
-                time.sleep(2)
+                time.sleep(2*self.io_cfg['timestream']['save_interval'])
                 stream_out = _save_timestream_g3(com_to)
         else:
             if self.streamer is None:
@@ -2006,7 +2018,7 @@ class R:
                 vna = VNA(com_to=com, data_path=vna_file)
                 stitch_bw[i] = utils.dict_get(vna.drone_cfg, "sweep_steps")
                 vna_files[i] = vna_file
-                timestamps[i] = pair.get_timestamp(vna_file)
+                timestamps[i] = io.get_timestamp(vna_file)
 
         if len(to_sweep) != 0:
             # Take VNA sweep(s) without saving configs (saved later)
@@ -2173,7 +2185,8 @@ class R:
                 det = Detector(com_to=com, targ=targ)
 
                 found_freq = (
-                    det.IQ_max_dist(
+                    tune_routines.max_IQ_dist_f(
+                        det,
                         trim_window=wn,
                         trim_savgol_window=trim_savgol_wn,
                         diff_savgol_window=diff_savgol_wn,
@@ -2188,7 +2201,7 @@ class R:
                 # Save filtered resonators to .npy file
                 # -------------------------------------
                 res_dir = self.config_dirs[ind] / "res"
-                fname = f"{self.io_cfg['save_file_names'][f'targ_sweep']}_res_grad_{self.timestamp}.npy"
+                fname = f"{self.io_cfg['save_file_names']['targ_sweep']}_res_grad_{self.timestamp}.npy"
                 save_path = res_dir / fname
                 np.save(save_path, found_freq)
 
@@ -2313,7 +2326,7 @@ class R:
                 target = Target(com_to=com, data_path=targ_file)
                 stitch_bw[i] = utils.dict_get(target.drone_cfg, "sweep_steps")
                 targ_files[i] = targ_file
-                timestamps[i] = pair.get_timestamp(targ_file)
+                timestamps[i] = io.get_timestamp(targ_file)
 
         if len(to_sweep) != 0:
             # Take target sweep(s) without saving config (saved later)
@@ -2558,7 +2571,7 @@ class R:
                 found_freq = np.load(res_dir / fname, mmap_mode="r")
                 found_num = len(found_freq)
             except FileNotFoundError:
-                log.log("ERROR", f"Failed to retrieve found resonators file!")
+                log.log("ERROR", "Failed to retrieve found resonators file!")
                 found_num = None
             found_nums.append(found_num)
             found_freqs.append(found_freq)
@@ -2751,7 +2764,7 @@ class R:
                         )
                         raise FileNotFoundError
                     log.log("DEBUG", f"Modifying {key} for drone {com}!")
-                except:
+                except FileNotFoundError:
                     comb_dict = _write_new_comb(
                         bip, ssh_key, comb_dict, key, comb_dict[key]["comb"]
                     )
@@ -2841,7 +2854,7 @@ class R:
                     # Resetting back to current comb
                     log.log(
                         "ERROR",
-                        f"The number of tones in the frequeny, power, and phase combs do not match. Reverting back to current comb!",
+                        "The number of tones in the frequeny, power, and phase combs do not match. Reverting back to current comb!",
                     )
                     return _reset_comb(bip, ssh_key, comb_dict)
 
@@ -2854,7 +2867,7 @@ class R:
                         tone_num = 1
                         log.log(
                             "WARNING",
-                            f"Only numbers were passed as custom comb; assuming a single tone should be written! To avoid unexpected errors, please pass numbers as a list to write a single tone in the future.",
+                            "Only numbers were passed as custom comb; assuming a single tone should be written! To avoid unexpected errors, please pass numbers as a list to write a single tone in the future.",
                         )
                     comb_val = comb_val * np.ones(tone_num)
                     comb_val = _check_comb(key, comb_val)
@@ -2866,7 +2879,7 @@ class R:
                         # Resetting back to current comb
                         log.log(
                             "ERROR",
-                            f"The comb failed a check causing the number of tones in the frequeny, power, and phase combs to not match. Reverting back to current comb!",
+                            "The comb failed a check causing the number of tones in the frequeny, power, and phase combs to not match. Reverting back to current comb!",
                         )
                         return _reset_comb(bip, ssh_key, comb_dict)
 
@@ -3219,7 +3232,7 @@ class R:
             board_set = board_arrs[floor(drone_ind)]
 
             # Check if number of boards exceeds the amount that should be run in parallel
-            while len(board_set) >= parallel_boards and not bid in board_set:
+            while len(board_set) >= parallel_boards and bid not in board_set:
                 # Move on to next com_to array and check if it has open space
                 high_ind += 1
                 drone_ind = floor(drone_ind) + 1

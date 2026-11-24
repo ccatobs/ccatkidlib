@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.2"
+__generated_with = "0.23.10"
 app = marimo.App(width="columns")
 
 
@@ -49,20 +49,23 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _(detector_map, mo, save_map_button, save_map_name):
     mo.md(rf"""
     ### Plot Detector Map
+
+    {mo.vstack([save_map_name, save_map_button, detector_map])}
     """)
     return
 
 
-@app.cell(hide_code=True)
-def _(mo, save_map_browser, save_map_button, save_map_name):
-    mo.md(rf"""
-    ### Save Detector Map
+@app.cell
+def _(all_network_props):
+    all_network_props['x_pos'].unique().to_numpy()
+    return
 
-    {mo.vstack([save_map_name, save_map_browser, save_map_button])}
-    """)
+
+@app.cell
+def _():
     return
 
 
@@ -94,6 +97,22 @@ def _(
                     _network.det_dict = _network.det_dict | _sub_network.det_dict
         networks[_com_to] = _network
     return (networks,)
+
+
+@app.cell
+def _(analysis_cfg, hv, mo, networks, viz_cfg):
+    _targ = list(networks['2.1'].det_dict.values())[0].targ
+    _targ.analysis_cfg = analysis_cfg
+    _targ.viz_cfg = viz_cfg
+
+    mo.mpl.interactive(hv.render(_targ.mag_plot(prefix='dB').opts(aspect=2, fig_size=250), backend='matplotlib'))
+    return
+
+
+@app.cell
+def _(networks):
+    list(networks['2.1'].det_dict.values())[0].properties
+    return
 
 
 @app.cell
@@ -155,47 +174,24 @@ def _(
 
 
 @app.cell
-def _(all_network_props, mo, save_map_browser, save_map_button, save_map_name):
-    mo.stop(not save_map_button.value)
-
-    _dir = save_map_browser.value[0].path
-    _file_name = save_map_name.value.split(".")[0]
-
-    all_network_props.write_parquet(_dir / f"{_file_name}.parquet")
-    return
-
-
-@app.cell
-def _(
-    all_network_props,
-    data_col_selector,
-    hv,
-    np,
-    opts,
-    power_method_selector,
-):
+def _(all_network_props, hv, np, opts):
     map_center = hv.VLine(7.5).opts(
         linewidth=0.4, linestyle="-", color="purple", show_legend=False
     ) * hv.HLine(-5.5).opts(
         linewidth=0.3, linestyle="-", color="purple", show_legend=False
     )
-    map_grid = hv.Overlay(  # [hv.Slope(np.tan(np.pi/3), offset) for offset in np.linspace(-96, 72, 25)] +
-        # [hv.Slope(-np.tan(np.pi/3), offset) for offset in np.linspace(-82, 79, 25)] +
-        [hv.VLine(offset) for offset in np.linspace(-105, 105, 25)]
-        + [hv.HLine(offset) for offset in np.linspace(-105, 105, 25)]
-    ).opts(
+    map_grid = hv.Overlay([hv.Slope(np.tan(np.pi/3), offset) for offset in np.linspace(-96, 72, 25)] +
+         [hv.Slope(-np.tan(np.pi/3), offset) for offset in np.linspace(-82, 79, 25)]).opts(
         opts.Slope(linewidth=0.25, linestyle="--", color="k", show_legend=False),
         opts.VLine(linewidth=0.25, linestyle="--", color="k", show_legend=False),
         opts.HLine(linewidth=0.25, linestyle="--", color="k", show_legend=False),
     )
 
-    (
+    detector_map = (
         map_grid
         *
         # map_center*
-        all_network_props.select(
-            ["^tone_.*$", "^.*gaussian_2D_fit_.*$", "network", "det"]
-        )
+        all_network_props
         .rename({"network": "Network"})
         .unique()
         .sort("Network")
@@ -207,8 +203,8 @@ def _(
         #        pl.col(f'{amp_col}_gaussian_2D_fit_x_0_err') < 0.5,
         #        pl.col(f'{amp_col}_gaussian_2D_fit_y_0_err') < 0.5)
         .hvplot.scatter(
-            x=f"{data_col_selector.value}_{power_method_selector.value}_psd_gaussian_2D_fit_x_0",
-            y=f"{data_col_selector.value}_{power_method_selector.value}_psd_gaussian_2D_fit_y_0",
+            x='x_0',
+            y='y_0',
             # c='det',
             # cmap='viridis',
             by="Network",
@@ -219,30 +215,32 @@ def _(
             title="350 GHz Detector Position Map (Looking Into Mod-Cam)",
         )
     ).opts(
-        fig_size=300,
+        fig_size=150,
         invert_xaxis=True,
         legend_position="top_right",
         show_grid=False,
         xlim=(-105, 105),
         ylim=(-105, 105),
     )
-    return
+    return (detector_map,)
 
 
 @app.cell
-def _(all_network_props):
-    all_network_props
-    return
+def _(
+    all_network_props,
+    ccat_io,
+    data_dirs,
+    mo,
+    save_map_button,
+    save_map_name,
+):
+    mo.stop(not save_map_button.value)
 
+    _dir = data_dirs[0] / 'pickle' / 'detector_map'
+    _file_name = save_map_name.value.split(".")[0]
+    ccat_io.create_dir(_dir)
 
-@app.cell
-def _(networks):
-    networks['1.1'].det_dict[networks['1.1'].data['detector'][0]].stream.padding
-    return
-
-
-@app.cell
-def _():
+    all_network_props.write_parquet(_dir / f"{_file_name}.parquet")
     return
 
 
@@ -343,7 +341,7 @@ def _(analysis_cfg_browser, ccat_io, json, mo):
         max_height=_editor_height,
         placeholder="Configuration file contents will display here once a valid file is selected!",
     )
-    return analysis_cfg, cfg_editor
+    return analysis_cfg, cfg_editor, viz_cfg
 
 
 @app.cell
@@ -359,7 +357,7 @@ def _(HOME_DIR, analysis_cfg, mo):
         ignore_empty_dirs=True,
         label="Select data directory(ies)...",
     )
-    return data_browser, root_data_dir
+    return (data_browser,)
 
 
 @app.cell
@@ -535,16 +533,7 @@ def _(com_to_selector, mo, networks, offset_selector, pl, sigma_selector):
 
 
 @app.cell
-def _(all_network_props, mo, root_data_dir):
-    save_map_browser = mo.ui.file_browser(
-        initial_path=root_data_dir,
-        selection_mode="directory",
-        multiple=False,
-        restrict_navigation=False,
-        ignore_empty_dirs=False,
-        label="Select directory in which to save detector map...",
-    )
-
+def _(all_network_props, mo):
     save_map_name = mo.ui.text(
         debounce=True,
         label="Detector Map File Name",
@@ -558,7 +547,7 @@ def _(all_network_props, mo, root_data_dir):
         disabled=all_network_props is None,
         full_width=True,
     )
-    return save_map_browser, save_map_button, save_map_name
+    return save_map_button, save_map_name
 
 
 @app.cell

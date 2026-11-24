@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.2"
+__generated_with = "0.25.2"
 app = marimo.App(width="columns")
 
 
@@ -24,10 +24,10 @@ def _(com_to_selector, mo, vna_selector):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell(hide_code=True, expand_output=True)
 def _(find_res_tabs, mo):
     mo.md(rf"""
-    ### Tune Peak Finding Parameters
+    50### Tune Peak Finding Parameters
 
     {mo.vstack([find_res_tabs], align="center")}
     """)
@@ -45,6 +45,14 @@ def _(hv, opts, vna_plots):
 
 @app.cell
 def _():
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+ 
+    """)
     return
 
 
@@ -408,7 +416,7 @@ def _(find_res_sliders, hv, mo, num_res, res_vlines, vna_plots):
                         (vna_plots[_com_to] * res_vlines[_com_to]).opts(
                             xlabel="Frequency [Hz]",
                             ylabel="$|S_{21}|$ [dB]",
-                            aspect=2,
+                            #aspect=2,
                             fig_size=220,
                             title=f"{num_res[_com_to]} Found Detectors",
                         ),
@@ -566,11 +574,6 @@ def _():
         return f_res, y
 
     return (findResonators,)
-
-
-@app.cell
-def _():
-    return
 
 
 if __name__ == "__main__":

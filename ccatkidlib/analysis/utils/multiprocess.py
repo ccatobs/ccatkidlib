@@ -15,6 +15,7 @@ from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from typing import Callable, Iterator, Any, TYPE_CHECKING
 
+import ccatkidlib.analysis.utils.dataframe as ccat_df
 if TYPE_CHECKING:
     import numpy as np
 
@@ -55,12 +56,11 @@ def check_max_workers(max_workers: int) -> int:
 def create_batches(
     func: Callable[[pl.DataFrame], pl.Series],
     tones: list[int],
-    col_name: list[str],
     schema: pl.Schema,
+    input_col: list[str],
     return_col: list[str],
     return_type: list[pl.DataType],
     padding: int = 4,
-    calc_col: list[str] | None = None,
     max_workers: int = 1,
     recalc: bool = False,
 ) -> tuple[
@@ -73,27 +73,23 @@ def create_batches(
         tones [list[int]]:
 
     """
-
-    if get_calc_col := (calc_col is None):
-        calc_col = len(tones) * [None]
+    # Determine which tones need calculating
     to_calc, calc_ind = [], []
-    for i, tone in enumerate(tones):
-        if get_calc_col:
-            calc_col[i] = f"{col_name[-1]}_{col_name[-2]}_{tone:0{padding}d}"
-        if recalc or calc_col[i] not in schema:
+    for i, tone in enumerate(tones): 
+        if recalc or ccat_df.add_tone(return_col[0], tone, padding) not in schema:
             to_calc.append(tone), calc_ind.append(i)
-
+    
+    expr, batches, batch_len = [], [], 0
     if (num_calc := (len(to_calc))) != 0:
         batches, returns = num_calc * [None], num_calc * [None]
         for i, tone in enumerate(to_calc):
-            batches[i] = [f"{name}_{tone:0{padding}d}" for name in col_name[:-1]]
+            batches[i] = [ccat_df.add_tone(name, tone, padding) for name in input_col] # Get all input columns needed for calculations
             returns[i] = [
-                pl.Field(f"{name}_{tone:0{padding}d}", dtype)
+                pl.Field(ccat_df.add_tone(name, tone, padding), dtype)
                 for name, dtype in zip(return_col, return_type)
-            ]
+            ] # Map batches requires explicit return data types specified
 
-        calc_col = f"struct_{col_name[-1]}_{to_calc[0]:0{padding}d}"
-
+        struct_col = f"struct_{return_col[0]}"
         batches_flat, returns_flat = (
             [col for batch in batches for col in batch],
             [col for ret_col in returns for col in ret_col],
@@ -101,28 +97,17 @@ def create_batches(
         expr = (
             pl.struct(batches_flat)
             .map_batches(func, return_dtype=pl.Struct(returns_flat))
-            .alias(calc_col)
+            .alias(struct_col)
         )
 
+        # Split data into batches based on number of workers
         batch_len = math.ceil(num_calc / max_workers)
-        new_batches, new_to_calc, new_calc_ind = (
-            max_workers * [None],
-            max_workers * [None],
-            max_workers * [None],
-        )
+        new_calc_ind = max_workers * [None]
         for i in range(max_workers):
             low_ind, up_ind = i * batch_len, (i + 1) * batch_len
-            new_batches[i], new_to_calc[i], new_calc_ind[i] = (
-                batches[low_ind:up_ind],
-                to_calc[low_ind:up_ind],
-                calc_ind[low_ind:up_ind],
-            )
-        batches, to_calc, calc_ind = new_batches, new_to_calc, new_calc_ind
-    else:
-        batches, batch_len = [], 0
-        expr = pl.col(calc_col)
-    return expr, to_calc, calc_ind, calc_col, batches, batch_len
-
+            new_calc_ind[i] = calc_ind[low_ind:up_ind]
+        calc_ind = new_calc_ind
+    return expr, calc_ind, batch_len
 
 def struct_batches(
     struct: pl.Struct, num_data_cols: int, batch_len: int, max_workers: int

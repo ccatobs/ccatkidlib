@@ -17,10 +17,12 @@ import concurrent.futures
 
 from pathlib import Path
 from scipy.signal import savgol_filter
+from scipy.stats import linregress
 
 from functools import cached_property
 from abc import abstractmethod
 from collections.abc import Iterable
+from enum import Enum
 from typing import Callable, TypeAlias, Any, Literal, TYPE_CHECKING
 
 # Local Imports
@@ -30,9 +32,9 @@ import ccatkidlib.utils as utils
 import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
+import ccatkidlib.analysis.fit.fit as ccat_fit
 
-if TYPE_CHECKING:
-    from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 CalcFunction: TypeAlias = Callable[[pl.Schema, Any], pl.Expr | list[pl.Expr]]
 
@@ -92,7 +94,8 @@ class Data:
         """
         # Define data attributes
         # -----------------------
-        self.bid, self.drid = com_to.split(".")  # Baard and drone data was taken with
+        self.bid, self.drid = com_to.split(".")  # Board and drone data was taken with
+        self.data_type = data_type
 
         self.tones = None
         self._data = None
@@ -112,6 +115,7 @@ class Data:
 
         # If full data path is None, [], or "", find data file based on timestamp and (optional) file path parts
         # ------------------------------------------------------------------------------------------------------
+        
         if not data_path:
             if data_type is None or timestamp is None:
                 error = (
@@ -210,6 +214,7 @@ class Data:
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         strict: bool = False,
+        no_tone_cols: list[str] | None = None,
     ) -> pl.DataFrame:
         """Get the specified data columns from the ``data`` *Polars* **DataFrame**
 
@@ -221,20 +226,19 @@ class Data:
         Returns:
             *Polars* **DataFrame** with specified data columns
 
-        """
+        """            
 
-        def _get_exclude(exclude):
-            expr = []
-            for tones in exclude:
-                expr += [
-                    f"^{'' if strict else '.*'}{name}_{tones:0{self.padding}d}$"
-                    for name in col_name
-                ]
+        def _get_data(include, exclude):
+            exclude_data = len(exclude) <= len(include)
+            tones = exclude if exclude_data else include
+
+            expr = [f"^{'' if strict else '.*'}{name}_{tone:0{self.padding}d}$"
+                    for name in col_name for tone in tones]
             return [
                 pl.col(
                     [rf"^{'' if strict else '.*'}{name}_\d+.*$" for name in col_name]
                 ).exclude(expr)
-            ]
+                if exclude_data else pl.col(expr)]
 
         def _include(include: list[int]):
             """Internal function for getting data columns when ``include`` is specified
@@ -244,7 +248,7 @@ class Data:
                 *args: Name of data column
             """
             exclude = set(self.tones) - set(include)
-            return _get_exclude(exclude)
+            return _get_data(include, exclude)
 
         def _exclude(exclude: list[int]):
             """Internal function for getting data columns when ``exclude`` is specified
@@ -253,8 +257,8 @@ class Data:
                 exclude (list[int]): List of tones to **not** get data for
                 *args: Name of data column
             """
-
-            return _get_exclude(exclude)
+            include = set(self.tones) - set(exclude)
+            return _get_data(include, exclude)
 
         def _all():
             """Internal function for getting all data columns (neither ``include`` or ``exclude`` specified)
@@ -262,7 +266,7 @@ class Data:
             Args:
                 *args: Name of data column
             """
-            return _get_exclude([])
+            return _get_data([], [])
 
         col_name = (
             [col_name] if isinstance(col_name, str) else col_name.copy()
@@ -272,17 +276,15 @@ class Data:
             exprs = []
 
             # Timestreams never have self.tones = None but **do** have columns (the time columns in particular) without tones so need to handle those seperately
-            # no_tone_cols = self.analysis_cfg['col_names']['no_tones']
-            no_tone_cols = [
-                "sample",
-                "t",
-                "dt",
-                "zt",
-                "fft_f",
-                "psd_f",
-                "optical_delay",
-                "mirror_pos",
-            ]
+            if no_tone_cols is None:
+                name_convention = self.analysis_cfg["convention"]["name"]
+
+                no_tone_cols = [
+                    name_convention["sample"],
+                    name_convention["time"],
+                    name_convention["datetime"],
+                    name_convention["zerotime"],
+                ]
             no_tone_name = rf"^({'|'.join(no_tone_cols)})(?:_\d+)?$"
             pattern = re.compile(no_tone_name)  # Create regex pattern
 
@@ -320,12 +322,17 @@ class Data:
             *Polars* **DataFrame** with |I| data
 
         """
-        col_names = ["I"]
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase"], prefix, [], self.analysis_cfg
+        )
+        ret_df =  self.get_data(
+            col_name=[name_enum.IN_PHASE.value for name_enum in name_enums],
+            include=include,
+            exclude=exclude,
+            strict=True,
+        )
 
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        col_names = [f"{pre}{'_' if pre else ''}{col_names[0]}" for pre in prefix]
-        return self.get_data(col_name=col_names, include=include, exclude=exclude)
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df
 
     def Q(
         self,
@@ -342,12 +349,17 @@ class Data:
         Returns:
             *Polars* **DataFrame** with |Q| data
         """
-        col_names = ["Q"]
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["quadrature"], prefix, [], self.analysis_cfg
+        )
+        ret_df = self.get_data(
+            col_name=[name_enum.QUADRATURE.value for name_enum in name_enums],
+            include=include,
+            exclude=exclude,
+            strict=True,
+        )
 
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        col_names = [f"{pre}{'_' if pre else ''}{col_names[0]}" for pre in prefix]
-        return self.get_data(col_name="Q", include=include, exclude=exclude)
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df
 
     def phase(
         self,
@@ -367,34 +379,33 @@ class Data:
             *Polars* **DataFrame** with phase data
 
         """
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature", "phase"], prefix, [], self.analysis_cfg
+        )
 
-        col_name = ["I", "Q", "phase"]
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
-
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
         self.transform(
-            [Data._calc_phase] * num_prefix,
+            [Data._calc_phase] * len(name_enums),
             include=include,
             exclude=exclude,
             recalc=recalc,
-            col_name=col_names,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        return self.get_data(
-            col_name=[col_name[-1] for col_name in col_names],
+        ret_df = self.get_data(
+            col_name=[name_enum.PHASE.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
+            strict=True,
         )
+
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df
 
     def mag(
         self,
         prefix: str | list[str] = "",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        dB: bool = False,
+        dB: bool | list[bool] = False,
         recalc: bool = False,
     ) -> pl.DataFrame:
         r"""Calculate the magnitude :math:`|S_{21}| = \sqrt{I^2 + Q^2}` using the in-phase |I| and quadrature |Q| data
@@ -408,29 +419,49 @@ class Data:
         Returns:
             *Polars* **DataFrame** with magnitude data
         """
-        col_name = ["I", "Q", f"{'dB_' if dB else ''}mag"]
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
+        if isinstance(prefix, str): prefix = [prefix]
 
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [f"{pre}{'_' if pre else ''}{name}" for name in col_name]
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature", "magnitude"],
+            prefix,
+            ["decible"],
+            self.analysis_cfg,
+        )
 
-        args = [[dB]] * num_prefix
+        num_prefix = len(name_enums)
+        dB = ccat_df.check_args(dB, num_prefix, bool)
+
+        args = [[d] for d in dB]
         self.transform(
             [Data._calc_mag] * num_prefix,
             *args,
             include=include,
             exclude=exclude,
             recalc=recalc,
-            col_name=col_names,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        return self.get_data(
-            col_name=[col_name[-1] for col_name in col_names],
+
+        ret_df = self.get_data(
+            col_name=[
+                f"{prefix_enum.DECIBLE.value}_{name_enum.MAGNITUDE.value}"
+                if d
+                else name_enum.MAGNITUDE.value
+                for d, name_enum, prefix_enum in zip(dB, name_enums, prefix_enums)
+            ],
             include=include,
             exclude=exclude,
+            strict=True,
         )
+
+        ret_pre = [f"{prefix_enum.DECIBLE.value}{'_' if pre else ''}{pre}" 
+                    if d 
+                    else pre 
+                    for d, pre, prefix_enum in zip(dB, prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df
+
 
     # ============================#
     # General IQ Transformations #
@@ -458,20 +489,23 @@ class Data:
             *Polars* **DataFrame** with rotated in-phase |I| and quadrature |Q| data
 
         """
+        if isinstance(prefix, str): prefix = [prefix]
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature"],
+            prefix,
+            ["rotate"],
+            self.analysis_cfg,
+        )   
 
-        col_name = ["I", "Q", f"{name}{'_' if name else ''}rotate"]
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
-
-        if not isinstance(angle, Iterable) or not len(angle) == num_prefix:
-            angle = [angle]
-
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [
-                f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]
-            ] + [col_name[-1]]
+        num_prefix = len(name_enums)
+        angle = ccat_df.check_args(angle, num_prefix, float)
+        name = ccat_df.check_args(name, num_prefix, str)
+        prefix_enums = [
+            Enum("Prefix", [(enum.ROTATE.name, f"{n}_{enum.ROTATE.value}")])
+            if n
+            else enum
+            for n, enum in zip(name, prefix_enums)
+        ]
 
         args = [[a] for a in angle]
         self.transform(
@@ -480,14 +514,27 @@ class Data:
             include=include,
             exclude=exclude,
             recalc=recalc,
-            col_name=col_names,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        return self.get_data(
-            col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names]
-            + [f"{col_name[-1]}_{col_name[1]}" for col_name in col_names],
+
+        col_name = []
+        for prefix_enum, name_enum in zip(prefix_enums, name_enums):
+            col_name += [
+                f"{prefix_enum.ROTATE.value}_{name_enum.IN_PHASE.value}",
+                f"{prefix_enum.ROTATE.value}_{name_enum.QUADRATURE.value}",
+            ]
+
+        ret_df =  self.get_data(
+            col_name=col_name,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.ROTATE.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def IQ_scale(
         self,
@@ -511,35 +558,32 @@ class Data:
             *Polars* **DataFrame** with scaled in-phase |I| and quadrature |Q| data
 
         """
+        name_dict = self.analysis_cfg['convention']['name']
+        I_ret = self.scale(name_dict['in_phase'],
+                   prefix=prefix,
+                   scale=scale,
+                   name=name,
+                   include=include,
+                   exclude=exclude,
+                   recalc=recalc)
 
-        col_name = ["I", "Q", f"{name}{'_' if name else ''}scale"]
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
+        Q_ret = self.scale(name_dict['quadrature'],
+                   prefix=prefix,
+                   scale=scale,
+                   name=name,
+                   include=include,
+                   exclude=exclude,
+                   recalc=recalc)
+        
+        ret_pre = self.analysis_cfg['runtime']['return_prefix']
+        if ret_pre: 
+            I_df, I_pre = I_ret
+            Q_df, Q_pre = Q_ret
+        else:
+            I_df, Q_df = I_ret, Q_ret
 
-        if not isinstance(scale, Iterable) or not len(scale) == num_prefix:
-            scale = [scale]
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [
-                f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]
-            ] + [col_name[-1]]
-
-        args = [[s] for s in scale]
-        self.transform(
-            [Data._calc_IQ_scale] * num_prefix,
-            *args,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            col_name=col_names,
-        )
-        return self.get_data(
-            col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names]
-            + [f"{col_name[-1]}_{col_name[1]}" for col_name in col_names],
-            include=include,
-            exclude=exclude,
-        )
+        IQ_df = pl.concat([I_df, Q_df], how='horizontal')
+        return IQ_df, I_pre if ret_pre else IQ_df
 
     def IQ_shift(
         self,
@@ -566,37 +610,32 @@ class Data:
 
         """
 
-        col_name = ["I", "Q", f"{name}{'_' if name else ''}shift"]
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
+        name_dict = self.analysis_cfg['convention']['name']
+        I_ret = self.shift(name_dict['in_phase'],
+                   prefix=prefix,
+                   shift=shift_I,
+                   name=name,
+                   include=include,
+                   exclude=exclude,
+                   recalc=recalc)
 
-        if not isinstance(shift_I, Iterable) or not len(shift_I) == num_prefix:
-            shift_I = [shift_I]
-        if not isinstance(shift_Q, Iterable) or not len(shift_Q) == num_prefix:
-            shift_Q = [shift_Q]
+        Q_ret = self.shift(name_dict['quadrature'],
+                   prefix=prefix,
+                   shift=shift_Q,
+                   name=name,
+                   include=include,
+                   exclude=exclude,
+                   recalc=recalc)
 
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [
-                f"{pre}{'_' if pre else ''}{name}" for name in col_name[:-1]
-            ] + [col_name[-1]]
+        ret_pre = self.analysis_cfg['runtime']['return_prefix']
+        if ret_pre: 
+            I_df, I_pre = I_ret
+            Q_df, Q_pre = Q_ret
+        else:
+            I_df, Q_df = I_ret, Q_ret
 
-        args = [[I, Q] for I, Q in zip(shift_I, shift_Q)]  # noqa: E741
-        self.transform(
-            [Data._calc_IQ_shift] * num_prefix,
-            *args,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            col_name=col_names,
-        )
-        return self.get_data(
-            col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names]
-            + [f"{col_name[-1]}_{col_name[1]}" for col_name in col_names],
-            include=include,
-            exclude=exclude,
-        )
+        IQ_df = pl.concat([I_df, Q_df], how='horizontal')
+        return IQ_df, I_pre if ret_pre else IQ_df
 
     def IQ_trim(
         self,
@@ -604,6 +643,7 @@ class Data:
         lower_index: int | list[int] | list[list[int]] = 0,
         upper_index: int | list[int] | list[list[int]] = -1,
         name: str = "",
+        invert = False,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
@@ -626,6 +666,178 @@ class Data:
             *Polars* **DataFrame** with trimmed in-phase |I| and quadrature |Q| data
         """
 
+        name_dict = self.analysis_cfg['convention']['name']
+        I_ret = self.trim(name_dict['in_phase'],
+                   prefix=prefix,
+                   lower_index=lower_index,
+                   upper_index=upper_index,
+                   name=name,
+                   invert=invert,
+                   include=include,
+                   exclude=exclude,
+                   recalc=recalc)
+
+        Q_ret = self.trim(name_dict['quadrature'],
+                   prefix=prefix,
+                   lower_index=lower_index,
+                   upper_index=upper_index,
+                   name=name,
+                   invert=invert,
+                   include=include,
+                   exclude=exclude,
+                   recalc=recalc)
+
+        ret_pre = self.analysis_cfg['runtime']['return_prefix']
+        if ret_pre: 
+            I_df, I_pre = I_ret
+            Q_df, Q_pre = Q_ret
+        else:
+            I_df, Q_df = I_ret, Q_ret
+
+        IQ_df = pl.concat([I_df, Q_df], how='horizontal')
+        return IQ_df, I_pre if ret_pre else IQ_df
+
+    def scale(self,
+              col_name: str,
+              prefix: str | list[str] = "",
+              scale = 1,
+              name: str = "",
+              include: int | list[int] | None = None,
+              exclude: int | list[int] | None = None,
+              recalc: bool = False, 
+            ):
+
+        if isinstance(prefix, str): prefix = [prefix]
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for k, v in mapping.items():
+            if v == col_name:
+                enum_key = k
+                break
+
+        if enum_key is None:
+            error = f"Could not find column {col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [enum_key],
+            prefix,
+            ["scale"],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+
+        num_prefix = len(name_enums)
+        scale = ccat_df.check_args(scale, num_prefix, float)
+        name = ccat_df.check_args(name, num_prefix, str)
+
+        prefix_enums = [
+            Enum("Prefix", [(enum.SCALE.name, f"{n}_{enum.SCALE.value}")])
+            if n
+            else enum
+            for n, enum in zip(name, prefix_enums)
+        ]
+
+        args = [[s] for s in scale]
+        self.transform(
+            [Data._calc_scale] * num_prefix,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
+        )
+
+        ret_df =  self.get_data(
+            col_name=[
+                f"{prefix_enum.SCALE.value}_{name_enum[enum_key.upper()].value}"
+                for name_enum, prefix_enum in zip(name_enums, prefix_enums)
+            ],
+            include=include,
+            exclude=exclude,
+        )
+
+        ret_pre = [f"{prefix_enum.SCALE.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+
+    def shift(self,
+              col_name: str,
+              prefix: str | list[str] = "",
+              shift = 0,
+              name: str = "",
+              include: int | list[int] | None = None,
+              exclude: int | list[int] | None = None,
+              recalc: bool = False, ):
+        
+        if isinstance(prefix, str): prefix = [prefix]
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for k, v in mapping.items():
+            if v == col_name:
+                enum_key = k
+                break
+
+        if enum_key is None:
+            error = f"Could not find column {col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [enum_key],
+            prefix,
+            ["translate"],
+            self.analysis_cfg,
+            no_prefix=[],
+        )
+
+        num_prefix = len(name_enums)
+        shift = ccat_df.check_args(shift, num_prefix, float)
+        name = ccat_df.check_args(name, num_prefix, str)
+
+        prefix_enums = [
+            Enum("Prefix", [(enum.TRANSLATE.name, f"{n}_{enum.TRANSLATE.value}")])
+            if n
+            else enum
+            for n, enum in zip(name, prefix_enums)
+        ]
+
+        args = [[s] for s in shift]  # noqa: E741
+        self.transform(
+            [Data._calc_shift] * num_prefix,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
+        )
+
+        ret_df =  self.get_data(
+            col_name=[
+                f"{prefix_enum.TRANSLATE.value}_{name_enum[enum_key.upper()].value}"
+                for name_enum, prefix_enum in zip(name_enums, prefix_enums)
+            ],
+            include=include,
+            exclude=exclude,
+        )
+
+        ret_pre = [f"{prefix_enum.TRANSLATE.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+
+    def trim(self,
+             col_name: str,
+             prefix: str | list[str] = "",
+             lower_index = 0,
+             upper_index = -1, 
+             name: str = "",
+             invert: bool = False,
+             include: int | list[int] | None = None,
+             exclude: int | list[int] | None = None,
+             recalc: bool = False, ):
         def _neg_indexing(bounds, df_height):
             for i, bound in enumerate(bounds):
                 try:
@@ -638,43 +850,66 @@ class Data:
                         bounds[i] = bound + df_height
             return bounds
 
-        col_name = ["sample", "I", "Q", f"{name}{'_' if name else ''}trim"]
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
+        if isinstance(prefix, str): prefix = [prefix]
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for k, v in mapping.items():
+            if v == col_name:
+                enum_key = k
+                break
 
-        if not isinstance(lower_index, Iterable) or not len(lower_index) == num_prefix:
-            lower_index = [lower_index]
-        if not isinstance(upper_index, Iterable) or not len(upper_index) == num_prefix:
-            upper_index = [upper_index]
+        if enum_key is None:
+            error = f"Could not find column {col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["sample", enum_key],
+            prefix,
+            ["trim"],
+            self.analysis_cfg,
+            no_prefix=["sample"],
+        )
+
+        num_prefix = len(name_enums)
+        lower_index = ccat_df.check_args(lower_index, num_prefix, int)
+        upper_index = ccat_df.check_args(upper_index, num_prefix, int)
+        invert = ccat_df.check_args(invert, num_prefix, bool)
+        name = ccat_df.check_args(name, num_prefix, str)
+
+        prefix_enums = [
+            Enum("Prefix", [(enum.TRIM.name, f"{n}_{enum.TRIM.value}")]) if n else enum
+            for n, enum in zip(name, prefix_enums)
+        ]
 
         # Handle negative indicing
         df_height = int(self.data.height)
         lower_index = _neg_indexing(lower_index, df_height)
         upper_index = _neg_indexing(upper_index, df_height)
 
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = (
-                [col_name[0]]
-                + [f"{pre}{'_' if pre else ''}{name}" for name in col_name[1:-1]]
-                + [col_name[-1]]
-            )
-        args = [[low, up] for low, up in zip(lower_index, upper_index)]
+        args = [[low, up, inv, enum_key] for low, up, inv in zip(lower_index, upper_index, invert)]
         self.transform(
-            [Data._calc_IQ_trim] * num_prefix,
+            [Data._calc_trim] * num_prefix,
             *args,
             include=include,
             exclude=exclude,
             recalc=recalc,
-            col_name=col_names,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        return self.get_data(
-            col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names]
-            + [f"{col_name[-1]}_{col_name[1]}" for col_name in col_names],
+
+        ret_df =  self.get_data(
+            col_name=[
+                f"{prefix_enum.TRIM.value}_{name_enum[enum_key.upper()].value}"
+                for name_enum, prefix_enum in zip(name_enums, prefix_enums)
+            ],
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.TRIM.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def diff(
         self,
@@ -696,26 +931,48 @@ class Data:
         Returns:
             *Polars* **DataFrame** with difference data
         """
-        col_name = [col_name, "diff"]
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
 
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
+        if isinstance(prefix, str): prefix = [prefix]
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for k, v in mapping.items():
+            if v == col_name:
+                enum_key = k
+                break
+
+        if enum_key is None:
+            error = f"Could not find column {col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [enum_key],
+            prefix,
+            ["difference"],
+            self.analysis_cfg,
+        )
+
         self.transform(
-            [Data._calc_diff] * num_prefix,
+            [Data._calc_diff] * len(name_enums),
             include=include,
             exclude=exclude,
             recalc=recalc,
-            col_name=col_names,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        return self.get_data(
-            col_name=[f"{col_name[-1]}_{col_name[0]}" for col_name in col_names],
+        
+        ret_df =  self.get_data(
+            col_name=[
+                f"{prefix_enum.DIFFERENCE.value}_{name_enum[enum_key.upper()].value}"
+                for name_enum, prefix_enum in zip(name_enums, prefix_enums)
+            ],
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.DIFFERENCE.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def savgol(
         self,
@@ -749,21 +1006,39 @@ class Data:
         Returns:
             *Polars* **DataFrame** with Savitzky–Golay filtered data
         """
-        col_name = [col_name, "savgol"]
-        if isinstance(prefix, str):
-            prefix = [prefix]
-        num_prefix = len(prefix)
+        if isinstance(prefix, str): prefix = [prefix]
+        
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == col_name:
+                enum_key = key
+                break
 
-        if not isinstance(window, Iterable) or not len(window) == num_prefix:
-            window = [window] * num_prefix
-        if not isinstance(k, Iterable) or not len(k) == num_prefix:
-            k = [k] * num_prefix
-        if not isinstance(deriv, Iterable) or not len(deriv) == num_prefix:
-            deriv = [deriv] * num_prefix
+        if enum_key is None:
+            error = f"Could not find column {col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
 
-        col_names = [[]] * num_prefix
-        for i, pre in enumerate(prefix):
-            col_names[i] = [f"{pre}{'_' if pre else ''}{col_name[0]}", col_name[-1]]
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [enum_key],
+            prefix,
+            ["savgol_filter"],
+            self.analysis_cfg,
+        )
+
+        num_prefix = len(name_enums)
+        window = ccat_df.check_args(window, num_prefix, int)
+        k = ccat_df.check_args(k, num_prefix, int)
+        deriv = ccat_df.check_args(deriv, num_prefix, int)
+
+        prefix_enums = [
+            Enum(
+                "Prefix",
+                [(enum.SAVGOL_FILTER.name, f"{enum.SAVGOL_FILTER.value}{der:01d}")],
+            )
+            for enum, der in zip(prefix_enums, deriv)
+        ]
+
         args = [
             [win, order, der, ccat_mp.check_max_workers(max_workers), ex]
             for win, order, der in zip(window, k, deriv)
@@ -774,23 +1049,126 @@ class Data:
             include=include,
             exclude=exclude,
             recalc=recalc,
-            col_name=col_names,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        self.data = self._unnest(
-            [
-                f"struct_{col_name[-1]}{der:01d}"
-                for col_name, der in zip(col_names, deriv)
-            ]
-        )
-        return self.get_data(
-            col_name=[
-                f"{col_name[-1]}{der}_{col_name[0]}"
-                for col_name, der in zip(col_names, deriv)
-            ],
+
+        col_name = [
+            f"{prefix_enum.SAVGOL_FILTER.value}_{name_enum[enum_key.upper()].value}"
+            for name_enum, prefix_enum in zip(name_enums, prefix_enums)
+        ]
+
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_name])
+
+        ret_df =  self.get_data(
+            col_name=col_name,
             include=include,
             exclude=exclude,
         )
 
+        ret_pre = [f"{prefix_enum.SAVGOL_FILTER.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+
+    def linear_fit(
+        self,
+        x_col_name: str,
+        y_col_name: str,
+        x_prefix: str | list[str] = "",
+        y_prefix: str | list[str] = "",
+        err_fill: float | list[float] = np.nan,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        max_workers: int = 1,
+        ex: ProcessPoolExecutor | None = None,
+    ) -> pl.DataFrame:
+        """
+        Apply Savitzky–Golay filter to specified data column
+
+        .. seealso:: The data is filtered using *SciPy's* `savgol_filter function <https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html>`_
+
+        Args:
+            col_name: Data column name without prefix or |tone| suffix (e.g., **mag**, **phase**, etc.)
+            prefix: Prefix(es) of data column
+            window: The length of the filter window. Can specify a list of windows for individual tones
+            k: Order of polynomial used to fit the data. Can specify a list of orders for individual tones
+            deriv: The order of derivative to compute. Can specify a list of orders for inidividual tones
+            include: List of tones to include
+            exclude: List of tones to exclude
+            recalc: Whether to re-calculate if Savitzky–Golay filtered data column already exists
+            max_workers: Max number of CPU cores to use for multiprocessing. Only used if no ``ex`` provided.
+            ex: *concurrent.futures* **ProcessPoolExecutor** to use for multiprocessing
+        Returns:
+            *Polars* **DataFrame** with Savitzky–Golay filtered data
+        """
+        if isinstance(x_prefix, str): x_prefix = [x_prefix]
+        if isinstance(y_prefix, str): y_prefix = [y_prefix]
+
+        x_enum_key, y_enum_key, mapping = None, None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == x_col_name:
+                x_enum_key = key
+            if val == y_col_name:
+                y_enum_key = key
+            if not (x_enum_key is None or y_enum_key is None): break
+
+        if x_enum_key is None or y_enum_key is None:
+            error = f"Could not find column {x_col_name} and/or {y_col_name}. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        x_name_enums, prefix_enums = ccat_df.create_enums(
+            [x_enum_key, 'linear_fit_slope', 'linear_fit_intercept'],
+            x_prefix,
+            ["linear_fit"],
+            self.analysis_cfg,
+            no_prefix=['linear_fit_slope', 'linear_fit_intercept']
+        )
+
+        y_name_enums, _ = ccat_df.create_enums(
+            [y_enum_key],
+            y_prefix,
+            ["linear_fit"],
+            self.analysis_cfg,
+        )
+
+        if not (num_prefix := len(x_name_enums)) == len(y_name_enums):
+            error = f"Number of prefixes must match for the x and y columns."
+            log.log("ERROR", error)
+            raise KeyError(error)
+        err_fill = ccat_df.check_args(err_fill, num_prefix, float)
+
+        args = [[x_enum_key, self, e_fill, ccat_mp.check_max_workers(max_workers), ex] for e_fill in err_fill]
+        self.transform(
+            [Data._calc_linear_fit] * num_prefix,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=list(zip(x_name_enums, y_name_enums)),
+            prefix_enum=prefix_enums,
+        )
+
+        col_name = [
+            f"{prefix_enum.LINEAR_FIT.value}_{x_name_enum[x_enum_key.upper()].value}_{y_name_enum[y_enum_key.upper()].value}"
+            for x_name_enum, y_name_enum, prefix_enum in zip(x_name_enums, y_name_enums, prefix_enums)
+        ]
+
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_name])
+
+        ret_df =  self.get_data(
+            col_name=col_name,
+            include=include,
+            exclude=exclude,
+        )
+
+        ret_pre = [f"{prefix_enum.LINEAR_FIT.value}_{x_name_enum[x_enum_key.upper()].value}{'_' if pre else ''}{pre}" for pre, x_name_enum, prefix_enum in zip(y_prefix, x_name_enums, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+    
     # ==================#
     # Analysis Methods #
     # ==================#
@@ -801,7 +1179,8 @@ class Data:
         *funcs_args,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        col_name: str | list[str] | list[list[str]] = [],
+        col_enum: Enum | list[Enum] = [],
+        prefix_enum: Enum | list[Enum] = [],
         recalc: bool = False,
     ) -> pl.DataFrame:
         """
@@ -832,17 +1211,25 @@ class Data:
             num_tones = len(tones)
 
             expr = []
-            for func, f_arg, name in zip(funcs, funcs_args, col_name):
+            for func, f_arg, enum, pre_enum in zip(
+                funcs, funcs_args, col_enum, prefix_enum
+            ):
                 for i, arg in enumerate(f_arg):
-                    if not isinstance(arg, Iterable) or isinstance(arg, str):
+                    if isinstance(arg, Data) or isinstance(arg, ProcessPoolExecutor):
+                        f_arg[i] = [arg] + [None] * (num_tones - 1)
+                    elif not isinstance(arg, Iterable) or isinstance(arg, str):
                         f_arg[i] = [arg] * num_tones
                     elif not len(f_arg[i]) == num_tones:
-                        f_arg = [[None] * num_tones for _ in range(len(f_arg))]
-                        log.log(
-                            "ERROR",
-                            "Number of arguments and tones specified do not match",
-                        )
-                        break
+                        # Handle common edge case when processing a single tone
+                        if num_tones == 1:
+                            f_arg[i] = [f_arg[i]]
+                        else:
+                            f_arg = [[None] * num_tones for _ in range(len(f_arg))]
+                            log.log(
+                                "ERROR",
+                                "Number of arguments and tones specified do not match",
+                            )
+                            break
 
                 exp = func(
                     schema,
@@ -850,7 +1237,8 @@ class Data:
                     tones=tones,
                     padding=self.padding,
                     recalc=recalc,
-                    col_name=name,
+                    col_enum=enum,
+                    prefix_enum=pre_enum,
                 )
                 # Handle funcs that return a list of expressions and funcs that return single expressions
                 if isinstance(exp, Iterable):
@@ -920,12 +1308,20 @@ class Data:
             )
         # Parse col_name arg
         # ------------------
-        if isinstance(col_name, str):
-            col_name = [col_name]
-        col_name = _check_len(
-            col_name,
+        if isinstance(col_enum, Enum):
+            col_enum = [col_enum]
+        col_enum = _check_len(
+            col_enum,
             num_funcs,
-            error="All column names used must be specified for each transformation.",
+            error="A ``Enum`` of column names must be specified for each transformation.",
+        )
+
+        if isinstance(prefix_enum, Enum):
+            prefix_enum = [prefix_enum]
+        prefix_enum = _check_len(
+            prefix_enum,
+            num_funcs,
+            error="A ``Enum`` of prefix names must be specified for each transformation.",
         )
 
         data = self.data.lazy()
@@ -951,9 +1347,12 @@ class Data:
                         *f_arg,
                         tones=None,
                         recalc=recalc,
-                        col_name=name,
+                        col_enum=enum,
+                        prefix_enum=pre_enum,
                     )
-                    for func, f_arg, name in zip(funcs, funcs_args, col_name)
+                    for func, f_arg, enum, pre_enum in zip(
+                        funcs, funcs_args, col_enum, prefix_enum
+                    )
                 ]
             ).collect()
         return self.data
@@ -965,27 +1364,36 @@ class Data:
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name: list[str] = ["I", "Q", "phase"],
+        col_enum: Enum | None = None,
+        prefix_enum: Enum | None = None,
     ) -> list[pl.Expr]:
         """Generates pl.Expr for calculating the phase of a tone using I & Q data
 
         Args:
             schema (pl.Schema)
         """
-        col_names = (
-            [[f"{name}_{tone:0{padding}d}" for name in col_name] for tone in tones]
-            if tones is not None
-            else [col_name]
+        if tones is None:
+            tones = [tones]
+
+        I_col, Q_col, phase_col = (
+            col_enum.IN_PHASE.value,
+            col_enum.QUADRATURE.value,
+            col_enum.PHASE.value,
         )
-
-        exprs = [None] * len(col_names)
-        for i, col_name in enumerate(col_names):
-            I_col, Q_col, phase_col = col_name
-
-            if recalc or phase_col not in schema:
-                exprs[i] = pl.arctan2(pl.col(Q_col), pl.col(I_col)).alias(phase_col)
-            else:
-                exprs[i] = pl.col(phase_col)
+        exprs = []
+        for tone in tones:
+            if (
+                phase_tone_col := ccat_df.add_tone(phase_col, tone, padding)
+            ) not in schema or recalc:
+                I_tone_col, Q_tone_col = (
+                    ccat_df.add_tone(I_col, tone, padding),
+                    ccat_df.add_tone(Q_col, tone, padding),
+                )
+                exprs.append(
+                    pl.arctan2(pl.col(Q_tone_col), pl.col(I_tone_col)).alias(
+                        phase_tone_col
+                    )
+                )
         return exprs
 
     @staticmethod
@@ -995,30 +1403,39 @@ class Data:
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name=["I", "Q", "mag"],
+        col_enum=None,
+        prefix_enum=None,
     ) -> list[pl.Expr]:
         """Generates pl.Expr for calculating the magnitude of a tone using I & Q data"""
 
         if not len(args) == 1:
             log.log("ERROR", "'dB' is a required argument")
-        dBs = args[0]
+        dB = args[0][0]
 
-        col_names = (
-            [[f"{name}_{tone:0{padding}d}" for name in col_name] for tone in tones]
-            if tones is not None
-            else [col_name]
+        if tones is None:
+            tones = [tones]
+
+        I_col, Q_col, mag_col = (
+            col_enum.IN_PHASE.value,
+            col_enum.QUADRATURE.value,
+            col_enum.MAGNITUDE.value,
         )
 
-        exprs = [None] * len(col_names)
-        for i, (col_name, dB) in enumerate(zip(col_names, dBs)):
-            I_col, Q_col, mag_col = col_name
-            if recalc or mag_col not in schema:
-                mag_expr = (pl.col(I_col) ** 2 + pl.col(Q_col) ** 2).sqrt()
+        if dB:
+            mag_col = f"{prefix_enum.DECIBLE.value}_{mag_col}"
+        exprs = []
+        for tone in tones:
+            if (
+                mag_tone_col := ccat_df.add_tone(mag_col, tone, padding)
+            ) not in schema or recalc:
+                I_tone_col, Q_tone_col = (
+                    ccat_df.add_tone(I_col, tone, padding),
+                    ccat_df.add_tone(Q_col, tone, padding),
+                )
+                mag_expr = (pl.col(I_tone_col) ** 2 + pl.col(Q_tone_col) ** 2).sqrt()
                 if dB:
                     mag_expr = pl.lit(20) * mag_expr.log10()
-                exprs[i] = mag_expr.alias(mag_col)
-            else:
-                exprs[i] = pl.col(mag_col)
+                exprs.append(mag_expr.alias(mag_tone_col))
         return exprs
 
     @staticmethod
@@ -1028,160 +1445,165 @@ class Data:
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name=["I", "Q", "rotate"],
+        col_enum=None,
+        prefix_enum=None,
     ) -> list[pl.Expr]:
         """ """
         if not len(args) == 1:
             log.log("ERROR", "'angle' is a required argument")
         angles = args[0]
 
-        col_names = (
-            [
-                [f"{name}_{tone:0{padding}d}" for name in col_name[:-1]]
-                + [col_name[-1]]
-                for tone in tones
-            ]
-            if tones is not None
-            else [col_name]
+        if tones is None:
+            tones = [tones]
+
+        I_col, Q_col, rotate_prefix = (
+            col_enum.IN_PHASE.value,
+            col_enum.QUADRATURE.value,
+            prefix_enum.ROTATE.value,
         )
 
         exprs = []
-        for i, (col_name, angle) in enumerate(zip(col_names, angles)):
-            I_col, Q_col, rotate_col = col_name
-
-            if recalc or f"{rotate_col}_{I_col}" not in schema:
+        for angle, tone in zip(angles, tones):
+            if (
+                f"{rotate_prefix}_{(I_tone_col := ccat_df.add_tone(I_col, tone, padding))}"
+                not in schema
+                or recalc
+            ):
+                Q_tone_col = ccat_df.add_tone(Q_col, tone, padding)
                 exprs += [
                     (
-                        pl.col(I_col) * pl.lit(angle).cos()
-                        - pl.col(Q_col) * pl.lit(angle).sin()
-                    ).alias(f"{rotate_col}_{I_col}"),
+                        pl.col(I_tone_col) * pl.lit(angle).cos()
+                        - pl.col(Q_tone_col) * pl.lit(angle).sin()
+                    ).alias(f"{rotate_prefix}_{I_tone_col}"),
                     (
-                        pl.col(I_col) * pl.lit(angle).sin()
-                        + pl.col(Q_col) * pl.lit(angle).cos()
-                    ).alias(f"{rotate_col}_{Q_col}"),
+                        pl.col(I_tone_col) * pl.lit(angle).sin()
+                        + pl.col(Q_tone_col) * pl.lit(angle).cos()
+                    ).alias(f"{rotate_prefix}_{Q_tone_col}"),
                 ]
-            else:
-                exprs.append(pl.col(f"{rotate_col}_{I_col}"))
         return exprs
 
     @staticmethod
-    def _calc_IQ_shift(
+    def _calc_scale(
         schema: pl.Schema,
         *args,
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name=["I", "Q", "shift"],
-    ) -> list[pl.Expr]:
-        """ """
-        if not len(args) == 2:
-            log.log("ERROR", "'I_shift' and 'Q_shift' are required arguments")
-        I_shifts, Q_shifts = args
-
-        col_names = (
-            [
-                [f"{name}_{tone:0{padding}d}" for name in col_name[:-1]]
-                + [col_name[-1]]
-                for tone in tones
-            ]
-            if tones is not None
-            else [col_name]
-        )
-
-        exprs = []
-        for i, (col_name, I_shift, Q_shift) in enumerate(
-            zip(col_names, I_shifts, Q_shifts)
-        ):
-            I_col, Q_col, shift_col = col_name
-            if recalc or f"{shift_col}_{I_col}" not in schema:
-                exprs += [
-                    (pl.col(I_col) + I_shift).name.prefix(shift_col + "_"),
-                    (pl.col(Q_col) + Q_shift).name.prefix(shift_col + "_"),
-                ]
-            else:
-                exprs.append(pl.col(f"{shift_col}_{I_col}"))
-        return exprs
-
-    @staticmethod
-    def _calc_IQ_scale(
-        schema: pl.Schema,
-        *args,
-        tones: list[int] | None = None,
-        padding: int = 4,
-        recalc: bool = False,
-        col_name=["I", "Q", "scale"],
+        col_enum=None,
+        prefix_enum=None,
     ) -> list[pl.Expr]:
         """ """
         if not len(args) == 1:
             log.log("ERROR", "'scale' is a required argument")
         scales = args[0]
 
-        col_names = (
-            [
-                [f"{name}_{tone:0{padding}d}" for name in col_name[:-1]]
-                + [col_name[-1]]
-                for tone in tones
-            ]
-            if tones is not None
-            else [col_name]
+        if tones is None:
+            tones = [tones]
+
+        data_col, scale_prefix = (
+            [name for name in col_enum][0].value,
+            prefix_enum.SCALE.value,
         )
 
-        exprs = [None] * len(col_names)
-        for i, (col_name, scale) in enumerate(zip(col_names, scales)):
-            I_col, Q_col, scale_col = col_name
-
-            if recalc or f"{scale_col}_{I_col}" not in schema:
-                exprs[i] = (pl.col([I_col, Q_col]) * scale).name.prefix(f"{scale_col}_")
-            else:
-                exprs[i] = pl.col(f"{scale_col}_{I_col}")
+        exprs = []
+        for scale, tone in zip(scales, tones):
+            if (
+                f"{scale_prefix}_{(data_tone_col := ccat_df.add_tone(data_col, tone, padding))}"
+                not in schema
+                or recalc
+            ):
+                exprs.append((pl.col(data_tone_col) * scale).name.prefix(
+                    f"{scale_prefix}_"
+                ))
         return exprs
 
     @staticmethod
-    def _calc_IQ_trim(
+    def _calc_shift(
         schema: pl.Schema,
         *args,
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name=["sample", "I", "Q", "trim"],
+        col_enum=None,
+        prefix_enum=None,
     ) -> list[pl.Expr]:
         """ """
+        if not len(args) == 1:
+            log.log("ERROR", "'shift' is a  required argument")
+        shifts = args[0]
 
-        if not len(args) == 2:
-            log.log("ERROR", "'lower_index' and 'upper_index' are required arguments")
-        lower_indicies, upper_indicies = args
+        if tones is None:
+            tones = [tones]
 
-        col_names = (
-            [
-                [col_name[0]]
-                + [f"{name}_{tone:0{padding}d}" for name in col_name[1:-1]]
-                + [col_name[-1]]
-                for tone in tones
-            ]
-            if tones is not None
-            else [col_name]
+        data_col, shift_prefix = (
+            [name for name in col_enum][0].value,
+            prefix_enum.TRANSLATE.value,
         )
 
         exprs = []
-        for i, (col_name, lower_index, upper_index) in enumerate(
-            zip(col_names, lower_indicies, upper_indicies)
-        ):
-            sample_col, I_col, Q_col, trim_col = col_name
+        for shift, tone in zip(shifts, tones):
+            if (
+                f"{shift_prefix}_{(data_tone_col := ccat_df.add_tone(data_col, tone, padding))}"
+                not in schema
+                or recalc
+            ):
+                exprs.append((pl.col(data_tone_col) + shift).name.prefix(f"{shift_prefix}_"))
+        return exprs
 
-            if recalc or f"{trim_col}_{I_col}" not in schema:
-                exprs += [
+    @staticmethod
+    def _calc_trim(
+        schema: pl.Schema,
+        *args,
+        tones: list[int] | None = None,
+        padding: int = 4,
+        recalc: bool = False,
+        col_enum=None,
+        prefix_enum=None,
+    ) -> list[pl.Expr]:
+        """ """
+        if not len(args) == 4:
+            log.log("ERROR", "'lower_index', 'upper_index', 'invert', and 'enum_key' are required arguments")
+        lower_indicies, upper_indicies, invert, enum_key = args
+        invert, enum_key = invert[0], enum_key[0]
+
+        if tones is None:
+            tones = [tones]
+
+        sample_col, data_col, trim_prefix = (
+            col_enum.SAMPLE.value,
+            col_enum[enum_key.upper()].value,
+            prefix_enum.TRIM.value,
+        )
+
+        if invert:
+            then_expr = pl.lit(None)
+        else:
+            oth_expr = pl.lit(None)
+
+        exprs = []
+        for lower_index, upper_index, tone in zip(
+            lower_indicies, upper_indicies, tones
+        ):
+            if (
+                f"{trim_prefix}_{(data_tone_col := ccat_df.add_tone(data_col, tone, padding))}"
+                not in schema
+                or recalc
+            ):
+                if invert:
+                    oth_expr = pl.col(data_tone_col)
+                else:
+                    then_expr = pl.col(data_tone_col)
+
+                exprs.append(
                     pl.when(
                         pl.col(sample_col).is_between(
                             pl.lit(lower_index), pl.lit(upper_index), closed="none"
                         )
                     )
-                    .then(pl.col(col))
-                    .otherwise(pl.lit(None))
-                    .alias(f"{trim_col}_{col}")
-                    for col in [I_col, Q_col]
-                ]
-            else:
-                exprs.append(pl.col(f"{trim_col}_{I_col}"))
+                    .then(then_expr)
+                    .otherwise(oth_expr)
+                    .alias("_".join([trim_prefix, data_tone_col]))
+                )
         return exprs
 
     @staticmethod
@@ -1191,29 +1613,33 @@ class Data:
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name=["", "diff"],
+        col_enum=None,
+        prefix_enum=None,
     ) -> list[pl.Expr]:
         """Generates pl.Expr for calculating difference between adjacent data points for the specified column
         Args:
             schema (pl.Schema)
         """
-        col_names = (
-            [
-                [f"{name}_{tone:0{padding}d}" for name in col_name[:-1]]
-                + [col_name[-1]]
-                for tone in tones
-            ]
-            if tones is not None
-            else [col_name]
+        if tones is None:
+            tones = [tones]
+
+        data_col, diff_prefix = (
+            [name for name in col_enum][
+                0
+            ].value,  # Enum should only ever have one member so can extract without name. Could pass name as arg but would create more overhead
+            prefix_enum.DIFFERENCE.value,
         )
 
-        exprs = [None] * len(col_names)
-        for i, col_name in enumerate(col_names):
-            data_col, diff_col = col_name
-            if recalc or f"{diff_col}_{data_col}" not in schema:
-                exprs[i] = pl.col(data_col).diff().name.prefix(f"{diff_col}_")
-            else:
-                exprs[i] = pl.col(f"{diff_col}_{data_col}")
+        exprs = []
+        for tone in tones:
+            if (
+                f"{diff_prefix}_{(data_tone_col := ccat_df.add_tone(data_col, tone, padding))}"
+                not in schema
+                or recalc
+            ):
+                exprs.append(
+                    pl.col(data_tone_col).diff().name.prefix(f"{diff_prefix}_")
+                )
         return exprs
 
     @staticmethod
@@ -1223,7 +1649,8 @@ class Data:
         tones: list[int] | None = None,
         padding: int = 4,
         recalc: bool = False,
-        col_name=["", "savgol"],
+        col_enum=None,
+        prefix_enum=None,
     ) -> pl.Expr:
         def _mp_savgol(df):
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
@@ -1237,16 +1664,14 @@ class Data:
                         window[inds],
                         k[inds],
                         deriv=deriv[inds],
-                    ): (tones, cols)
-                    for i, (tones, inds, (cols)) in enumerate(
-                        zip(to_calc, calc_ind, batches)
-                    )
+                    ): all_tones[inds]
+                    for i, inds in enumerate(calc_ind)
                 }
 
                 for future in concurrent.futures.as_completed(future_to_batch):
-                    tones, cols = future_to_batch[future]
+                    tones = future_to_batch[future]
                     filtered_cols = future.result()
-                    for tone, col, filtered_col in zip(tones, cols, filtered_cols):
+                    for tone, filtered_col in zip(tones, filtered_cols):
                         if isinstance(filtered_col, Exception):
                             log.log(
                                 "WARNING",
@@ -1255,33 +1680,130 @@ class Data:
                                 filtered_col,
                             )
                             filtered_col = np.full(df.len(), np.nan)
-                        results_dict[f"{col_name[-1]}_{col[0]}"] = filtered_col
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            filtered_col
+                        )
             return ccat_mp.package_results(results_dict)
 
-        col_name = col_name.copy()
-        if len(args) == 5:
-            window, k, deriv, max_workers, ex = np.array(args)
-            max_workers, ex = int(max_workers[0]), ex[0]
-            col_name[-1] = f"{col_name[-1]}{deriv[0]}"
-        else:
+        if not len(args) == 5:
             log.log(
-                "ERROR", "window, k, deriv, and max_workers are required arguments."
+                "ERROR", "window, k, deriv, max_workers, and ex are required arguments."
             )
 
-        return_col, return_type = [f"{col_name[-1]}_{col_name[-2]}"], [pl.Float64]
-        expr, to_calc, calc_ind, _, batches, batch_len = ccat_mp.create_batches(
+        window, k, deriv, max_workers, ex = np.array(args)
+        max_workers, ex = int(max_workers[0]), ex[0]
+        all_tones = np.array(tones)
+
+        data_col, savgol_prefix = (
+            [name for name in col_enum][
+                0
+            ].value,  # Enum should only ever have one member so can extract without name. Could pass name as arg but would create more overhead
+            prefix_enum.SAVGOL_FILTER.value,
+        )
+
+        return_col, return_type = [f"{savgol_prefix}_{data_col}"], [pl.Float64]
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
             _mp_savgol,
             tones,
-            col_name,
             schema,
-            padding=padding,
+            input_col=[data_col],
             return_col=return_col,
             return_type=return_type,
+            padding=padding,
             max_workers=max_workers,
             recalc=recalc,
         )
         return expr
 
+    @staticmethod
+    def _calc_linear_fit(
+        schema: pl.Schema,
+        *args,
+        tones: list[int] | None = None,
+        padding: int = 4,
+        recalc: bool = False,
+        col_enum=None,
+        prefix_enum=None,
+    ) -> pl.Expr:
+        def _mp_linear_fit(df):
+            data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {
+                    executor.submit(
+                        ccat_mp.process_batches,
+                        linregress,
+                        data[i][0],
+                        data[i][1],
+                        nan_policy=len(inds)*['omit'],
+                    ): (i, inds, all_tones[inds])
+                    for i, inds in enumerate(calc_ind)
+                }
+
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    index, inds, tones = future_to_batch[future]
+                    fit_cols = future.result()
+                    for tone, fit_col, e_fill, dat in zip(tones, fit_cols, err_fill[inds], data[index][0]):
+                        if isinstance(fit_col, Exception):
+                            log.log(
+                                "WARNING",
+                                "Linear fit for tone %s failed with exception: %s",
+                                tone,
+                                fit_col,
+                            )
+                            m, b = np.nan, np.nan
+                        else:
+                            result = fit_col
+                            m, b = result.slope, result.intercept
+                        properties_dict = {f"{linear_fit_prefix}_{x_data_col}_{y_data_col}_{linear_fit_slope}": m, 
+                                           f"{linear_fit_prefix}_{x_data_col}_{y_data_col}_{linear_fit_intercept}": b}
+
+                        obj._properties[ccat_df.add_tone("det", tone, padding)] = (
+                            properties_dict
+                        )
+
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            m * dat + b
+                        ) if not np.isnan(m) else np.full(df.len(), float(e_fill))
+            return ccat_mp.package_results(results_dict)
+
+        if not len(args) == 5:
+            log.log(
+                "ERROR", "max_workers, and ex are required arguments."
+            )
+
+        x_key, obj, err_fill, max_workers, ex = np.array(args)
+        x_key, obj, max_workers, ex = (
+            x_key[0],
+            obj[0],
+            int(max_workers[0]),
+            ex[0],
+        )        
+        all_tones = np.array(tones)
+
+        x_name_enum, y_name_enum = col_enum
+
+        x_data_col, y_data_col, linear_fit_prefix = (
+            x_name_enum[x_key.upper()].value,
+            [name for name in y_name_enum][0].value,
+            prefix_enum.LINEAR_FIT.value,
+        )
+
+        linear_fit_slope, linear_fit_intercept = x_name_enum.LINEAR_FIT_SLOPE.value, x_name_enum.LINEAR_FIT_INTERCEPT.value
+
+        return_col, return_type = [f"{linear_fit_prefix}_{x_data_col}_{y_data_col}"], [pl.Float64]
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
+            _mp_linear_fit,
+            tones,
+            schema,
+            input_col=[x_data_col, y_data_col],
+            return_col=return_col,
+            return_type=return_type,
+            padding=padding,
+            max_workers=max_workers,
+            recalc=recalc,
+        )
+        return expr
     # ==========================#
     # Lazily Loaded Attributes #
     # ==========================#
@@ -1319,16 +1841,16 @@ class Data:
         """
         Detector type of the |RFSoC| drone
         """
-        return self.drone_cfg.get("det_config", {"detector_type": "open"})[
+        return self.drone_cfg.get("det_config", {"detector_type": "None"})[
             "detector_type"
         ]
 
     @cached_property
-    def network(self) -> str:
+    def array_network(self) -> str:
         """
         Detector type of the |RFSoC| drone
         """
-        return self.drone_cfg.get("det_config", {"network": "open"})["network"]
+        return self.drone_cfg.get("det_config", {"network": "None"})["network"]
 
     @cached_property
     def num_tones(self) -> int:
@@ -1372,6 +1894,7 @@ class Data:
         """
         *Polars* **DataFrame** with |tone| frequencies, powers, and phases of comb that was used to take data
         """
+        name = self.analysis_cfg["convention"]["name"]
         comb = {"tone_freqs": [], "tone_powers": [], "tone_phis": []}
         for key in comb.keys():
             value = self.drone_cfg.get("tones", {f"{key}": []})[key]
@@ -1390,9 +1913,17 @@ class Data:
                 value = np.zeros(self.num_tones)
             comb[key] = value if self.tones is None else value[self.tones]
         comb["det"] = (
-            range(len(comb["tone_freqs"])) if self.tones is None else self.tones
+            range(len(comb[name["tone_frequency"]]))
+            if self.tones is None
+            else self.tones
         )
-        comb = pl.DataFrame(comb)
+        comb = pl.DataFrame(comb).rename(
+            {
+                "tone_freqs": name["tone_frequency"],
+                "tone_powers": name["tone_power"],
+                "tone_phis": name["tone_phase"],
+            }
+        )
         return comb
 
     @cached_property
@@ -1479,6 +2010,68 @@ class Data:
     # Helper Methods #
     # ================#
 
+    def agg(self, 
+            operation: str, 
+            col_name: str, 
+            prefix: str = "", 
+            include: int | list[int] | None = None, 
+            exclude: int | list[int] | None = None, 
+            recalc: bool =False):
+        AGGS = {
+            "mean": pl.all().mean(),
+            "median": pl.all().median(),
+            "max": pl.all().max(),
+            "min": pl.all().min(),
+            "std": pl.all().std(),
+        }
+        agg = AGGS.get(operation, None)
+        if agg is None:
+            error = f"Invalid operation specified, must be one of {', '.join(AGGS.keys())}"
+            log.log("ERROR", error)
+            raise ValueError(error)
+
+        enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
+        for key, val in mapping.items():
+            if val == col_name:
+                enum_key = key
+                break
+
+        if enum_key is None:
+            error = f"Could not find column '{col_name}'. Ensure that a mapping exists in the analysis configuration file."
+            log.log("ERROR", error)
+            raise KeyError(error)
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [enum_key],
+            prefix,
+            [],
+            self.analysis_cfg,
+        )
+
+        name_enum, prefix_enum = name_enums[0], prefix_enums[0]
+        agg_name = f"{operation}_{self.data_type}_{name_enum[enum_key.upper()].value}"
+
+        include_subset = ccat_df.check_properties(
+            self,
+            agg_name,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
+        if not len(include_subset) == 0:
+            df = self.get_data(
+                name_enum[enum_key.upper()].value, include=include_subset, strict=True
+            )
+            agg_df = df.select([agg.name.map(lambda s: s.split("_")[-1])])
+            ccat_df.add_data_to_properties(self, agg_df, agg_name)
+
+        return self.get_properties(
+            agg_name,
+            include=include,
+            exclude=exclude,
+            strict=True,
+        )
+
     def unpivot(
         self, df: pl.DataFrame, data_name: str, index_cols: list[str] = ["sample"]
     ) -> pl.DataFrame:
@@ -1532,21 +2125,6 @@ class Data:
             segments -= 1
         segments -= len(data_name.split("_"))
         return "_".join(col_name.split("_")[:segments])
-
-    def _unnest(self, col_names: str | list[str]) -> pl.DataFrame:
-        """ """
-        struct_cols = []
-        if isinstance(col_names, str):
-            col_names = [col_names]
-        for col_name in col_names:
-            schema = self.data.schema
-            for name, data in schema.items():
-                if isinstance(data, pl.Struct) and col_name in name:
-                    self.data = self.data.drop(
-                        [col for col in dict(data).keys() if col in schema]
-                    )
-                    struct_cols.append(name)
-        return self.data.unnest(struct_cols)
 
     def _load_cfg(self, id: str) -> dict:
         """Internal method for loading io, ext, or drone cfg file corresponding to data file.

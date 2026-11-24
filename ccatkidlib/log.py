@@ -90,12 +90,20 @@ def setup_logging(
     # -------------------
 
     # Setup logging to file
-    if not any(isinstance(handler, RotatingFileHandler) for handler in logger.handlers):
+    file_handlers = 0
+    for handler in logger.handlers:
+        if isinstance(handler, RotatingFileHandler):
+            if not handler.baseFilename == str(log_path):
+                logger.removeHandler(handler)
+            else:
+                file_handlers += 1
+
+    file_level = logging.getLevelName(file_level)
+    if file_handlers == 0:
         file_log = RotatingFileHandler(
             log_path, mode="a", maxBytes=max_file_size * 1024**2, backupCount=1
         )
 
-        file_level = logging.getLevelName(file_level)
         file_log.setLevel(file_level)
 
         file_format = logging.Formatter(
@@ -107,13 +115,12 @@ def setup_logging(
         logger.addHandler(file_log)
 
     # Setup logging to terminal
+    terminal_level = logging.getLevelName(terminal_level)
     if not any(
         isinstance(handler, tqdm_logging._TqdmLoggingHandler)
         for handler in logger.handlers
     ):
         terminal_log = tqdm_logging._TqdmLoggingHandler()
-
-        terminal_level = logging.getLevelName(terminal_level)
         terminal_log.setLevel(terminal_level)
 
         terminal_format = logging.Formatter(

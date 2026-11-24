@@ -1,13 +1,12 @@
 import numpy as np
 import polars as pl
 
-from pathlib import Path
 from functools import cached_property
-from numba import guvectorize, njit, prange, float64, int64
+from numba import guvectorize, njit, float64, int64
 
 # Local Imports
 import ccatkidlib.log as log
-import ccatkidlib.analysis.utils.pair as pair
+import ccatkidlib.analysis.utils.dataframe as ccat_df
 
 from ccatkidlib.analysis.core.sweep import Sweep
 from ccatkidlib.analysis.fit.fit import linear_fit
@@ -48,28 +47,32 @@ class VNA(Sweep):
             polars.lazyframe.frame.LazyFrame: Polars DataFrame with specified data columns
 
         """
-
-        phase_name = self.phase().columns[
-            0
-        ]  # Ensure that phase data exists, calculate if not
-
         # Get sweep steps from drone config
         try:
             sweep_steps = self.drone_cfg["tones"]["sweep_steps"]
         except KeyError:
             sweep_steps = self.drone_cfg["tones"]["N_step"]
 
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["frequency", "phase"],
+            "",
+            ["stitch"],
+            self.analysis_cfg,
+        )
+
         args = [[sweep_steps, threshold, stitch_percent]]
-        col_name = ["f", phase_name, "stitch_phase"]
         self.transform(
             VNA._calc_stitch_phase,
             *args,
             include=None,
             exclude=None,
             recalc=recalc,
-            col_name=col_name,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        return self.get_data(col_name=col_name[-1])
+        return self.get_data(
+            col_name=f"{prefix_enums[0].STITCH.value}_{name_enums[0].PHASE.value}"
+        )
 
     def stitch_mag(
         self, stitch_percent: float = 10.0, med_win: int = 3, recalc: bool = False
@@ -87,27 +90,32 @@ class VNA(Sweep):
 
         """
 
-        mag_name = self.mag().columns[
-            0
-        ]  # Ensure that mag data exists, calculate if not
-
         # Get sweep steps from drone config
         try:
             sweep_steps = self.drone_cfg["tones"]["sweep_steps"]
         except KeyError:
             sweep_steps = self.drone_cfg["tones"]["N_step"]
 
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["frequency", "magnitude"],
+            "",
+            ["stitch"],
+            self.analysis_cfg,
+        )
+
         args = [[sweep_steps, stitch_percent, med_win]]
-        col_name = ["f", mag_name, "stitch_mag"]
         self.transform(
             VNA._calc_stitch_mag,
             *args,
             include=None,
             exclude=None,
             recalc=recalc,
-            col_name=col_name,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
         )
-        return self.get_data(col_name=col_name[-1])
+        return self.get_data(
+            col_name=f"{prefix_enums[0].STITCH.value}_{name_enums[0].MAGNITUDE.value}"
+        )
 
     # ==================#
     # Analysis Methods #
@@ -115,11 +123,7 @@ class VNA(Sweep):
 
     @staticmethod
     def _calc_stitch_phase(
-        schema,
-        *args,
-        tones=None,
-        recalc: bool = False,
-        col_name=["f", "phase", "stitch_phase"],
+        schema, *args, tones=None, recalc: bool = False, col_enum=None, prefix_enum=None
     ):
         if len(args) == 3:
             sweep_steps, threshold, stitch_percent = args
@@ -128,11 +132,13 @@ class VNA(Sweep):
                 "ERROR",
                 "sweep_steps, threshold, and stitch_percent are required arguments.",
             )
-            raise ValueError
 
-        f_col, phase_col, stitch_col = col_name
-
-        if recalc or not (stitch_col in schema):
+        f_col, phase_col, stitch_prefix = (
+            col_enum.FREQUENCY.value,
+            col_enum.PHASE.value,
+            prefix_enum.STITCH.value,
+        )
+        if recalc or f"{stitch_prefix}_{phase_col}" not in schema:
             return (
                 pl.struct([f_col, phase_col])
                 .map_batches(
@@ -145,18 +151,14 @@ class VNA(Sweep):
                     ),
                     return_dtype=pl.Float64,
                 )
-                .alias(stitch_col)
+                .alias(f"{stitch_prefix}_{phase_col}")
             )
         else:
-            return pl.col(stitch_col)
+            return pl.col(f"{stitch_prefix}_{phase_col}")
 
     @staticmethod
     def _calc_stitch_mag(
-        schema,
-        *args,
-        tones=None,
-        recalc: bool = False,
-        col_name=["f", "mag", "stitch_mag"],
+        schema, *args, tones=None, recalc: bool = False, col_enum=None, prefix_enum=None
     ):
         if len(args) == 3:
             sweep_steps, stitch_percent, med_win = args
@@ -165,11 +167,14 @@ class VNA(Sweep):
                 "ERROR",
                 "sweep_steps, stitch_percent, and med_win are required arguments.",
             )
-            raise ValueError
 
-        f_col, mag_col, stitch_col = col_name
+        f_col, mag_col, stitch_prefix = (
+            col_enum.FREQUENCY.value,
+            col_enum.MAGNITUDE.value,
+            prefix_enum.STITCH.value,
+        )
 
-        if recalc or not (stitch_col in schema):
+        if recalc or f"{stitch_prefix}_{mag_col}" not in schema:
             return (
                 pl.struct([f_col, mag_col])
                 .map_batches(
@@ -182,10 +187,10 @@ class VNA(Sweep):
                     ),
                     return_dtype=pl.Float64,
                 )
-                .alias(stitch_col)
+                .alias(f"{stitch_prefix}_{mag_col}")
             )
         else:
-            return pl.col(stitch_col)
+            return pl.col(f"{stitch_prefix}_{mag_col}")
 
     def filter_det_f(
         self, win: int = 3, stitch_phase: bool = True
@@ -217,18 +222,17 @@ class VNA(Sweep):
     # Lazily Loaded Attributes #
     # ==========================#
 
-    @cached_property
     def cable_delay(self) -> float:
         """Get the cable delay of the RF chain using the phase data
 
         Returns:
             float: The cable delay in nanoseconds
         """
-
+        self.phase()
         f, phase = self.f(), self.stitch_phase()
 
         # Get cable delay in units of rad·s
-        cable_delay, intercept = linear_fit(
+        cable_delay, intercept, _ = linear_fit(
             f.to_numpy().T[0], phase.to_numpy().T[0]
         )  # Need to convert f and phase to 1D numpy arrays since linear_fit is njitted
 
@@ -299,19 +303,19 @@ def stitch_phase(f, phase, sweep_steps, threshold, stitch_percent, result):
     curr_shift = 0
     stitch_ends = int(sweep_steps / stitch_percent)
 
-    slope, intercept = linear_fit(
+    slope, intercept, _ = linear_fit(
         freq_bins[0, -1 * stitch_ends :], phase_bins[0, -1 * stitch_ends :]
     )
 
     prev = 0
     next = intercept + slope * freq_bins[0, -1]
     for i in range(len(phase_bins) - 1):
-        slope_prev, intercept_prev = linear_fit(
+        slope_prev, intercept_prev, _ = linear_fit(
             freq_bins[i + 1, :stitch_ends], phase_bins[i + 1, :stitch_ends]
         )
         prev = intercept_prev + slope_prev * freq_bins[i + 1, 0]
         diff = prev - next
-        slope_next, intercept_next = linear_fit(
+        slope_next, intercept_next, _ = linear_fit(
             freq_bins[i + 1, -1 * stitch_ends :], phase_bins[i + 1, -1 * stitch_ends :]
         )
         next = intercept_next + slope_next * freq_bins[i + 1, -1]
@@ -345,19 +349,19 @@ def stitch_mag(f, mag, sweep_steps, stitch_percent, med_win, result):
     curr_shift = 0
     stitch_ends = int(sweep_steps / stitch_percent)
 
-    slope, intercept = linear_fit(
+    slope, intercept, _ = linear_fit(
         freq_bins[0, -1 * stitch_ends :], mag_bins[0, -1 * stitch_ends :]
     )
 
     prev = 0
     next = intercept + slope * freq_bins[0, -1]
     for i in range(len(mag_bins) - 1):
-        slope_prev, intercept_prev = linear_fit(
+        slope_prev, intercept_prev, _ = linear_fit(
             freq_bins[i + 1, :stitch_ends], mag_bins[i + 1, :stitch_ends]
         )
         prev = intercept_prev + slope_prev * freq_bins[i + 1, 0]
         diff = prev - next
-        slope_next, intercept_next = linear_fit(
+        slope_next, intercept_next, _ = linear_fit(
             freq_bins[i + 1, -1 * stitch_ends :], mag_bins[i + 1, -1 * stitch_ends :]
         )
         next = intercept_next + slope_next * freq_bins[i + 1, -1]
@@ -383,6 +387,6 @@ def filter_det_f(f, phase, det_f, win):
             phase_win = np.ascontiguousarray(
                 phase[peak_idx - offset : peak_idx + offset + 1]
             )
-            slope, intercept = linear_fit(f_win, phase_win)
+            slope, intercept, _ = linear_fit(f_win, phase_win)
             slopes[i] = slope
     return slopes

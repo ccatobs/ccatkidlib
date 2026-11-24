@@ -104,30 +104,30 @@ def create_dir(dir: str) -> None:
         # Check if directory already exists, if not make directory
         if not dir.exists():
             dir.mkdir(parents=True, exist_ok=False)
-            log.log("DEBUG", "The directory '%s' was successfully created!", dir)
+            log.log("DEBUG", "The directory '%s' was successfully created.", dir)
         else:
             log.log(
                 "DEBUG",
-                "The directory '%s' already exists! Directory was not overwritten.",
+                "The directory '%s' already exists. Directory was not overwritten.",
                 dir,
             )
     except FileNotFoundError:
         log.log(
             "ERROR",
-            "The directory '%s' could not be created! Ensure that the file path is valid!",
+            "The directory '%s' could not be created! Ensure that the file path is valid.",
             dir,
         )
         raise FileNotFoundError(
-            f"The directory '{dir}' could not be created! Ensure that the file path is valid!"
+            f"The directory '{dir}' could not be created! Ensure that the file path is valid."
         )
     except PermissionError:
         log.log(
             "ERROR",
-            "The directory '%s' could not be created! Ensure that the parent directory has suitable write permissions!",
+            "The directory '%s' could not be created! Ensure that the parent directory has suitable write permissions.",
             dir,
         )
         raise PermissionError(
-            f"The directory '{dir}' could not be created! Ensure that the parent directory has suitable write permissions!"
+            f"The directory '{dir}' could not be created! Ensure that the parent directory has suitable write permissions."
         )
 
 
@@ -275,22 +275,18 @@ def edit_config(cfg: dict, key: str, value: Any, append: bool = False) -> bool:
 
     # Check if key was successfully updated
     # -------------------------------------
-    if done:  # If matching key was updated
-        log.log("DEBUG", f'Updated key "{key}" with value "{value}" in config file"!')
-    elif (
-        append
-    ):  # If key was not found and append=True, add key value pair to dictionary
+    if not done and append:  # If key was not found and append=True, add key value pair to dictionary
         if isinstance(key, list):
             for k in key[:0:-1]:
                 value = {k: value}
             key = key[0]
         cfg[key] = value
         done = True
-        log.log("DEBUG", f'Added key "{key}" with value "{value}" to config file!')
-    else:  # If key was not found and append=False
+
+    if not done:  # If key was not found and append=False
         log.log(
-            "DEBUG",
-            f'Failed to update key "{key}" with value "{value}" in config file!',
+            "ERROR",
+            f"Failed to update key '{key}' with value '{value}' in config file!",
         )
     return done
 
@@ -360,7 +356,7 @@ def get_most_recent_file(
             raise Exception("No files found within specified time range!")
     except Exception as e:
         log.log(
-            "DEBUG",
+            "ERROR",
             f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}' with Exception:\n{e}",
         )
         return Path("invalid/path")
@@ -391,13 +387,11 @@ def get_timestamp(path: str) -> int:
                 if tstamp > 1.7e9:
                     return tstamp  # Check that integer is a valid timestamp
             except:
-                pass
+                continue
         raise ValueError(
             f"The file {file} has no valid timestamp."
         )  # Raise ValueError if timestamp could not be determined
-    except (
-        Exception
-    ) as e:  # If exception is thrown, return -1 to represent invalid path
+    except Exception as e:  # If exception is thrown, return -1 to represent invalid path
         log.log(
             "ERROR",
             "Failed to determine timestamp of file %s with Exception %s",
@@ -422,12 +416,9 @@ def get_creation_time(path: str) -> float:
     """
     try:
         file = Path(path)
-        # Get creation time of file
-        creation_time = file.stat().st_ctime
-        log.log("DEBUG", f"Creation time of file '{path}' is {creation_time}.")
-        return creation_time
-    except:
-        log.log("DEBUG", f"Error getting creation time of file: '{path}'")
+        return file.stat().st_ctime
+    except FileNotFoundError:
+        log.log("ERROR", f"Could not find file '{path}'")
         return -1
 
 
@@ -738,7 +729,7 @@ def get_most_recent_file_board(
     except:
         # Send warning message if failed to fetch most recent file
         log.log(
-            "WARNING",
+            "ERROR",
             f"Failed to fetch most recent file in '{dir}' with identifier '{file_identifier}'",
         )
         return "invalid/path"

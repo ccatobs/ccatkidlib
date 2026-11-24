@@ -33,7 +33,6 @@ def get_sess_dir(
         sess_dir = "invalid/path"
     return sess_dir
 
-
 def get_data_file(
     com_to: str,
     timestamp: str | int,

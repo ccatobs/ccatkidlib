@@ -34,7 +34,7 @@ class Network:
         dets: int | list[int] = -1,
         noise_tones: int | list[int] | None = None,
         cable_delay: float | None = None,
-        detectors: list[ccatkidlib.analysis.core.detector.Detector] | None = None,
+        detectors: list[Detector] | None = None,
         sess_ids: str | list[str] | None = None,
         include_streams: bool = True,
         include_targs: bool = False,
@@ -362,7 +362,7 @@ class Network:
         """
 
         # Validate data_type
-        if not data_type in ["vna", "targ", "stream", "detector"]:
+        if data_type not in ["vna", "targ", "stream", "detector"]:
             error = "data_type must be one of: 'vna', 'targ', 'stream', or 'detector'"
             log.log("CRITICAL", error)
             raise ValueError(error)
