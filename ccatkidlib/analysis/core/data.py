@@ -325,12 +325,14 @@ class Data:
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase"], prefix, [], self.analysis_cfg
         )
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=[name_enum.IN_PHASE.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
             strict=True,
         )
+
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df
 
     def Q(
         self,
@@ -350,12 +352,14 @@ class Data:
         name_enums, prefix_enums = ccat_df.create_enums(
             ["quadrature"], prefix, [], self.analysis_cfg
         )
-        return self.get_data(
+        ret_df = self.get_data(
             col_name=[name_enum.QUADRATURE.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
             strict=True,
         )
+
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df
 
     def phase(
         self,
@@ -387,12 +391,14 @@ class Data:
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        return self.get_data(
+        ret_df = self.get_data(
             col_name=[name_enum.PHASE.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
             strict=True,
         )
+
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df
 
     def mag(
         self,
@@ -413,6 +419,8 @@ class Data:
         Returns:
             *Polars* **DataFrame** with magnitude data
         """
+        if isinstance(prefix, str): prefix = [prefix]
+
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "magnitude"],
             prefix,
@@ -433,7 +441,8 @@ class Data:
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        return self.get_data(
+
+        ret_df = self.get_data(
             col_name=[
                 f"{prefix_enum.DECIBLE.value}_{name_enum.MAGNITUDE.value}"
                 if d
@@ -444,6 +453,15 @@ class Data:
             exclude=exclude,
             strict=True,
         )
+
+        ret_pre = [f"{prefix_enum.DECIBLE.value}{'_' if pre else ''}{pre}" 
+                    if d 
+                    else pre 
+                    for d, pre, prefix_enum in zip(dB, prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df
+
 
     # ============================#
     # General IQ Transformations #
@@ -471,12 +489,14 @@ class Data:
             *Polars* **DataFrame** with rotated in-phase |I| and quadrature |Q| data
 
         """
+        if isinstance(prefix, str): prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature"],
             prefix,
             ["rotate"],
             self.analysis_cfg,
         )   
+
         num_prefix = len(name_enums)
         angle = ccat_df.check_args(angle, num_prefix, float)
         name = ccat_df.check_args(name, num_prefix, str)
@@ -505,11 +525,16 @@ class Data:
                 f"{prefix_enum.ROTATE.value}_{name_enum.QUADRATURE.value}",
             ]
 
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=col_name,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.ROTATE.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def IQ_scale(
         self,
@@ -534,7 +559,7 @@ class Data:
 
         """
         name_dict = self.analysis_cfg['convention']['name']
-        I_df = self.scale(name_dict['in_phase'],
+        I_ret = self.scale(name_dict['in_phase'],
                    prefix=prefix,
                    scale=scale,
                    name=name,
@@ -542,16 +567,23 @@ class Data:
                    exclude=exclude,
                    recalc=recalc)
 
-        Q_df = self.scale(name_dict['quadrature'],
+        Q_ret = self.scale(name_dict['quadrature'],
                    prefix=prefix,
                    scale=scale,
                    name=name,
                    include=include,
                    exclude=exclude,
                    recalc=recalc)
+        
+        ret_pre = self.analysis_cfg['runtime']['return_prefix']
+        if ret_pre: 
+            I_df, I_pre = I_ret
+            Q_df, Q_pre = Q_ret
+        else:
+            I_df, Q_df = I_ret, Q_ret
 
         IQ_df = pl.concat([I_df, Q_df], how='horizontal')
-        return IQ_df
+        return IQ_df, I_pre if ret_pre else IQ_df
 
     def IQ_shift(
         self,
@@ -579,7 +611,7 @@ class Data:
         """
 
         name_dict = self.analysis_cfg['convention']['name']
-        I_df = self.shift(name_dict['in_phase'],
+        I_ret = self.shift(name_dict['in_phase'],
                    prefix=prefix,
                    shift=shift_I,
                    name=name,
@@ -587,7 +619,7 @@ class Data:
                    exclude=exclude,
                    recalc=recalc)
 
-        Q_df = self.shift(name_dict['quadrature'],
+        Q_ret = self.shift(name_dict['quadrature'],
                    prefix=prefix,
                    shift=shift_Q,
                    name=name,
@@ -595,8 +627,15 @@ class Data:
                    exclude=exclude,
                    recalc=recalc)
 
+        ret_pre = self.analysis_cfg['runtime']['return_prefix']
+        if ret_pre: 
+            I_df, I_pre = I_ret
+            Q_df, Q_pre = Q_ret
+        else:
+            I_df, Q_df = I_ret, Q_ret
+
         IQ_df = pl.concat([I_df, Q_df], how='horizontal')
-        return IQ_df
+        return IQ_df, I_pre if ret_pre else IQ_df
 
     def IQ_trim(
         self,
@@ -628,7 +667,7 @@ class Data:
         """
 
         name_dict = self.analysis_cfg['convention']['name']
-        I_df = self.trim(name_dict['in_phase'],
+        I_ret = self.trim(name_dict['in_phase'],
                    prefix=prefix,
                    lower_index=lower_index,
                    upper_index=upper_index,
@@ -638,7 +677,7 @@ class Data:
                    exclude=exclude,
                    recalc=recalc)
 
-        Q_df = self.trim(name_dict['quadrature'],
+        Q_ret = self.trim(name_dict['quadrature'],
                    prefix=prefix,
                    lower_index=lower_index,
                    upper_index=upper_index,
@@ -647,9 +686,16 @@ class Data:
                    include=include,
                    exclude=exclude,
                    recalc=recalc)
+
+        ret_pre = self.analysis_cfg['runtime']['return_prefix']
+        if ret_pre: 
+            I_df, I_pre = I_ret
+            Q_df, Q_pre = Q_ret
+        else:
+            I_df, Q_df = I_ret, Q_ret
 
         IQ_df = pl.concat([I_df, Q_df], how='horizontal')
-        return IQ_df
+        return IQ_df, I_pre if ret_pre else IQ_df
 
     def scale(self,
               col_name: str,
@@ -660,6 +706,8 @@ class Data:
               exclude: int | list[int] | None = None,
               recalc: bool = False, 
             ):
+
+        if isinstance(prefix, str): prefix = [prefix]
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for k, v in mapping.items():
             if v == col_name:
@@ -701,7 +749,7 @@ class Data:
             prefix_enum=prefix_enums,
         )
 
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=[
                 f"{prefix_enum.SCALE.value}_{name_enum[enum_key.upper()].value}"
                 for name_enum, prefix_enum in zip(name_enums, prefix_enums)
@@ -709,6 +757,11 @@ class Data:
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.SCALE.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def shift(self,
               col_name: str,
@@ -719,6 +772,7 @@ class Data:
               exclude: int | list[int] | None = None,
               recalc: bool = False, ):
         
+        if isinstance(prefix, str): prefix = [prefix]
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for k, v in mapping.items():
             if v == col_name:
@@ -760,7 +814,7 @@ class Data:
             prefix_enum=prefix_enums,
         )
 
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=[
                 f"{prefix_enum.TRANSLATE.value}_{name_enum[enum_key.upper()].value}"
                 for name_enum, prefix_enum in zip(name_enums, prefix_enums)
@@ -768,6 +822,11 @@ class Data:
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.TRANSLATE.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def trim(self,
              col_name: str,
@@ -791,6 +850,7 @@ class Data:
                         bounds[i] = bound + df_height
             return bounds
 
+        if isinstance(prefix, str): prefix = [prefix]
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for k, v in mapping.items():
             if v == col_name:
@@ -837,7 +897,7 @@ class Data:
             prefix_enum=prefix_enums,
         )
 
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=[
                 f"{prefix_enum.TRIM.value}_{name_enum[enum_key.upper()].value}"
                 for name_enum, prefix_enum in zip(name_enums, prefix_enums)
@@ -845,6 +905,11 @@ class Data:
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.TRIM.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def diff(
         self,
@@ -866,6 +931,8 @@ class Data:
         Returns:
             *Polars* **DataFrame** with difference data
         """
+
+        if isinstance(prefix, str): prefix = [prefix]
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for k, v in mapping.items():
             if v == col_name:
@@ -892,7 +959,8 @@ class Data:
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        return self.get_data(
+        
+        ret_df =  self.get_data(
             col_name=[
                 f"{prefix_enum.DIFFERENCE.value}_{name_enum[enum_key.upper()].value}"
                 for name_enum, prefix_enum in zip(name_enums, prefix_enums)
@@ -900,6 +968,11 @@ class Data:
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.DIFFERENCE.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def savgol(
         self,
@@ -933,6 +1006,8 @@ class Data:
         Returns:
             *Polars* **DataFrame** with Savitzky–Golay filtered data
         """
+        if isinstance(prefix, str): prefix = [prefix]
+        
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for key, val in mapping.items():
             if val == col_name:
@@ -985,11 +1060,16 @@ class Data:
 
         self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_name])
 
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=col_name,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.SAVGOL_FILTER.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def linear_fit(
         self,
@@ -1023,6 +1103,9 @@ class Data:
         Returns:
             *Polars* **DataFrame** with Savitzky–Golay filtered data
         """
+        if isinstance(x_prefix, str): x_prefix = [x_prefix]
+        if isinstance(y_prefix, str): y_prefix = [y_prefix]
+
         x_enum_key, y_enum_key, mapping = None, None, self.analysis_cfg["convention"]["name"]
         for key, val in mapping.items():
             if val == x_col_name:
@@ -1069,17 +1152,22 @@ class Data:
         )
 
         col_name = [
-            f"{prefix_enum.LINEAR_FIT.value}_{y_name_enum[y_enum_key.upper()].value}"
-            for y_name_enum, prefix_enum in zip(y_name_enums, prefix_enums)
+            f"{prefix_enum.LINEAR_FIT.value}_{x_name_enum[x_enum_key.upper()].value}_{y_name_enum[y_enum_key.upper()].value}"
+            for x_name_enum, y_name_enum, prefix_enum in zip(x_name_enums, y_name_enums, prefix_enums)
         ]
 
         self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_name])
 
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=col_name,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.LINEAR_FIT.value}_{x_name_enum[x_enum_key.upper()].value}{'_' if pre else ''}{pre}" for pre, x_name_enum, prefix_enum in zip(y_prefix, x_name_enums, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
     
     # ==================#
     # Analysis Methods #
@@ -1667,8 +1755,8 @@ class Data:
                         else:
                             result = fit_col
                             m, b = result.slope, result.intercept
-                        properties_dict = {f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_slope}": m, 
-                                           f"{linear_fit_prefix}_{y_data_col}_{x_data_col}_{linear_fit_intercept}": b}
+                        properties_dict = {f"{linear_fit_prefix}_{x_data_col}_{y_data_col}_{linear_fit_slope}": m, 
+                                           f"{linear_fit_prefix}_{x_data_col}_{y_data_col}_{linear_fit_intercept}": b}
 
                         obj._properties[ccat_df.add_tone("det", tone, padding)] = (
                             properties_dict
@@ -1703,7 +1791,7 @@ class Data:
 
         linear_fit_slope, linear_fit_intercept = x_name_enum.LINEAR_FIT_SLOPE.value, x_name_enum.LINEAR_FIT_INTERCEPT.value
 
-        return_col, return_type = [f"{linear_fit_prefix}_{y_data_col}"], [pl.Float64]
+        return_col, return_type = [f"{linear_fit_prefix}_{x_data_col}_{y_data_col}"], [pl.Float64]
         expr, calc_ind, batch_len = ccat_mp.create_batches(
             _mp_linear_fit,
             tones,
@@ -1758,7 +1846,7 @@ class Data:
         ]
 
     @cached_property
-    def network(self) -> str:
+    def array_network(self) -> str:
         """
         Detector type of the |RFSoC| drone
         """

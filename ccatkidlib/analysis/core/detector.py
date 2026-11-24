@@ -28,6 +28,7 @@ import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.viz.viz_utils as viz_utils
 
+from ccatkidlib.analysis.utils.config import return_prefix
 from ccatkidlib.analysis.core.timestream import Timestream
 from ccatkidlib.analysis.core.vna import VNA
 from ccatkidlib.analysis.core.target import Target
@@ -387,441 +388,6 @@ class Detector:
             self, col_name=col_name, include=include, exclude=exclude, strict=strict
         )
 
-    # Fitting
-    # -------
-    def complex_fit(
-        self,
-        prefix: str | list[str] = "",
-        nonlinear: bool | list[bool] = False,
-        asymm: bool | list[bool] = False,
-        fix_cable: bool | list[bool] = False,
-        fix_thetaQ: bool | list[bool] = False,
-        include: int | list[int] | None = None,
-        exclude: int | list[int] | None = None,
-        recalc: bool = False,
-        max_workers: int = 1,
-        ex=None,
-    ) -> pl.DataFrame:
-        """
-        Fit target sweep using complex forward transmission data (*z = I + iQ*)
-
-        Args:
-            nonlinear (bool, optional): Whether to perform a nonlinear fit. Defaults to *False*
-            asymm (bool, optional): Whether to perform a asymmetric fit. Defaults to *False*
-            fix_cable (bool, optional): Whether to vary cable parameters for fit. Defaults to *False*: parameters are varied
-            fix_thetaQ (bool, optional): Whether to vary impedance mismatch angle and coupling quality factor for fit. Defaults to *False*: parameters are varied
-        Returns:
-            return (pl.DataFrame): Polars DataFrame with fit I and Q data
-        """
-
-        if self.fit_dir not in sys.path:
-            sys.path.append(self.fit_dir)
-        import resonator_model_v3
-
-        globals()["resonator_model_v3"] = resonator_model_v3
-
-        name_enums, prefix_enums = ccat_df.create_enums(
-            [
-                "frequency",
-                "in_phase",
-                "quadrature",
-                "internal_quality_factor",
-                "coupling_quality_factor",
-                "real_external_quality_factor",
-                "imag_external_quality_factor",
-                "total_quality_factor",
-                "cable_delay",
-            ],
-            prefix,
-            ["complex_fit", "complex_fit_cable"],
-            self.analysis_cfg,
-            no_prefix=["frequency"],
-        )
-
-        num_prefix = len(name_enums)
-        nonlinear = ccat_df.check_args(nonlinear, num_prefix, bool)
-        asymm = ccat_df.check_args(asymm, num_prefix, bool)
-        fix_cable = ccat_df.check_args(fix_cable, num_prefix, bool)
-        fix_thetaQ = ccat_df.check_args(fix_thetaQ, num_prefix, bool)
-
-        args = [
-            [
-                self,
-                nonlin,
-                asym,
-                cable,
-                thetaQ,
-                ccat_mp.check_max_workers(max_workers),
-                ex,
-            ]
-            for nonlin, asym, cable, thetaQ in zip(
-                nonlinear, asymm, fix_cable, fix_thetaQ
-            )
-        ]
-        self.properties
-        self.targ.transform(
-            Detector._calc_complex_fit,
-            *args,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            col_enum=name_enums,
-            prefix_enum=prefix_enums,
-        )
-
-        col_names = []
-        for prefix_enum, name_enum in zip(prefix_enums, name_enums):
-            col_names += [
-                f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.IN_PHASE.value}",
-                f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.QUADRATURE.value}",
-            ]
-
-            # Calculate Q_c and Q_i. Convert cable delay into nanaseconds
-            self.targ._properties_df = (
-                self.targ.properties.lazy()
-                .with_columns(
-                    (
-                        (
-                            pl.col(
-                                f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.REAL_EXTERNAL_QUALITY_FACTOR.value}"
-                            )
-                            / (
-                                pl.col(
-                                    f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.REAL_EXTERNAL_QUALITY_FACTOR.value}"
-                                )
-                                ** 2
-                                + pl.col(
-                                    f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.IMAG_EXTERNAL_QUALITY_FACTOR.value}"
-                                )
-                                ** 2
-                            )
-                        )
-                        ** -1
-                    ).alias(
-                        f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.COUPLING_QUALITY_FACTOR.value}"
-                    )
-                )  # Calculate Q_c
-                .with_columns(
-                    [
-                        (
-                            (
-                                1
-                                / pl.col(
-                                    f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
-                                )
-                                - 1
-                                / pl.col(
-                                    f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.COUPLING_QUALITY_FACTOR.value}"
-                                )
-                            )
-                            ** -1
-                        ).alias(
-                            f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.INTERNAL_QUALITY_FACTOR.value}"
-                        ),  # Calculate Q_i
-                        (
-                            -1e9
-                            * pl.col(
-                                f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.CABLE_DELAY.value}"
-                            )
-                        ).alias(
-                            f"ns_{prefix_enum.COMPLEX_FIT.value}_{name_enum.CABLE_DELAY.value}"
-                        ),
-                    ]
-                )  # Convert cable delay to nanoseconds
-                .collect()
-            )
-
-        self.targ.data = ccat_df.unnest(
-            self.targ, [f"struct_{name}" for name in col_names]
-        )
-        return self.targ.get_data(
-            col_name=col_names,
-            include=include,
-            exclude=exclude,
-            strict=True,
-        )
-
-    def phase_fit(
-        self,
-        prefix: str
-        | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
-        circle_fit_prefix: str = "circle_fit_unwind_rotate",
-        nonlinear: bool = False,
-        normalized = False,
-        method: str = "least_squares",
-        params: lmfit.Parameters = None,
-        include: int | list[int] | None = None,
-        exclude: int | list[int] | None = None,
-        recalc: bool = False,
-        max_workers: int = 1,
-        ex=None,
-    ) -> pl.DataFrame:
-        """
-        Fit target sweep using phase data (*arctan(Q/I)*)
-
-        """
-
-        name_enums, prefix_enums = ccat_df.create_enums(
-            [
-                "frequency",
-                "in_phase",
-                "quadrature",
-                "phase",
-                "IQ_circle_radius",
-                "internal_quality_factor",
-                "coupling_quality_factor",
-                "total_quality_factor",
-                "phase_fit_beta",
-                #"phase_fit_gamma",
-                #"phase_fit_delta",
-                "phase_fit_theta",
-                "fit_result",
-                "resonant_frequency",
-                "ki_nonlinearity_parameter",
-                #"qp_nonlinearity_parameter",
-            ],
-            prefix,
-            ["phase_fit"],
-            self.analysis_cfg,
-            no_prefix=["frequency"],
-        )
-
-        num_prefix = len(name_enums)
-        params = ccat_df.check_args(params, num_prefix, lmfit.parameter.Parameters)
-        nonlinear = ccat_df.check_args(nonlinear, num_prefix, bool)
-        normalized = ccat_df.check_args(normalized, num_prefix, bool)
-        method = ccat_df.check_args(method, num_prefix, str)
-        circle_fit_prefix = ccat_df.check_args(circle_fit_prefix, num_prefix, str)
-
-        circle_name_enums, _ = ccat_df.create_enums(
-            ["IQ_circle_radius", "IQ_circle_center", "magnitude"],
-            circle_fit_prefix,
-            [],
-            self.analysis_cfg,
-            no_prefix=["magnitude"],
-        )
-
-        radii = [
-            self.get_properties(
-                col_name=name_enum.IQ_CIRCLE_RADIUS.value,
-                include=include,
-                exclude=exclude,
-                strict=True,
-            )
-            .to_numpy()
-            .T[1]
-            for name_enum in circle_name_enums
-        ]
-
-        args = [
-            [
-                self,
-                radius,
-                nonlin,
-                norm,
-                meth,
-                param,
-                ccat_mp.check_max_workers(max_workers),
-                ex,
-            ]
-            for radius, nonlin, norm, param, meth in zip(
-                radii, nonlinear, normalized, params, method
-            )
-        ]
-        self.targ.transform(
-            [Detector._calc_phase_fit] * num_prefix,
-            *args,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            col_enum=name_enums,
-            prefix_enum=prefix_enums,
-        )
-
-        col_names = []
-        for prefix_enum, name_enum, circle_enum, norm in zip(
-            prefix_enums, name_enums, circle_name_enums, normalized
-        ):
-            col_names += [
-                f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE.value}",
-            ]
-
-            scale_factor = 1e6 if norm else 1e-8
-            self.targ._properties_df = (
-                self.targ.properties.lazy()
-                .with_columns(
-                    [
-                        (
-                            scale_factor
-                            * (
-                                pl.col(
-                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_BETA.value}"
-                                )
-                                * (
-                                    2
-                                    * pl.col(
-                                        f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
-                                    )
-                                )
-                                ** 2
-                            )
-                            / (
-                                pl.col(
-                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.RESONANT_FREQUENCY.value}"
-                                )
-                                / pl.col(
-                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
-                                )
-                            )
-                        ).alias(
-                            f"{prefix_enum.PHASE_FIT.value}_{name_enum.KI_NONLINEARITY_PARAMETER.value}"
-                        ),
-                        #(
-                        #    1e6
-                        #    * (
-                        #        pl.col(
-                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_GAMMA.value}"
-                        #        )
-                        #        * (
-                        #            2
-                        #            * pl.col(
-                        #                f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
-                        #            )
-                        #        )
-                        #        ** pl.col(f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_DELTA.value}")
-                        #    )
-                        #    / (
-                        #        pl.col(
-                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.RESONANT_FREQUENCY.value}"
-                        #        )
-                        #        / pl.col(
-                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
-                        #        )
-                        #    )
-                        #).alias(
-                        #    f"{prefix_enum.PHASE_FIT.value}_{name_enum.QP_NONLINEARITY_PARAMETER.value}"
-                        #),
-                        (
-                            pl.col(
-                                f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
-                            )
-                            * (
-                                pl.col(
-                                    f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.MAGNITUDE.value}"
-                                )
-                                + pl.col(
-                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
-                                )
-                            )
-                            / (
-                                2
-                                * pl.col(
-                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
-                                )
-                            )
-                        ).alias(
-                            f"{prefix_enum.PHASE_FIT.value}_{name_enum.COUPLING_QUALITY_FACTOR.value}"
-                        ),
-                    ]
-                )
-                .with_columns(
-                    (
-                        (
-                            1
-                            / pl.col(
-                                f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
-                            )
-                            - 1
-                            / pl.col(
-                                f"{prefix_enum.PHASE_FIT.value}_{name_enum.COUPLING_QUALITY_FACTOR.value}"
-                            )
-                        )
-                        ** -1
-                    ).alias(
-                        f"{prefix_enum.PHASE_FIT.value}_{name_enum.INTERNAL_QUALITY_FACTOR.value}"
-                    )
-                )
-                .collect()
-            )
-
-        self.targ.data = ccat_df.unnest(
-            self.targ, [f"struct_{name}" for name in col_names]
-        )
-        return self.targ.get_data(
-            col_name=col_names,
-            include=include,
-            exclude=exclude,
-        )
-
-    def IQ_circle_fit(
-        self,
-        prefix: str | list[str] = "unwind_rotate",
-        bounds=None,
-        loss: str = "soft_l1",
-        f_scale: float = 1,
-        method: str = "trf",
-        include: int | list[int] | None = None,
-        exclude: int | list[int] | None = None,
-        recalc: bool = False,
-        max_workers=1,
-        ex=None,
-    ) -> pl.DataFrame:
-        """
-        Fit the target sweep circle in the IQ plane
-
-        """
-
-        name_enums, prefix_enums = ccat_df.create_enums(
-            ["in_phase", "quadrature", "IQ_circle_radius", "IQ_circle_center"],
-            prefix,
-            ["IQ_circle_fit"],
-            self.analysis_cfg,
-        )
-
-        num_prefix = len(name_enums)
-        method = ccat_df.check_args(method, num_prefix, str)
-        loss = ccat_df.check_args(loss, num_prefix, str)
-        f_scale = ccat_df.check_args(f_scale, num_prefix, float)
-
-        args = [
-            [
-                self,
-                bounds,
-                los,
-                scale,
-                meth,
-                ccat_mp.check_max_workers(max_workers),
-                ex,
-            ]
-            for los, scale, meth in zip(loss, f_scale, method)
-        ]
-        self.properties
-        self.targ.transform(
-            [Detector._calc_IQ_circle_fit] * num_prefix,
-            *args,
-            include=include,
-            exclude=exclude,
-            recalc=recalc,
-            col_enum=name_enums,
-            prefix_enum=prefix_enums,
-        )
-
-        col_names = []
-        for prefix_enum, name_enum in zip(prefix_enums, name_enums):
-            col_names += [
-                f"{prefix_enum.IQ_CIRCLE_FIT.value}_{name_enum.IN_PHASE.value}",
-                f"{prefix_enum.IQ_CIRCLE_FIT.value}_{name_enum.QUADRATURE.value}",
-            ]
-
-        self.targ.data = ccat_df.unnest(
-            self.targ, [f"struct_{name}" for name in col_names]
-        )
-        return self.targ.get_data(
-            col_name=col_names,
-            include=include,
-            exclude=exclude,
-        )
-
     # IQ transformations
     # ------------------
 
@@ -848,6 +414,7 @@ class Detector:
         Returns:
             pl.Dataframe: Polars DataFrame with unwound I & Q data
         """
+        if isinstance(prefix, str): prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             [
                 "frequency",
@@ -880,56 +447,47 @@ class Detector:
         )
 
         delays = -2 * np.pi * 1e-9 * delays
-        unwind_dfs = []
-        for data_obj in data_objs:
-            angle = (
-                [
-                    delay * tone_freq
-                    for tone_freq, delay in zip(
-                        data_obj.get_data(
-                            name_enums[0].FREQUENCY.value,
-                            include=include,
-                            exclude=exclude,
-                            strict=True,
+
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            unwind_dfs = []
+            for data_obj in data_objs:
+                angle = (
+                    [
+                        delay * tone_freq
+                        for tone_freq, delay in zip(
+                            data_obj.get_data(
+                                name_enums[0].FREQUENCY.value,
+                                include=include,
+                                exclude=exclude,
+                                strict=True,
+                            )
+                            .to_numpy()
+                            .T,
+                            delays,
                         )
-                        .to_numpy()
-                        .T,
-                        delays,
-                    )
-                ]
-                if data_obj.data_type == 'targ'
-                else [
-                    delay * tone_freq
-                    for tone_freq, delay in zip(
-                        data_obj.comb[name_enums[0].TONE_FREQUENCY.value].to_numpy().T, delays
-                    )
-                ]
-            )
-            data_obj.IQ_rotate(
-                prefix=prefix,
-                angle=angle,
-                name=[prefix_enum.REMOVE_CABLE.value for prefix_enum in prefix_enums],
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-
-            col_names = []
-            for name_enum, prefix_enum in zip(name_enums, prefix_enums):
-                col_names += [
-                    f"{prefix_enum.REMOVE_CABLE.value}_{prefix_enum.ROTATE.value}_{name_enum.IN_PHASE.value}",
-                    f"{prefix_enum.REMOVE_CABLE.value}_{prefix_enum.ROTATE.value}_{name_enum.QUADRATURE.value}",
-                ]
-
-            unwind_dfs.append(
-                data_obj.get_data(
-                    col_name=col_names,
+                    ]
+                    if data_obj.data_type == 'targ'
+                    else [
+                        delay * tone_freq
+                        for tone_freq, delay in zip(
+                            data_obj.comb[name_enums[0].TONE_FREQUENCY.value].to_numpy().T, delays
+                        )
+                    ]
+                )
+                unwind_df, unwind_prefix = data_obj.IQ_rotate(
+                    prefix=prefix,
+                    angle=angle,
+                    name=[prefix_enum.REMOVE_CABLE.value for prefix_enum in prefix_enums],
                     include=include,
                     exclude=exclude,
-                    strict=True,
+                    recalc=recalc,
                 )
-            )
-        return unwind_dfs
+                unwind_dfs.append(unwind_df)
+
+            ret_pre = unwind_prefix
+            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+            return unwind_dfs, ret_pre if ret_prefix else unwind_dfs        
 
     def IQ_norm(
         self,
@@ -944,7 +502,7 @@ class Detector:
         Divide out cable baseline from target sweep and/or timestream I & Q data
 
         """
-
+        if isinstance(prefix, str): prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["frequency", "in_phase", "quadrature", "magnitude", 'tone_frequency'],
             prefix,
@@ -965,71 +523,61 @@ class Detector:
             name_enums[0].TONE_FREQUENCY.value, include=include, exclude=exclude, strict=True
         )
 
-        norm_dfs = []
-        for data_obj in data_objs:
-            # TODO: Allow different norm_prefix for each prefix
-            cable_mags = self.targ.get_data(
-                f"{norm_prefix}{'_' if norm_prefix else ''}{name_enums[0].MAGNITUDE.value}",
-                include=include,
-                exclude=exclude,
-                strict=True,
-            )
-            if data_obj.data_type == 'targ':
-                scale = 1 / cable_mags.to_numpy().T
-            else:
-                # TODO: Probably unnecessary computation to find data point corresponding to tone. Should always be sample = num_samples/2 (unless timestream tone frequency is changed without retaking target sweep)
-                f_col = name_enums[0].FREQUENCY.value
-                f_df = (
-                    self.targ.get_data(
-                        f_col, include=include, exclude=exclude, strict=True
-                    )
-                    .unpivot(variable_name="det", value_name=f_col)
-                    .with_columns(pl.col("det").str.strip_prefix(f"{f_col}_").cast(int))
-                )
-                cable_df = cable_mags.unpivot(
-                    variable_name="temp", value_name="cable"
-                ).drop("temp")
-                f_cable_df = pl.concat([f_df, cable_df], how="horizontal")
-                f_cable_df = f_cable_df.join(
-                    tone_freqs, on="det", how="left", coalesce=True
-                )
-                scale = (
-                  1/
-                  (
-                        f_cable_df.lazy()
-                        .with_columns((pl.col(f_col) - pl.col(name_enums[0].TONE_FREQUENCY.value)).abs().alias('diff'))
-                        .filter(pl.col("diff") == pl.col("diff").min().over('det'))
-                        .select('cable')
-                        .collect()
-                    ).to_numpy().T[0]
-   
-                )
-
-            data_obj.IQ_scale(
-                prefix=prefix,
-                scale=scale,
-                name=[prefix_enum.NORMALIZE.value for prefix_enum in prefix_enums],
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-
-            col_names = []
-            for name_enum, prefix_enum in zip(name_enums, prefix_enums):
-                col_names += [
-                    f"{prefix_enum.NORMALIZE.value}_{prefix_enum.SCALE.value}_{name_enum.IN_PHASE.value}",
-                    f"{prefix_enum.NORMALIZE.value}_{prefix_enum.SCALE.value}_{name_enum.QUADRATURE.value}",
-                ]
-
-            norm_dfs.append(
-                data_obj.get_data(
-                    col_name=col_names,
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            norm_dfs = []
+            for data_obj in data_objs:
+                # TODO: Allow different norm_prefix for each prefix
+                cable_mags = self.targ.get_data(
+                    f"{norm_prefix}{'_' if norm_prefix else ''}{name_enums[0].MAGNITUDE.value}",
                     include=include,
                     exclude=exclude,
                     strict=True,
                 )
-            )
-        return norm_dfs
+                if data_obj.data_type == 'targ':
+                    scale = 1 / cable_mags.to_numpy().T
+                else:
+                    # TODO: Probably unnecessary computation to find data point corresponding to tone. Should always be sample = num_samples/2 (unless timestream tone frequency is changed without retaking target sweep)
+                    f_col = name_enums[0].FREQUENCY.value
+                    f_df = (
+                        self.targ.get_data(
+                            f_col, include=include, exclude=exclude, strict=True
+                        )
+                        .unpivot(variable_name="det", value_name=f_col)
+                        .with_columns(pl.col("det").str.strip_prefix(f"{f_col}_").cast(int))
+                    )
+                    cable_df = cable_mags.unpivot(
+                        variable_name="temp", value_name="cable"
+                    ).drop("temp")
+                    f_cable_df = pl.concat([f_df, cable_df], how="horizontal")
+                    f_cable_df = f_cable_df.join(
+                        tone_freqs, on="det", how="left", coalesce=True
+                    )
+                    scale = (
+                    1/
+                    (
+                            f_cable_df.lazy()
+                            .with_columns((pl.col(f_col) - pl.col(name_enums[0].TONE_FREQUENCY.value)).abs().alias('diff'))
+                            .filter(pl.col("diff") == pl.col("diff").min().over('det'))
+                            .select('cable')
+                            .collect()
+                        ).to_numpy().T[0]
+    
+                    )
+
+                norm_df, norm_prefix = data_obj.IQ_scale(
+                    prefix=prefix,
+                    scale=scale,
+                    name=[prefix_enum.NORMALIZE.value for prefix_enum in prefix_enums],
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
+
+                norm_dfs.append(norm_df)
+            ret_pre = norm_prefix
+            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+            return norm_dfs, ret_pre if ret_prefix else norm_dfs
 
     def IQ_circle_origin(
         self,
@@ -1044,9 +592,7 @@ class Detector:
         """
         Rotate and center the target sweep circle in the IQ plane onto the real axis
         """
-        if isinstance(prefix, str):
-            prefix = [prefix]
-
+        if isinstance(prefix, str): prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "magnitude", "phase"],
             prefix,
@@ -1067,153 +613,140 @@ class Detector:
             no_prefix=["in_phase", "quadrature", "magnitude", "phase"],
         )
 
-        shifts, angles = [[]] * num_prefix, [[]] * num_prefix
-        for i, (pre, name_enum, prefix_enum, circle_enum, fit) in enumerate(
-            zip(prefix, name_enums, prefix_enums, circle_name_enums, use_fit)
-        ):
-            if not fit:  # Use median I & Q values of target sweep IQ circle if not using center from circle fit
-                # Calculate target sweep median I & Q values if not in ``properties`` DataFrame already
-                (
-                    properties_I_col,
-                    properties_Q_col,
-                    properties_mag_col,
-                    properties_phase_col,
-                ) = (
-                    f"median_targ_{name_enum.IN_PHASE.value}",
-                    f"median_targ_{name_enum.QUADRATURE.value}",
-                    f"median_targ_{name_enum.MAGNITUDE.value}",
-                    f"median_targ_{name_enum.PHASE.value}",
-                )
-                ccat_df.agg(
-                    self.targ,
-                    "median",
-                    circle_enum.IN_PHASE.value,
-                    prefix=pre,
-                    include=include,
-                    exclude=exclude,
-                    recalc=recalc,
-                )
-                ccat_df.agg(
-                    self.targ,
-                    "median",
-                    circle_enum.QUADRATURE.value,
-                    prefix=pre,
-                    include=include,
-                    exclude=exclude,
-                    recalc=recalc,
-                )
-            else:
-                (
-                    properties_I_col,
-                    properties_Q_col,
-                    properties_mag_col,
-                    properties_phase_col,
-                ) = (
-                    f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.IN_PHASE.value}",
-                    f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.QUADRATURE.value}",
-                    f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.MAGNITUDE.value}",
-                    f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.PHASE.value}",
-                )
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            shifts, angles = [[]] * num_prefix, [[]] * num_prefix
+            for i, (pre, name_enum, prefix_enum, circle_enum, fit) in enumerate(
+                zip(prefix, name_enums, prefix_enums, circle_name_enums, use_fit)
+            ):
+                if not fit:  # Use median I & Q values of target sweep IQ circle if not using center from circle fit
+                    # Calculate target sweep median I & Q values if not in ``properties`` DataFrame already
+                    (
+                        properties_I_col,
+                        properties_Q_col,
+                        properties_mag_col,
+                        properties_phase_col,
+                    ) = (
+                        f"median_targ_{name_enum.IN_PHASE.value}",
+                        f"median_targ_{name_enum.QUADRATURE.value}",
+                        f"median_targ_{name_enum.MAGNITUDE.value}",
+                        f"median_targ_{name_enum.PHASE.value}",
+                    )
+                    ccat_df.agg(
+                        self.targ,
+                        "median",
+                        circle_enum.IN_PHASE.value,
+                        prefix=pre,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                    )
+                    ccat_df.agg(
+                        self.targ,
+                        "median",
+                        circle_enum.QUADRATURE.value,
+                        prefix=pre,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                    )
+                else:
+                    (
+                        properties_I_col,
+                        properties_Q_col,
+                        properties_mag_col,
+                        properties_phase_col,
+                    ) = (
+                        f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.IN_PHASE.value}",
+                        f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.QUADRATURE.value}",
+                        f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.MAGNITUDE.value}",
+                        f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.PHASE.value}",
+                    )
 
-            include_subset = ccat_df.check_properties(
-                self,
-                properties_mag_col,
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-            if not len(include_subset) == 0:
-                circle_fit_df = self.get_properties(
-                    [properties_I_col, properties_Q_col],
-                    include=include_subset,
-                    strict=True,
-                ).select(
-                    [
-                        "det",
-                        (
-                            pl.arctan2(
-                                pl.col(properties_Q_col), pl.col(properties_I_col)
-                            )
-                        ).alias(properties_phase_col),  # Calculate angle
-                        (
+                include_subset = ccat_df.check_properties(
+                    self,
+                    properties_mag_col,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
+                if not len(include_subset) == 0:
+                    circle_fit_df = self.get_properties(
+                        [properties_I_col, properties_Q_col],
+                        include=include_subset,
+                        strict=True,
+                    ).select(
+                        [
+                            "det",
                             (
-                                pl.col(properties_Q_col) ** 2
-                                + pl.col(properties_I_col) ** 2
-                            ).sqrt()
-                        ).alias(properties_mag_col),
-                    ]
-                )  # Calculate magnitude
-                shared_cols = (
-                    [properties_mag_col, properties_phase_col]
-                    if properties_mag_col in self._properties_df.schema
-                    else []
-                )
-                self.targ._properties_df = ccat_df.coalesce_join(
-                    self.targ._properties_df,
-                    circle_fit_df,
-                    on="det",
-                    shared_cols=shared_cols,
-                )
+                                pl.arctan2(
+                                    pl.col(properties_Q_col), pl.col(properties_I_col)
+                                )
+                            ).alias(properties_phase_col),  # Calculate angle
+                            (
+                                (
+                                    pl.col(properties_Q_col) ** 2
+                                    + pl.col(properties_I_col) ** 2
+                                ).sqrt()
+                            ).alias(properties_mag_col),
+                        ]
+                    )  # Calculate magnitude
+                    shared_cols = (
+                        [properties_mag_col, properties_phase_col]
+                        if properties_mag_col in self._properties_df.schema
+                        else []
+                    )
+                    self.targ._properties_df = ccat_df.coalesce_join(
+                        self.targ._properties_df,
+                        circle_fit_df,
+                        on="det",
+                        shared_cols=shared_cols,
+                    )
 
-            center_angle, center_mag = (
-                self.get_properties(
-                    [properties_phase_col, properties_mag_col],
+                center_angle, center_mag = (
+                    self.get_properties(
+                        [properties_phase_col, properties_mag_col],
+                        include=include,
+                        exclude=exclude,
+                        strict=True,
+                    )
+                    .to_numpy()
+                    .T[1:3]
+                )
+                angles[i] = np.pi - center_angle
+                shifts[i] = center_mag
+
+            data_objs = self._get_data_obj(data)
+            if not data_objs:
+                error = (
+                    f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
+                )
+                log.log("ERROR", error)
+                raise ValueError(error)
+
+            shift_dfs = []
+            for data_obj in data_objs:
+                _, rotate_prefix = data_obj.IQ_rotate(
+                    prefix=prefix,
+                    angle=angles,
+                    name=[prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums],
                     include=include,
                     exclude=exclude,
-                    strict=True,
+                    recalc=recalc,
                 )
-                .to_numpy()
-                .T[1:3]
-            )
-            angles[i] = np.pi - center_angle
-            shifts[i] = center_mag
-
-        data_objs = self._get_data_obj(data)
-        if not data_objs:
-            error = (
-                f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
-            )
-            log.log("ERROR", error)
-            raise ValueError(error)
-
-        shift_dfs = []
-        for data_obj in data_objs:
-            data_obj.IQ_rotate(
-                prefix=prefix,
-                angle=angles,
-                name=[prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums],
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-            data_obj.IQ_shift(
-                prefix=[
-                    "_".join([prefix_enum.CENTER_ORIGIN.value, prefix_enum.ROTATE.value, pre])
-                    for pre, prefix_enum in zip(prefix, prefix_enums)
-                ],
-                shift_I=shifts,
-                name=[prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums],
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-
-            col_names = []
-            for name_enum, prefix_enum in zip(name_enums, prefix_enums):
-                col_names += [
-                    "_".join([prefix_enum.CENTER_ORIGIN.value, prefix_enum.TRANSLATE.value, prefix_enum.CENTER_ORIGIN.value, prefix_enum.ROTATE.value, name_enum.IN_PHASE.value]),
-                    "_".join([prefix_enum.CENTER_ORIGIN.value, prefix_enum.TRANSLATE.value, prefix_enum.CENTER_ORIGIN.value, prefix_enum.ROTATE.value, name_enum.QUADRATURE.value])
-                ]
-
-            shift_dfs.append(
-                data_obj.get_data(
-                    col_name=col_names,
+                shift_df, shift_prefix = data_obj.IQ_shift(
+                    prefix=rotate_prefix,
+                    shift_I=shifts,
+                    name=[prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums],
                     include=include,
                     exclude=exclude,
-                    strict=True,
+                    recalc=recalc,
                 )
-            )
-        return shift_dfs
+                shift_dfs.append(shift_df)
+
+            ret_pre = shift_prefix
+            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+            return shift_dfs, ret_pre if ret_prefix else shift_dfs        
 
     def IQ_circle_rotate(
         self,
@@ -1246,70 +779,51 @@ class Detector:
         mean_points = ccat_df.check_args(mean_points, num_prefix, int)
         rotation = ccat_df.check_args(rotation, num_prefix, str)
 
-        angles, rot_names = [[]] * num_prefix, [""] * num_prefix
-        for i, (pre, name_enum, prefix_enum, rot, mean_point) in enumerate(
-            zip(prefix, name_enums, prefix_enums, rotation, mean_points)
-        ):
-            if rot == "mismatch":
-                angles[i] = (
-                    self.targ.mismatch_angle(
-                        pre,
-                        mean_points=mean_point,
-                        include=include,
-                        exclude=exclude,
-                        recalc=recalc,
-                    )
-                    .to_numpy()
-                    .T[1]
-                )
-                rot_names[i] = prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value
-            elif rot == "timestream":
-                angles[i] = (
-                    self.stream.timestream_angle(
-                        pre,
-                        include=include,
-                        exclude=exclude,
-                        recalc=recalc,
-                    )
-                    .to_numpy()
-                    .T[1]
-                )
-                rot_names[i] = prefix_enum.CENTER_TIMESTREAM.value
-            else:
-                error = f"Invalid rotation '{rot}' specified; Must be one of 'mismatch' or 'timestream'."
-                log.log("ERROR", error)
-                raise ValueError(error)
-
-        data_objs = self._get_data_obj(data)
-        rotation_dfs = []
-        for data_obj in data_objs:
-            data_obj.IQ_rotate(
-                prefix=prefix,
-                angle=angles,
-                name=rot_names,
-                include=include,
-                exclude=exclude,
-                recalc=recalc,
-            )
-
-            col_names = []
-            for name_enum, prefix_enum, rot_name in zip(
-                name_enums, prefix_enums, rot_names
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            angles, rot_names = [[]] * num_prefix, [""] * num_prefix
+            for i, (pre, name_enum, prefix_enum, rot, mean_point) in enumerate(
+                zip(prefix, name_enums, prefix_enums, rotation, mean_points)
             ):
-                col_names += [
-                    "_".join([rot_name, prefix_enum.ROTATE.value, name_enum.IN_PHASE.value]),
-                    "_".join([rot_name, prefix_enum.ROTATE.value, name_enum.QUADRATURE.value])
-                ]
+                if rot.lower() == "mismatch":
+                    mismatch_df, _ = self.targ.mismatch_angle(
+                            pre,
+                            mean_points=mean_point,
+                            include=include,
+                            exclude=exclude,
+                            recalc=recalc,
+                        )
+                    angles[i] = mismatch_df.to_numpy().T[1]
+                    rot_names[i] = prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value
+                elif rot.lower() == "timestream":
+                    stream_df, _ = self.stream.timestream_angle(pre,
+                                                            include=include,
+                                                            exclude=exclude,
+                                                            recalc=recalc,
+                                                        )
+                    angles[i] = stream_df.to_numpy().T[1]
+                    rot_names[i] = prefix_enum.CENTER_TIMESTREAM.value
+                else:
+                    error = f"Invalid rotation '{rot}' specified; Must be one of 'mismatch' or 'timestream'."
+                    log.log("ERROR", error)
+                    raise ValueError(error)
 
-            rotation_dfs.append(
-                data_obj.get_data(
-                    col_name=col_names,
+            data_objs = self._get_data_obj(data)
+            rotation_dfs = []
+            for data_obj in data_objs:
+                rotate_df, rotate_prefix = data_obj.IQ_rotate(
+                    prefix=prefix,
+                    angle=angles,
+                    name=rot_names,
                     include=include,
                     exclude=exclude,
-                    strict=True,
+                    recalc=recalc,
                 )
-            )
-        return rotation_dfs
+                rotation_dfs.append(rotate_df)
+
+            ret_pre = rotate_prefix
+            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+            return rotation_dfs, ret_pre if ret_prefix else rotation_dfs        
 
     def IQ_circle_natural(
                           self,
@@ -1336,33 +850,38 @@ class Detector:
         num_prefix = len(name_enums)
         mean_points = ccat_df.check_args(mean_points, num_prefix, int)
 
-        dists = [None]*num_prefix
-        for i, (pre, mean_point) in enumerate(zip(prefix, mean_points)):
-            dist = self.targ.mismatch_dist(prefix=pre, 
-                                          mean_points=mean_point, 
-                                          include=include, 
-                                          exclude=exclude, 
-                                          recalc=recalc).to_numpy().T[1]
-            dists[i] = 1 - dist
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            dists = [None]*num_prefix
+            for i, (pre, mean_point) in enumerate(zip(prefix, mean_points)):
+                dist, _ = self.targ.mismatch_dist(prefix=pre, 
+                                                  mean_points=mean_point, 
+                                                  include=include, 
+                                                  exclude=exclude, 
+                                                  recalc=recalc)
+                dists[i] = 1 - dist.to_numpy().T[1]
 
-        data_objs = self._get_data_obj(data)
-        nat_dfs = [None]*len(data_objs)
-        for i, data_obj in enumerate(data_objs):
-            data_obj.IQ_rotate(prefix=prefix,
-                               angle=np.pi,
-                               name="half",
-                               include=include,
-                               exclude=exclude,
-                               recalc=recalc)
-            nat_df = data_obj.IQ_shift(prefix=[f"half_{prefix_enums[0].ROTATE.value}{'_' if pre else ''}{pre}" for pre in prefix],
-                                        shift_I = dists,
-                                        shift_Q = 0,
-                                        name = prefix_enums[0].CENTER_NATURAL.value,
-                                        include=include,
-                                        exclude=exclude,
-                                        recalc=recalc)
-            nat_dfs[i] = nat_df
-        return nat_dfs
+            data_objs = self._get_data_obj(data)
+            nat_dfs = [None]*len(data_objs)
+            for i, data_obj in enumerate(data_objs):
+                _, rotate_prefix = data_obj.IQ_rotate(prefix=prefix,
+                                angle=np.pi,
+                                name="half",
+                                include=include,
+                                exclude=exclude,
+                                recalc=recalc)
+                nat_df, nat_prefix = data_obj.IQ_shift(prefix=rotate_prefix,
+                                                       shift_I = dists,
+                                                       shift_Q = 0,
+                                                       name = prefix_enums[0].CENTER_NATURAL.value,
+                                                       include=include,
+                                                       exclude=exclude,
+                                                       recalc=recalc)
+                nat_dfs[i] = nat_df
+            
+            ret_pre = nat_prefix
+            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+            return nat_dfs, ret_pre if ret_prefix else nat_dfs        
 
     def IQ_circle_tail(self,
                        prefix="",
@@ -1388,25 +907,32 @@ class Detector:
         num_prefix = len(name_enums)
         mean_points = ccat_df.check_args(mean_points, num_prefix, int)
 
-        dists = [None]*num_prefix
-        for i, (pre, mean_point) in enumerate(zip(prefix, mean_points)):
-            dists[i] = self.targ.mismatch_dist(prefix=pre, 
-                                                mean_points=mean_point, 
-                                                include=include, 
-                                                exclude=exclude, 
-                                                recalc=recalc).to_numpy().T[1]
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            dists = [None]*num_prefix
+            for i, (pre, mean_point) in enumerate(zip(prefix, mean_points)):
+                dist, _ = self.targ.mismatch_dist(prefix=pre, 
+                                                  mean_points=mean_point, 
+                                                  include=include, 
+                                                  exclude=exclude, 
+                                                  recalc=recalc)
+                dists[i] = dist.to_numpy().T[1]
 
-        data_objs = self._get_data_obj(data)
-        tail_dfs = [None]*len(data_objs)
-        for i, data_obj in enumerate(data_objs):
-            tail_dfs[i] = data_obj.IQ_shift(prefix=prefix,
-                                        shift_I = dists,
-                                        shift_Q = 0,
-                                        name = prefix_enums[0].CENTER_TAIL.value,
-                                        include=include,
-                                        exclude=exclude,
-                                        recalc=recalc)
-        return tail_dfs
+            data_objs = self._get_data_obj(data)
+            tail_dfs = [None]*len(data_objs)
+            for i, data_obj in enumerate(data_objs):
+                tail_df, tail_prefix = data_obj.IQ_shift(prefix=prefix,
+                                            shift_I = dists,
+                                            shift_Q = 0,
+                                            name = prefix_enums[0].CENTER_TAIL.value,
+                                            include=include,
+                                            exclude=exclude,
+                                            recalc=recalc)
+                tail_dfs[i] = tail_df
+            
+            ret_pre = tail_prefix
+            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+            return tail_dfs, ret_pre if ret_prefix else tail_dfs        
 
     def IQ_circle_diss_corr(
         self,
@@ -1464,11 +990,17 @@ class Detector:
         self.targ.data = ccat_df.unnest(
             self.targ, [f"struct_{name}" for name in col_names]
         )
-        return self.targ.get_data(
+
+        ret_df = self.targ.get_data(
             col_name=col_names,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.DISSIPATION_CORRECTION.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     # Timesteream conversion
     # ---------------------
@@ -1493,7 +1025,8 @@ class Detector:
             phase_up (float): Upper bound of phase to use for interpolation. Defaults to +pi
             k (int): Degree of polynomials to use for interpolation. Defaults to degree 3.
         """
-
+        
+        if isinstance(prefix, str): prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["frequency", "phase"],
             prefix,
@@ -1541,12 +1074,18 @@ class Detector:
             self.targ, [f"struct_{name}" for name in col_name]
         )
 
-        return self.targ.get_data(
+        ret_df = self.targ.get_data(
             col_name=col_name,
             include=include,
             exclude=exclude,
             strict=True
         )
+
+        ret_pre = [(f"{self.stream.timestamp}_{prefix_enum.SPLINE.value}_{name_enum.FREQUENCY.value}_to{'_' if pre else ''}{pre}", 
+                   f"{self.stream.timestamp}_{prefix_enum.SPLINE.value}_{name_enum.PHASE.value}_to") for pre, prefix_enum, name_enum in zip(prefix, prefix_enums, name_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
 
     def phase_to_f(
         self,
@@ -1641,12 +1180,14 @@ class Detector:
         self.stream.data = ccat_df.unnest(
             self.stream, [f"struct_{name}" for name in col_name]
         )
-        return self.stream.get_data(
+        ret_df = self.stream.get_data(
             col_name=col_name,
             include=include,
             exclude=exclude,
             strict=True
         )
+        
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df   
 
     def frac_f(
         self,
@@ -1713,9 +1254,9 @@ class Detector:
                     strict=True
                     ))
 
-        return frac_f_dfs
+        return frac_f_dfs, prefix if self.analysis_cfg['runtime']['return_prefix'] else frac_f_dfs   
 
-    def linar_frac_f(self,
+    def linear_frac_f(self,
                       prefix: str | list[str] = "",
                       circle_fit_prefix: str | list[str] = "circle_fit_unwind_rotate",
                       mag_prefix: str = "",
@@ -1757,19 +1298,17 @@ class Detector:
 
         # Estimate detector total quality factors
         # ---------------------------------------
-        Qs = [[]]*num_prefix
+        Qs, return_prefix = [[]]*num_prefix, self.analysis_cfg['runtime']['return_prefix']
         for i, (mag_pre, mean_point) in enumerate(zip(mag_prefix, mean_points)):
-            f_low, f_mid, f_high = (
-                self.targ.fwhm(
+            fwhm_df = self.targ.fwhm(
                     mag_pre,
                     mean_points=mean_point,
                     include=include,
                     exclude=exclude,
                     recalc=recalc,
                 )
-                .to_numpy()
-                .T[4:]
-            )
+            if return_prefix: fwhm_df = fwhm_df[0]
+            f_low, f_mid, f_high = fwhm_df.to_numpy().T[4:]
             fwhm = f_high - f_low
             Qs[i] = f_mid/fwhm
 
@@ -1798,360 +1337,7 @@ class Detector:
     # ==================#
     # Analysis Methods #
     # ==================#
-
-    @staticmethod
-    def _calc_complex_fit(
-        schema,
-        *args,
-        tones: list[int],
-        padding: int = 4,
-        recalc: bool = False,
-        col_enum=None,
-        prefix_enum=None,
-    ):
-        """Fit using resonator_model_v3"""
-
-        def _complex_fit(df):
-            data = ccat_mp.struct_batches(df, 3, batch_len, max_workers)
-
-            results_dict = {}
-            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
-                future_to_batch = {
-                    executor.submit(
-                        ccat_mp.process_batches,
-                        resonator_model_v3.full_fit,  # noqa: F821
-                        data[i][0],
-                        data[i][1],
-                        data[i][2],
-                        nonlinear=nonlinear[inds],
-                        asymm=asymm[inds],
-                        fix_cable=fix_cable[inds],
-                        #fix_thetaQ=fix_thetaQ[inds],
-                    ): (i, all_tones[inds])
-                    for i, inds in enumerate(calc_ind)
-                }
-
-                for future in concurrent.futures.as_completed(future_to_batch):
-                    i, tones = future_to_batch[future]
-                    f_cols, fit_cols = data[i][0], future.result()
-                    for tone, f_col, fit_col in zip(tones, f_cols, fit_cols):
-                        if isinstance(fit_col, Exception):
-                            log.log(
-                                "DEBUG",
-                                "Fit failed for tone %s with exception: %s",
-                                tone,
-                                fit_col,
-                            )
-                            best_fit, cable_fit = np.zeros(df.len()), np.zeros(df.len())
-                            best_vals_dict = {}
-                        else:
-                            best_fit = fit_col.best_fit
-                            cable_fit = resonator_model_v3.fine_s21_model(  # noqa: F821
-                                f_col, fit_col.params, cable=True
-                            )
-                            best_vals_dict = {
-                                f"{fit_name_col}_{k}": float(v)
-                                for k, v in fit_col.best_values.items()
-                            }
-                        det.targ._properties[ccat_df.add_tone("det", tone, padding)] = (
-                            best_vals_dict
-                        )
-
-                        for name, val in zip(
-                            return_col,
-                            [
-                                best_fit.real,
-                                best_fit.imag,
-                                cable_fit.real,
-                                cable_fit.imag,
-                            ],
-                        ):
-                            results_dict[ccat_df.add_tone(name, tone, padding)] = val
-            return ccat_mp.package_results(results_dict)
-
-        if not len(args) == 7:
-            log.log(
-                "ERROR",
-                "det, nonlinear, asymm, fix_cable, and fix_thetaQ, max_workers, and ex are required arguments.",
-            )
-
-        det, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, ex = np.array(args)
-        det, max_workers, ex = det[0], int(max_workers[0]), ex[0]
-        all_tones = np.array(tones)
-
-        f_col, I_col, Q_col, fit_name_col, cable_col = (
-            col_enum.FREQUENCY.value,
-            col_enum.IN_PHASE.value,
-            col_enum.QUADRATURE.value,
-            prefix_enum.COMPLEX_FIT.value,
-            prefix_enum.COMPLEX_FIT_CABLE.value,
-        )
-
-        return_col = [
-            f"{fit_name_col}_{I_col}",
-            f"{fit_name_col}_{Q_col}",
-            f"{cable_col}_{fit_name_col}_{I_col}",
-            f"{cable_col}_{fit_name_col}_{Q_col}",
-        ]
-        return_type = [pl.Float64, pl.Float64, pl.Float64, pl.Float64]
-        expr, calc_ind, batch_len = ccat_mp.create_batches(
-            _complex_fit,
-            tones,
-            schema,
-            input_col=[f_col, I_col, Q_col],
-            return_col=return_col,
-            return_type=return_type,
-            padding=padding,
-            max_workers=max_workers,
-            recalc=recalc,
-        )
-        return expr
-
-    @staticmethod
-    def _calc_phase_fit(
-        schema,
-        *args,
-        tones: list[int],
-        padding: int = 4,
-        recalc: bool = False,
-        col_enum=None,
-        prefix_enum=None,
-    ):
-        def _phase_fit(df):
-            data = ccat_mp.struct_batches(df, 4, batch_len, max_workers)
-
-            results_dict = {}
-            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
-                future_to_batch = {
-                    executor.submit(
-                        ccat_mp.process_batches,
-                        ccat_fit.phase_fit,
-                        data[i][0],
-                        data[i][1],
-                        I=data[i][2],
-                        Q=data[i][3],
-                        nonlinear=nonlinear[inds],
-                        normalized=normalized[inds],
-                        method=method[inds],
-                        params=params[inds],
-                        R=radius[inds],
-                    ): all_tones[inds]
-                    for i, inds in enumerate(calc_ind)
-                }
-
-                fit_result = det.fit_result.get(f"{fit_name_col}_{fit_result_col}", [None]*det.targ.num_tones)
-                for future in concurrent.futures.as_completed(future_to_batch):
-                    tones = future_to_batch[future]
-                    fit_cols = future.result()
-                    for tone, fit_col in zip(tones, fit_cols):
-                        if isinstance(fit_col, Exception):
-                            log.log(
-                                "INFO",
-                                "Fit failed for tone %s with exception: %s",
-                                tone,
-                                fit_col,
-                            )
-                            best_fit = np.full(df.len(), np.nan)
-                            properties_dict = {}
-                        else:
-                            best_fit = np.full(df.len(), np.nan)
-                            mask = fit_col.mask
-                            best_fit[mask] = fit_col.best_fit
-                            best_vals_dict = {
-                                f"{fit_name_col}_{param_names[k]}": float(v)
-                                for k, v in fit_col.best_values.items()
-                            }
-                            init_vals_dict = {
-                                f"init_{fit_name_col}_{param_names[k]}": float(v)
-                                for k, v in fit_col.init_values.items()
-                            }
-                            fit_result[tone] = fit_col
-
-                            properties_dict = best_vals_dict | init_vals_dict
-                        det.targ._properties[ccat_df.add_tone("det", tone, padding)] = (
-                            properties_dict
-                        )
-                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
-                            best_fit
-                        )
-                det.fit_result[f"{fit_name_col}_{fit_result_col}"] = fit_result
-            return ccat_mp.package_results(results_dict)
-
-        if not len(args) == 8:
-            log.log(
-                "ERROR",
-                "nonlinear, params, window, and max_workers are required arguments.",
-            )
-
-        (
-            det,
-            radius,
-            nonlinear,
-            normalized,
-            method,
-            params_list,
-            max_workers,
-            ex,
-        ) = args
-        params = np.empty(len(params_list), dtype=object)
-        for i in range(len(params_list)):
-            params[i] = params_list[i]
-        radius, nonlinear, normalized, method = (
-            np.array(radius),
-            np.array(nonlinear),
-            np.array(normalized),
-            np.array(method),
-        )
-        det, max_workers, ex = (
-            det[0],
-            int(max_workers[0]),
-            ex[0],
-        )
-        all_tones = np.array(tones)
-
-        f_col, I_col, Q_col, phase_col, fit_name_col, fit_result_col = (
-            col_enum.FREQUENCY.value,
-            col_enum.IN_PHASE.value,
-            col_enum.QUADRATURE.value,
-            col_enum.PHASE.value,
-            prefix_enum.PHASE_FIT.value,
-            col_enum.FIT_RESULT.value
-        )
-
-        param_names = {
-            "f_0": col_enum.RESONANT_FREQUENCY.value,
-            "Qr": col_enum.TOTAL_QUALITY_FACTOR.value,
-            "theta_0": col_enum.PHASE_FIT_THETA.value,
-            "beta": col_enum.PHASE_FIT_BETA.value,
-            #"gamma": col_enum.PHASE_FIT_GAMMA.value,
-            #"delta": col_enum.PHASE_FIT_DELTA.value,
-            "R": col_enum.IQ_CIRCLE_RADIUS.value,
-        }
-
-        return_col, return_type = [f"{fit_name_col}_{phase_col}"], [pl.Float64]
-        expr, calc_ind, batch_len = ccat_mp.create_batches(
-            _phase_fit,
-            tones,
-            schema,
-            input_col=[f_col, phase_col, I_col, Q_col],
-            return_col=return_col,
-            return_type=return_type,
-            padding=padding,
-            max_workers=max_workers,
-            recalc=recalc,
-        )
-        return expr
-
-    @staticmethod
-    def _calc_IQ_circle_fit(
-        schema,
-        *args,
-        tones: list[int],
-        padding: int = 4,
-        recalc: bool = False,
-        col_enum=None,
-        prefix_enum=None,
-    ):
-        def _circle_fit(df):
-            data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
-
-            angles = np.linspace(0, 2 * np.pi, df.len())
-            sin = np.sin(angles)
-            cos = np.cos(angles)
-
-            results_dict = {}
-            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
-                future_to_batch = {
-                    executor.submit(
-                        ccat_mp.process_batches,
-                        ccat_fit.circle_fit,
-                        data[i][0],
-                        data[i][1],
-                        full_output=[True] * len(all_tones[inds]),
-                        bounds=bounds[inds],
-                        loss=loss[inds],
-                        f_scale=f_scale[inds],
-                        method=method[inds],
-                    ): all_tones[inds]
-                    for i, inds in enumerate(calc_ind)
-                }
-
-                for future in concurrent.futures.as_completed(future_to_batch):
-                    tones = future_to_batch[future]
-                    fit_cols = future.result()
-                    for tone, fit_col in zip(tones, fit_cols):
-                        properties_dict = {}
-                        if isinstance(fit_col, Exception):
-                            log.log(
-                                "DEBUG",
-                                "Fit failed for tone %s with exception: %s",
-                                tone,
-                                fit_col,
-                            )
-                            fit_I, fit_Q = (
-                                np.full(df.len(), np.nan),
-                                np.full(df.len(), np.nan),
-                            )
-                        else:
-                            I_c, Q_c, R, result = fit_col
-                            fit_I, fit_Q = R * cos + I_c, R * sin + Q_c
-                            properties_dict[f"{fit_name_col}_{center_I_col}"] = I_c
-                            properties_dict[f"{fit_name_col}_{center_Q_col}"] = Q_c
-                            properties_dict[f"{fit_name_col}_{R_col}"] = R
-
-                        det.targ._properties[ccat_df.add_tone("det", tone, padding)] = (
-                            properties_dict
-                        )
-                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
-                            fit_I
-                        )
-                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = (
-                            fit_Q
-                        )
-            return ccat_mp.package_results(results_dict)
-
-        if not len(args) == 7:
-            log.log(
-                "ERROR",
-                "det, bounds, loss, f_scale, method, and max_workers are required arguments.",
-            )
-        det, bounds, loss, f_scale, method, max_workers, ex = np.array(args)
-        det, max_workers, ex = (
-            det[0],
-            int(max_workers[0]),
-            ex[0],
-        )
-        all_tones = np.array(tones)
-
-        I_col, Q_col, fit_name_col = (
-            col_enum.IN_PHASE.value,
-            col_enum.QUADRATURE.value,
-            prefix_enum.IQ_CIRCLE_FIT.value,
-        )
-
-        center_I_col, center_Q_col, R_col = (
-            f"{col_enum.IQ_CIRCLE_CENTER.value}_{I_col.split('_')[-1]}",
-            f"{col_enum.IQ_CIRCLE_CENTER.value}_{Q_col.split('_')[-1]}",
-            col_enum.IQ_CIRCLE_RADIUS.value,
-        )
-
-        return_col, return_type = (
-            [f"{fit_name_col}_{I_col}", f"{fit_name_col}_{Q_col}"],
-            [pl.Float64, pl.Float64],
-        )
-        expr, calc_ind, batch_len = ccat_mp.create_batches(
-            _circle_fit,
-            tones,
-            schema,
-            input_col=[I_col, Q_col],
-            return_col=return_col,
-            return_type=return_type,
-            padding=padding,
-            max_workers=max_workers,
-            recalc=recalc,
-        )
-        return expr
-
+    
     @staticmethod
     def _calc_phase_spline(
         schema,

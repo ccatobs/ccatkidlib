@@ -20,6 +20,7 @@ import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.fit.fit as ccat_fit
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 
+from ccatkidlib.analysis.utils.config import return_prefix
 from ccatkidlib.analysis.core.sweep import Sweep
 from ccatkidlib.analysis.fit.fit import linear_fit
 
@@ -239,6 +240,7 @@ class Target(Sweep):
         '''
         '''
 
+        if isinstance(prefix, str): prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["phase"],
             prefix,
@@ -272,12 +274,17 @@ class Target(Sweep):
         self.data = ccat_df.unnest(
             self, [f"struct_{name}" for name in col_name]
         )
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=col_name,
             include=include,
             exclude=exclude,
             strict=True
         )
+
+        ret_pre = [f"{prefix_enum.STITCH.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
 
     def res_trim(self,
                     col_name: str,
@@ -314,36 +321,34 @@ class Target(Sweep):
         mean_points = ccat_df.check_args(mean_points, num_prefix, int)
         mag_prefix = ccat_df.check_args(mag_prefix, num_prefix, str)
 
-        lower_bounds, upper_bounds = [[]] * num_prefix, [[]] * num_prefix
-        for i, (mag_pre, mean_point, win) in enumerate(
-            zip(mag_prefix, mean_points, window)
-        ):
-            HM_low, HM_mid, HM_high = (
-                self.fwhm(
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            lower_bounds, upper_bounds = [[]] * num_prefix, [[]] * num_prefix
+            for i, (mag_pre, mean_point, win) in enumerate(
+                zip(mag_prefix, mean_points, window)
+            ):
+                fwhm_df, _ = self.fwhm(
                     mag_pre,
                     mean_points=mean_point,
                     include=include,
                     exclude=exclude,
                     recalc=recalc,
                 )
-                .to_numpy()
-                .T[1:4]
-            )
+                HM_low, HM_mid, HM_high = fwhm_df.to_numpy().T[1:4]
 
-            lower_bounds[i] = np.maximum((HM_mid - (HM_mid - HM_low) * win).astype(int), 0)
-            upper_bounds[i] = (HM_mid + (HM_high - HM_mid) * win).astype(int)
+                lower_bounds[i] = np.maximum((HM_mid - (HM_mid - HM_low) * win).astype(int), 0)
+                upper_bounds[i] = (HM_mid + (HM_high - HM_mid) * win).astype(int)
 
-        return self.trim(col_name=col_name,
-                         prefix=prefix,
-                         lower_index=lower_bounds,
-                         upper_index=upper_bounds,
-                         name=[prefix_enum.TRIM_RESONANCE.value if invert else prefix_enum.TRIM_TAIL.value for prefix_enum in prefix_enums],
-                         invert=invert,
-                         include=include,
-                         exclude=exclude,
-                         recalc=recalc,
-                        )
-
+            return self.trim(col_name=col_name,
+                            prefix=prefix,
+                            lower_index=lower_bounds,
+                            upper_index=upper_bounds,
+                            name=[prefix_enum.TRIM_RESONANCE.value if invert else prefix_enum.TRIM_TAIL.value for prefix_enum in prefix_enums],
+                            invert=invert,
+                            include=include,
+                            exclude=exclude,
+                            recalc=recalc,
+                            )
+        
     def res_IQ_trim(self,
                 prefix: str | list[str] = "",
                 window: float | list[float] = 1.5,
@@ -368,34 +373,35 @@ class Target(Sweep):
         """
 
         name_dict = self.analysis_cfg['convention']['name']
-        I_df = self.res_trim(name_dict['in_phase'],
-                   prefix=prefix,
-                   window=window,
-                   mean_points=mean_points,
-                   mag_prefix=mag_prefix,
-                   invert=invert,
-                   include=include,
-                   exclude=exclude,
-                   recalc=recalc)
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            I_df, I_pre = self.res_trim(name_dict['in_phase'],
+                    prefix=prefix,
+                    window=window,
+                    mean_points=mean_points,
+                    mag_prefix=mag_prefix,
+                    invert=invert,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc)
 
-        Q_df = self.res_trim(name_dict['quadrature'],
-                   prefix=prefix,
-                   window=window,
-                   mean_points=mean_points,
-                   mag_prefix=mag_prefix,
-                   invert=invert,
-                   include=include,
-                   exclude=exclude,
-                   recalc=recalc)
+            Q_df, Q_pre = self.res_trim(name_dict['quadrature'],
+                    prefix=prefix,
+                    window=window,
+                    mean_points=mean_points,
+                    mag_prefix=mag_prefix,
+                    invert=invert,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc)
 
-        IQ_df = pl.concat([I_df, Q_df], how='horizontal')
-        return IQ_df
+            IQ_df = pl.concat([I_df, Q_df], how='horizontal')
+            return IQ_df, I_pre if ret_prefix else IQ_df
 
     def linewidth(self,
-                        prefix: str | list[str] = "",
-                        include: int | list[int] | None = None,
-                        exclude: int | list[int] | None = None,
-                        recalc: bool = False,):
+                  prefix: str | list[str] = "",
+                  include: int | list[int] | None = None,
+                  exclude: int | list[int] | None = None,
+                  recalc: bool = False,):
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "linewidth"], prefix, [], self.analysis_cfg
         )
@@ -408,12 +414,14 @@ class Target(Sweep):
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=[name_enum.LINEWIDTH.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
             strict=True,
         )
+
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
     
     def coupling_linewidth(self,
                             prefix: str | list[str] = "",
@@ -432,12 +440,14 @@ class Target(Sweep):
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        return self.get_data(
+        ret_df = self.get_data(
             col_name=[name_enum.COUPLING_LINEWIDTH.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
             strict=True,
         )
+
+        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
     
     def linewidth_shift(self,
                         prefix: str | list[str] = "",
@@ -471,55 +481,496 @@ class Target(Sweep):
         res_trim_window = ccat_df.check_args(res_trim_window, num_prefix, float)
         tail_trim_window = ccat_df.check_args(tail_trim_window, num_prefix, float)
         mean_points = ccat_df.check_args(mean_points, num_prefix, int)
-
-        f_col = name_enums[0].FREQUENCY.value
-        ms, bs = [[]]*num_prefix, [[]]*num_prefix
-        for i, (pre, mag_pre, mm, bb, clw, res_win, tail_win, mean_point) in enumerate(zip(prefix, mag_prefix, m, b, coupling_linewidth, res_trim_window, tail_trim_window, mean_points)):
-            lw_col = name_enums[0].COUPLING_LINEWIDTH.value if clw else name_enums[0].LINEWIDTH.value 
-            if mm is None or bb is None:
-                self.res_trim(col_name=lw_col, prefix=pre, mag_prefix=mag_pre, 
-                              window=tail_win, mean_points=mean_point, 
-                              invert = False,
-                              include=include, exclude = exclude, recalc=recalc)
-                tail_prefix = f"{prefix_enums[0].TRIM_TAIL.value}_{prefix_enums[0].TRIM.value}{'_' if pre else ''}{pre}"
-                self.res_trim(col_name=lw_col, prefix=tail_prefix, mag_prefix=mag_pre, 
-                              window=res_win, mean_points=mean_point, 
-                              invert=True, 
-                              include=include, exclude=exclude, recalc=recalc)
-                res_prefix = "_".join([prefix_enums[0].TRIM_RESONANCE.value, prefix_enums[0].TRIM.value, tail_prefix])
-                self.linear_fit(x_col_name=f_col, 
-                                y_col_name=lw_col,
-                                y_prefix=res_prefix,
-                                include=include, exclude=exclude, recalc=recalc,
-                                max_workers=max_workers, ex=ex)
-                fit_prefix = "_".join([prefix_enums[0].LINEAR_FIT.value, res_prefix, lw_col, f_col])
-                mm, bb = self.get_properties(col_name = ["_".join([fit_prefix, name_enums[0].LINEAR_FIT_SLOPE.value]),
-                                                         "_".join([fit_prefix, name_enums[0].LINEAR_FIT_INTERCEPT.value])],
-                                             include=include, exclude=exclude, strict=True).to_numpy().T[1:]
-            ms[i], bs[i] = mm, bb
-            y_0 = [-1*(mmm*f + bbb) for f, mmm, bbb in zip(self.get_data(f_col, include=include, exclude=exclude, strict=True).to_numpy().T, mm, bb)]
-            self.shift(col_name=lw_col, prefix=pre, 
-                       shift=y_0, name=prefix_enums[0].LINEAR.value, 
-                       include=include, exclude=exclude, recalc=recalc)
         
-        shift_df = self.get_data(
-            col_name=[
-                f"{prefix_enums[0].LINEAR.value}_{prefix_enums[0].TRANSLATE.value}_{pre}{'_' if pre else ''}{name_enums[0].COUPLING_LINEWIDTH.value if clw else name_enums[0].LINEWIDTH.value}"
-                for pre, clw in zip(prefix, coupling_linewidth)
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            f_col = name_enums[0].FREQUENCY.value
+            ms, bs = [[]]*num_prefix, [[]]*num_prefix
+            shift_dfs, shift_pres = [[]]*num_prefix, [[]]*num_prefix
+            for i, (pre, mag_pre, mm, bb, clw, res_win, tail_win, mean_point) in enumerate(zip(prefix, mag_prefix, m, b, coupling_linewidth, res_trim_window, tail_trim_window, mean_points)):
+                lw_col = name_enums[0].COUPLING_LINEWIDTH.value if clw else name_enums[0].LINEWIDTH.value 
+                if mm is None or bb is None:
+                    _, tail_prefix = self.res_trim(col_name=lw_col, prefix=pre, mag_prefix=mag_pre, 
+                                window=tail_win, mean_points=mean_point, 
+                                invert = False,
+                                include=include, exclude = exclude, recalc=recalc)
+
+                    _, res_prefix = self.res_trim(col_name=lw_col, prefix=tail_prefix, mag_prefix=mag_pre, 
+                                window=res_win, mean_points=mean_point, 
+                                invert=True, 
+                                include=include, exclude=exclude, recalc=recalc)
+
+                    _, fit_prefix = self.linear_fit(x_col_name=f_col, 
+                                    y_col_name=lw_col,
+                                    y_prefix=res_prefix,
+                                    include=include, exclude=exclude, recalc=recalc,
+                                    max_workers=max_workers, ex=ex)
+
+                    mm, bb = self.get_properties(col_name = ["_".join([fit_prefix, name_enums[0].LINEAR_FIT_SLOPE.value]),
+                                                             "_".join([fit_prefix, name_enums[0].LINEAR_FIT_INTERCEPT.value])],
+                                                include=include, exclude=exclude, strict=True).to_numpy().T[1:]
+                
+                ms[i], bs[i] = mm, bb
+                y_0 = [-1*(mmm*f + bbb) for f, mmm, bbb in zip(self.get_data(f_col, include=include, exclude=exclude, strict=True).to_numpy().T, mm, bb)]
+                shift_dfs[i], shift_pres[i] = self.shift(col_name=lw_col, prefix=pre, 
+                                                         shift=y_0, name=prefix_enums[0].LINEAR.value, 
+                                                         include=include, exclude=exclude, recalc=recalc)
+
+            ret_df, ret_pre = shift_dfs, shift_pres
+            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+            if return_fit_params:
+                return ret_df, ms, bs, ret_pre if ret_prefix else ret_df, ms, bs    
+            else:
+                return ret_df, ret_pre if ret_prefix else ret_df    
+    
+    # ======= #
+    # Fitting #
+    # ======= #
+
+    def complex_fit(
+        self,
+        prefix: str | list[str] = "",
+        nonlinear: bool | list[bool] = False,
+        asymm: bool | list[bool] = False,
+        fix_cable: bool | list[bool] = False,
+        fix_thetaQ: bool | list[bool] = False,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        max_workers: int = 1,
+        ex=None,
+    ) -> pl.DataFrame:
+        """
+        Fit target sweep using complex forward transmission data (*z = I + iQ*)
+
+        Args:
+            nonlinear (bool, optional): Whether to perform a nonlinear fit. Defaults to *False*
+            asymm (bool, optional): Whether to perform a asymmetric fit. Defaults to *False*
+            fix_cable (bool, optional): Whether to vary cable parameters for fit. Defaults to *False*: parameters are varied
+            fix_thetaQ (bool, optional): Whether to vary impedance mismatch angle and coupling quality factor for fit. Defaults to *False*: parameters are varied
+        Returns:
+            return (pl.DataFrame): Polars DataFrame with fit I and Q data
+        """
+
+        if self.fit_dir not in sys.path:
+            sys.path.append(self.fit_dir)
+        import resonator_model_v3
+
+        globals()["resonator_model_v3"] = resonator_model_v3
+
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [
+                "frequency",
+                "in_phase",
+                "quadrature",
+                "internal_quality_factor",
+                "coupling_quality_factor",
+                "real_external_quality_factor",
+                "imag_external_quality_factor",
+                "total_quality_factor",
+                "cable_delay",
             ],
+            prefix,
+            ["complex_fit", "complex_fit_cable"],
+            self.analysis_cfg,
+            no_prefix=["frequency"],
+        )
+
+        num_prefix = len(name_enums)
+        nonlinear = ccat_df.check_args(nonlinear, num_prefix, bool)
+        asymm = ccat_df.check_args(asymm, num_prefix, bool)
+        fix_cable = ccat_df.check_args(fix_cable, num_prefix, bool)
+        fix_thetaQ = ccat_df.check_args(fix_thetaQ, num_prefix, bool)
+
+        args = [
+            [
+                self,
+                nonlin,
+                asym,
+                cable,
+                thetaQ,
+                ccat_mp.check_max_workers(max_workers),
+                ex,
+            ]
+            for nonlin, asym, cable, thetaQ in zip(
+                nonlinear, asymm, fix_cable, fix_thetaQ
+            )
+        ]
+        self.properties
+        self.transform(
+            Target._calc_complex_fit,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
+        )
+
+        col_names = []
+        for prefix_enum, name_enum in zip(prefix_enums, name_enums):
+            col_names += [
+                f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.IN_PHASE.value}",
+                f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.QUADRATURE.value}",
+            ]
+
+            # Calculate Q_c and Q_i. Convert cable delay into nanaseconds
+            self._properties_df = (
+                self.properties.lazy()
+                .with_columns(
+                    (
+                        (
+                            pl.col(
+                                f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.REAL_EXTERNAL_QUALITY_FACTOR.value}"
+                            )
+                            / (
+                                pl.col(
+                                    f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.REAL_EXTERNAL_QUALITY_FACTOR.value}"
+                                )
+                                ** 2
+                                + pl.col(
+                                    f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.IMAG_EXTERNAL_QUALITY_FACTOR.value}"
+                                )
+                                ** 2
+                            )
+                        )
+                        ** -1
+                    ).alias(
+                        f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.COUPLING_QUALITY_FACTOR.value}"
+                    )
+                )  # Calculate Q_c
+                .with_columns(
+                    [
+                        (
+                            (
+                                1
+                                / pl.col(
+                                    f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
+                                )
+                                - 1
+                                / pl.col(
+                                    f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.COUPLING_QUALITY_FACTOR.value}"
+                                )
+                            )
+                            ** -1
+                        ).alias(
+                            f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.INTERNAL_QUALITY_FACTOR.value}"
+                        ),  # Calculate Q_i
+                        (
+                            -1e9
+                            * pl.col(
+                                f"{prefix_enum.COMPLEX_FIT.value}_{name_enum.CABLE_DELAY.value}"
+                            )
+                        ).alias(
+                            f"ns_{prefix_enum.COMPLEX_FIT.value}_{name_enum.CABLE_DELAY.value}"
+                        ),
+                    ]
+                )  # Convert cable delay to nanoseconds
+                .collect()
+            )
+
+        self.data = ccat_df.unnest(
+            self, [f"struct_{name}" for name in col_names]
+        )
+        return self.get_data(
+            col_name=col_names,
+            include=include,
+            exclude=exclude,
+            strict=True,
+        )
+
+    def phase_fit(
+        self,
+        prefix: str
+        | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
+        circle_fit_prefix: str = "circle_fit_unwind_rotate",
+        nonlinear: bool = False,
+        normalized = False,
+        method: str = "least_squares",
+        params: lmfit.Parameters = None,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        max_workers: int = 1,
+        ex=None,
+    ) -> pl.DataFrame:
+        """
+        Fit target sweep using phase data (*arctan(Q/I)*)
+
+        """
+
+        if isinstance(prefix, str): prefix = [prefix]
+        name_enums, prefix_enums = ccat_df.create_enums(
+            [
+                "frequency",
+                "in_phase",
+                "quadrature",
+                "phase",
+                "IQ_circle_radius",
+                "internal_quality_factor",
+                "coupling_quality_factor",
+                "total_quality_factor",
+                "phase_fit_beta",
+                #"phase_fit_gamma",
+                #"phase_fit_delta",
+                "phase_fit_theta",
+                "fit_result",
+                "resonant_frequency",
+                "ki_nonlinearity_parameter",
+                #"qp_nonlinearity_parameter",
+            ],
+            prefix,
+            ["phase_fit"],
+            self.analysis_cfg,
+            no_prefix=["frequency"],
+        )
+
+        num_prefix = len(name_enums)
+        params = ccat_df.check_args(params, num_prefix, lmfit.parameter.Parameters)
+        nonlinear = ccat_df.check_args(nonlinear, num_prefix, bool)
+        normalized = ccat_df.check_args(normalized, num_prefix, bool)
+        method = ccat_df.check_args(method, num_prefix, str)
+        circle_fit_prefix = ccat_df.check_args(circle_fit_prefix, num_prefix, str)
+
+        circle_name_enums, _ = ccat_df.create_enums(
+            ["IQ_circle_radius", "IQ_circle_center", "magnitude"],
+            circle_fit_prefix,
+            [],
+            self.analysis_cfg,
+            no_prefix=["magnitude"],
+        )
+
+        radii = [
+            self.get_properties(
+                col_name=name_enum.IQ_CIRCLE_RADIUS.value,
+                include=include,
+                exclude=exclude,
+                strict=True,
+            )
+            .to_numpy()
+            .T[1]
+            for name_enum in circle_name_enums
+        ]
+
+        args = [
+            [
+                self,
+                radius,
+                nonlin,
+                norm,
+                meth,
+                param,
+                ccat_mp.check_max_workers(max_workers),
+                ex,
+            ]
+            for radius, nonlin, norm, param, meth in zip(
+                radii, nonlinear, normalized, params, method
+            )
+        ]
+        self.transform(
+            [Target._calc_phase_fit] * num_prefix,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
+        )
+
+        col_names = []
+        for prefix_enum, name_enum, circle_enum, norm in zip(
+            prefix_enums, name_enums, circle_name_enums, normalized
+        ):
+            col_names += [
+                f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE.value}",
+            ]
+
+            scale_factor = 1e6 if norm else 1e-8
+            self._properties_df = (
+                self.properties.lazy()
+                .with_columns(
+                    [
+                        (
+                            scale_factor
+                            * (
+                                pl.col(
+                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_BETA.value}"
+                                )
+                                * (
+                                    2
+                                    * pl.col(
+                                        f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
+                                    )
+                                )
+                                ** 2
+                            )
+                            / (
+                                pl.col(
+                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.RESONANT_FREQUENCY.value}"
+                                )
+                                / pl.col(
+                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
+                                )
+                            )
+                        ).alias(
+                            f"{prefix_enum.PHASE_FIT.value}_{name_enum.KI_NONLINEARITY_PARAMETER.value}"
+                        ),
+                        #(
+                        #    1e6
+                        #    * (
+                        #        pl.col(
+                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_GAMMA.value}"
+                        #        )
+                        #        * (
+                        #            2
+                        #            * pl.col(
+                        #                f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
+                        #            )
+                        #        )
+                        #        ** pl.col(f"{prefix_enum.PHASE_FIT.value}_{name_enum.PHASE_FIT_DELTA.value}")
+                        #    )
+                        #    / (
+                        #        pl.col(
+                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.RESONANT_FREQUENCY.value}"
+                        #        )
+                        #        / pl.col(
+                        #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
+                        #        )
+                        #    )
+                        #).alias(
+                        #    f"{prefix_enum.PHASE_FIT.value}_{name_enum.QP_NONLINEARITY_PARAMETER.value}"
+                        #),
+                        (
+                            pl.col(
+                                f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
+                            )
+                            * (
+                                pl.col(
+                                    f"{circle_enum.IQ_CIRCLE_CENTER.value}_{circle_enum.MAGNITUDE.value}"
+                                )
+                                + pl.col(
+                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
+                                )
+                            )
+                            / (
+                                2
+                                * pl.col(
+                                    f"{prefix_enum.PHASE_FIT.value}_{name_enum.IQ_CIRCLE_RADIUS.value}"
+                                )
+                            )
+                        ).alias(
+                            f"{prefix_enum.PHASE_FIT.value}_{name_enum.COUPLING_QUALITY_FACTOR.value}"
+                        ),
+                    ]
+                )
+                .with_columns(
+                    (
+                        (
+                            1
+                            / pl.col(
+                                f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
+                            )
+                            - 1
+                            / pl.col(
+                                f"{prefix_enum.PHASE_FIT.value}_{name_enum.COUPLING_QUALITY_FACTOR.value}"
+                            )
+                        )
+                        ** -1
+                    ).alias(
+                        f"{prefix_enum.PHASE_FIT.value}_{name_enum.INTERNAL_QUALITY_FACTOR.value}"
+                    )
+                )
+                .collect()
+            )
+
+        self.data = ccat_df.unnest(
+            self, [f"struct_{name}" for name in col_names]
+        )
+        ret_df = self.get_data(
+            col_name=col_names,
             include=include,
             exclude=exclude,
         )
 
-        if return_fit_params:
-            return shift_df, ms, bs
-        else:
-            return shift_df
+        ret_pre = [f"{prefix_enum.PHASE_FIT.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
 
-    # ======= #
-    # Fitting #
-    # ======= #
-  
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+
+    def IQ_circle_fit(
+        self,
+        prefix: str | list[str] = "unwind_rotate",
+        bounds=None,
+        loss: str = "soft_l1",
+        f_scale: float = 1,
+        method: str = "trf",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        max_workers=1,
+        ex=None,
+    ) -> pl.DataFrame:
+        """
+        Fit the target sweep circle in the IQ plane
+
+        """
+        if isinstance(prefix, str): prefix = [prefix]
+        name_enums, prefix_enums = ccat_df.create_enums(
+            ["in_phase", "quadrature", "IQ_circle_radius", "IQ_circle_center"],
+            prefix,
+            ["IQ_circle_fit"],
+            self.analysis_cfg,
+        )
+
+        num_prefix = len(name_enums)
+        method = ccat_df.check_args(method, num_prefix, str)
+        loss = ccat_df.check_args(loss, num_prefix, str)
+        f_scale = ccat_df.check_args(f_scale, num_prefix, float)
+
+        args = [
+            [
+                self,
+                bounds,
+                los,
+                scale,
+                meth,
+                ccat_mp.check_max_workers(max_workers),
+                ex,
+            ]
+            for los, scale, meth in zip(loss, f_scale, method)
+        ]
+        self.properties
+        self.transform(
+            [Target._calc_IQ_circle_fit] * num_prefix,
+            *args,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            col_enum=name_enums,
+            prefix_enum=prefix_enums,
+        )
+
+        col_names = []
+        for prefix_enum, name_enum in zip(prefix_enums, name_enums):
+            col_names += [
+                f"{prefix_enum.IQ_CIRCLE_FIT.value}_{name_enum.IN_PHASE.value}",
+                f"{prefix_enum.IQ_CIRCLE_FIT.value}_{name_enum.QUADRATURE.value}",
+            ]
+
+        self.data = ccat_df.unnest(
+            self, [f"struct_{name}" for name in col_names]
+        )
+        ret_df = self.get_data(
+            col_name=col_names,
+            include=include,
+            exclude=exclude,
+        )
+
+        ret_pre = [f"{prefix_enum.IQ_CIRCLE_FIT.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+
     def linewidth_fit(
         self,
         lw_prefix: str = "",
@@ -607,11 +1058,16 @@ class Target(Sweep):
         self.data = ccat_df.unnest(
             self, [f"struct_{name}" for name in col_names]
         )
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=col_names,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [f"{prefix_enum.COUPLING_LINEWIDTH_FIT.value if clw else prefix_enum.LINEWIDTH_FIT.value}{'_' if pre else ''}{pre}" for clw, pre, prefix_enum in zip(coupling_linewidth, lw_shift_prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
  
     # ========== #
     # Properties #
@@ -639,92 +1095,95 @@ class Target(Sweep):
             exclude=exclude,
             recalc=recalc,
         )
-        if not len(include_subset) == 0:
-            self.phase(prefix=prefix, include=include, exclude=exclude, recalc=recalc)
-            with ccat_mp.optional_executor(max_workers=max(linear_fit_workers, stitch_workers), ex=ex) as ex:
-                # Stitch discontinuities in phase
-                self.stitch_phase(prefix=prefix, 
-                                include=include, 
-                                exclude=exclude, 
-                                recalc=recalc, 
-                                max_workers = stitch_workers, 
-                                ex = ex)
-                stitch_prefix = f"{prefix_enum.STITCH.value}{'_' if prefix else ''}{prefix}"
 
-                # Trim on-resonance data
-                self.res_trim(col_name=name_enum.PHASE.value,
-                        prefix=stitch_prefix,
-                        window=window,
-                        mag_prefix=mag_prefix,
-                        invert=True,
-                        include=include,
-                        exclude=exclude,
-                        recalc=recalc,
-                        )
-                trim_prefix = "_".join([prefix_enum.TRIM_RESONANCE.value, prefix_enum.TRIM.value, stitch_prefix])
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            if not len(include_subset) == 0: 
+                self.phase(prefix=prefix, include=include, exclude=exclude, recalc=recalc)
+                with ccat_mp.optional_executor(max_workers=max(linear_fit_workers, stitch_workers), ex=ex) as ex:
+                    # Stitch discontinuities in phase
+                    _, stitch_prefix = self.stitch_phase(prefix=prefix, 
+                                    include=include, 
+                                    exclude=exclude, 
+                                    recalc=recalc, 
+                                    max_workers = stitch_workers, 
+                                    ex = ex)
 
-                # Fit line to off-resonance data
-                self.linear_fit(x_col_name=name_enum.FREQUENCY.value,
-                                y_col_name=name_enum.PHASE.value,
-                                x_prefix="",
-                                y_prefix=trim_prefix,
-                                include=include,
-                                exclude=exclude,
-                                recalc=recalc,
-                                max_workers=linear_fit_workers,
-                                ex=ex)
+                    # Trim on-resonance data
+                    _, trim_prefix = self.res_trim(col_name=name_enum.PHASE.value,
+                            prefix=stitch_prefix,
+                            window=window,
+                            mag_prefix=mag_prefix,
+                            invert=True,
+                            include=include,
+                            exclude=exclude,
+                            recalc=recalc,
+                            )
 
+                    # Fit line to off-resonance data
+                    _, fit_prefix = self.linear_fit(x_col_name=name_enum.FREQUENCY.value,
+                                    y_col_name=name_enum.PHASE.value,
+                                    x_prefix="",
+                                    y_prefix=trim_prefix,
+                                    include=include,
+                                    exclude=exclude,
+                                    recalc=recalc,
+                                    max_workers=linear_fit_workers,
+                                    ex=ex)
 
-            slope_col = "_".join([prefix_enum.LINEAR_FIT.value, trim_prefix, name_enum.PHASE.value, name_enum.FREQUENCY.value, name_enum.LINEAR_FIT_SLOPE.value])
-            slope_df = self.get_properties(slope_col, include=include, exclude=exclude, strict=True)            
-            shared_cols = [cable_col] if cable_col in self._properties_df.schema else []
-            self._properties_df = ccat_df.coalesce_join(
-                self._properties_df,
-                slope_df.select(["det", (pl.col(slope_col) * pl.lit(1e9/(2*np.pi))).alias(cable_col)]),
-                "det",
-                shared_cols,
+                slope_col = "_".join([fit_prefix, name_enum.PHASE.value, name_enum.LINEAR_FIT_SLOPE.value])
+                slope_df = self.get_properties(slope_col, include=include, exclude=exclude, strict=True)            
+                shared_cols = [cable_col] if cable_col in self._properties_df.schema else []
+                self._properties_df = ccat_df.coalesce_join(
+                    self._properties_df,
+                    slope_df.select(["det", (pl.col(slope_col) * pl.lit(1e9/(2*np.pi))).alias(cable_col)]),
+                    "det",
+                    shared_cols,
+                )
+            
+            ret_df = self.get_properties(
+                cable_col,
+                include=include,
+                exclude=exclude,
+                strict=True,
             )
-        
-        return self.get_properties(
-            cable_col,
-            include=include,
-            exclude=exclude,
-            strict=True,
-        )
+
+            return ret_df, slope_col[:-1] if ret_prefix else ret_df    
 
     def cable_gain(self, prefix= "", window = 5, mean_points = 10, mag_prefix="", err_fill = 1, include=None, exclude=None, recalc=False, linear_fit_workers=1, ex=None):
+        '''
+        '''
         name_dict, prefix_dict = (
             self.analysis_cfg["convention"]["name"],
             self.analysis_cfg["convention"]["prefix"],
         )
         
-        self.mag(prefix=prefix, include=include, exclude=exclude, recalc=recalc)
-        self.res_trim(col_name=name_dict['magnitude'],
-                      prefix=prefix,
-                      mag_prefix=mag_prefix,
-                      window=window,
-                      mean_points=mean_points,
-                      invert=True,
-                      include=include,
-                      exclude=exclude,
-                      recalc=recalc,
-                      )
-        trim_prefix = "_".join([prefix_dict['trim_resonance'], prefix_dict['trim']])
-        trim_prefix = f"{trim_prefix}{'_' if prefix else ''}{prefix}"
-
-        # Fit line to off-resonance data
-        return self.linear_fit(x_col_name=name_dict['frequency'],
-                               y_col_name=name_dict['magnitude'],
-                               x_prefix="",
-                               err_fill = err_fill,
-                               y_prefix=trim_prefix,
-                               include=include,
-                               exclude=exclude,
-                               recalc=recalc,
-                               max_workers=linear_fit_workers,
-                               ex=ex)
+        with return_prefix(self.analysis_cfg) as ret_prefix:
+            self.mag(prefix=prefix, include=include, exclude=exclude, recalc=recalc)
+            _, trim_prefix = self.res_trim(col_name=name_dict['magnitude'],
+                        prefix=prefix,
+                        mag_prefix=mag_prefix,
+                        window=window,
+                        mean_points=mean_points,
+                        invert=True,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                        )
+            # Fit line to off-resonance data
+            return self.linear_fit(x_col_name=name_dict['frequency'],
+                                   y_col_name=name_dict['magnitude'],
+                                   x_prefix="",
+                                   err_fill = err_fill,
+                                   y_prefix=trim_prefix,
+                                   include=include,
+                                   exclude=exclude,
+                                   recalc=recalc,
+                                   max_workers=linear_fit_workers,
+                                   ex=ex)
 
     def mismatch_angle(self, prefix="", mean_points=10, include=None, exclude=None, recalc=False):
+        '''
+        '''
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "phase"],
             prefix,
@@ -789,11 +1248,17 @@ class Target(Sweep):
                 .collect()
             )
             ccat_df.add_data_to_properties(self, mismatch_df, mismatch_col_name)
-        return self.get_properties(
+        
+        ret_df =  self.get_properties(
             mismatch_col_name, include=include, exclude=exclude, strict=True
         )
 
+        ret_pre = f"{prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value}{'_' if prefix else ''}{prefix}"
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+
     def mismatch_dist(self, prefix="", mean_points=10, include=None, exclude=None, recalc=False):
+        '''
+        '''
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "magnitude"],
             prefix,
@@ -853,9 +1318,12 @@ class Target(Sweep):
                 .collect()
             )
             ccat_df.add_data_to_properties(self, mismatch_df, mismatch_col_name)
-        return self.get_properties(
+        ret_df =  self.get_properties(
             mismatch_col_name, include=include, exclude=exclude, strict=True
         )
+
+        ret_pre = f"{prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value}{'_' if prefix else ''}{prefix}"
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
  
     def fwhm(self, mag_prefix="", mean_points=10, peak=False, include=None, exclude=None, recalc=False):
         '''
@@ -876,13 +1344,17 @@ class Target(Sweep):
         )
 
         name_enum, prefix_enum = name_enums[0], prefix_enums[0]
+        low_prefix, mid_prefix, high_prefix = (f"{prefix_enum.LOW_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}", 
+                                               f"{prefix_enum.MIDDLE_FREQUENCY_POINT.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}", 
+                                               f"{prefix_enum.HIGH_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}")
+
         low_sample, mid_sample, high_sample, low_f, mid_f, high_f = (
-            f"{prefix_enum.LOW_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.SAMPLE.value}",
-            f"{prefix_enum.MIDDLE_FREQUENCY_POINT.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.SAMPLE.value}",
-            f"{prefix_enum.HIGH_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.SAMPLE.value}",
-            f"{prefix_enum.LOW_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.FREQUENCY.value}",
-            f"{prefix_enum.MIDDLE_FREQUENCY_POINT.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.FREQUENCY.value}",
-            f"{prefix_enum.HIGH_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}_{name_enum.FREQUENCY.value}",
+            "_".join([low_prefix,  name_enum.SAMPLE.value]),
+            "_".join([mid_prefix,  name_enum.SAMPLE.value]),
+            "_".join([high_prefix, name_enum.SAMPLE.value]),
+            "_".join([low_prefix,  name_enum.FREQUENCY.value]),
+            "_".join([mid_prefix,  name_enum.FREQUENCY.value]),
+            "_".join([high_prefix, name_enum.FREQUENCY.value]),
         )
 
         include_subset = ccat_df.check_properties(
@@ -941,16 +1413,20 @@ class Target(Sweep):
                 .agg(pl.col(mag_col).head(mean_points).mean())
                 .collect()
                 .pivot(on="low", index="det", values=mag_col)
-                .lazy()
                 .sort("det")
-                .rename(
-                    {
-                        "true": f"max_{mag_col}_low",
-                        "false": f"max_{mag_col}_high",
-                    }
-                )
-                .collect()
             )
+
+            missing_col = None
+            rename_mapping = {"true": f"max_{mag_col}_low", "false": f"max_{mag_col}_high"}
+            for k, v in rename_mapping.items():
+                if k in max_df.columns:
+                    max_df = max_df.rename({k: v})
+                else:
+                    missing_col = k
+            if missing_col is not None:
+                v = rename_mapping.pop(missing_col)
+                max_df = max_df.with_columns(pl.col(list(rename_mapping.values())[0]).alias(v))
+
             min_max_df = (
                 mag_min_df.collect()
                 .join(max_df, on="det", how="left", coalesce=True)
@@ -985,18 +1461,20 @@ class Target(Sweep):
                 self._properties_df = ccat_df.coalesce_join(
                     self._properties_df, HM_df, "det", shared_cols
                 )
-        return self.get_properties(
+        ret_df = self.get_properties(
             [low_sample, mid_sample, high_sample, low_f, mid_f, high_f],
             include=include,
             exclude=exclude,
             strict=True,
         )
+        return ret_df, (low_prefix, mid_prefix, high_prefix) if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
 
     def IQ_circle_diameter(self,
                            prefix: str | list[str] = "",
                            include: int | list[int] | None = None,
                            exclude: int | list[int] | None = None,
                            recalc: bool = False,):
+        if isinstance(prefix, str): prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "IQ_circle_diameter"], prefix, [], self.analysis_cfg
         )
@@ -1009,13 +1487,19 @@ class Target(Sweep):
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        return self.get_data(
+        
+        ret_df = self.get_data(
             col_name=[name_enum.IQ_CIRCLE_DIAMETER.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
             strict=True,
         )
-    
+
+        ret_pre = [f"{prefix_enum.IQ_CIRCLE_DIAMETER.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+
     # ================ #
     # Analysis Methods # 
     # ================ #
@@ -1218,6 +1702,362 @@ class Target(Sweep):
                 )
         return exprs
       
+
+
+    @staticmethod
+    def _calc_complex_fit(
+        schema,
+        *args,
+        tones: list[int],
+        padding: int = 4,
+        recalc: bool = False,
+        col_enum=None,
+        prefix_enum=None,
+    ):
+        """Fit using resonator_model_v3"""
+
+        def _complex_fit(df):
+            data = ccat_mp.struct_batches(df, 3, batch_len, max_workers)
+
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {
+                    executor.submit(
+                        ccat_mp.process_batches,
+                        resonator_model_v3.full_fit,  # noqa: F821
+                        data[i][0],
+                        data[i][1],
+                        data[i][2],
+                        nonlinear=nonlinear[inds],
+                        asymm=asymm[inds],
+                        fix_cable=fix_cable[inds],
+                        #fix_thetaQ=fix_thetaQ[inds],
+                    ): (i, all_tones[inds])
+                    for i, inds in enumerate(calc_ind)
+                }
+
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    i, tones = future_to_batch[future]
+                    f_cols, fit_cols = data[i][0], future.result()
+                    for tone, f_col, fit_col in zip(tones, f_cols, fit_cols):
+                        if isinstance(fit_col, Exception):
+                            log.log(
+                                "DEBUG",
+                                "Fit failed for tone %s with exception: %s",
+                                tone,
+                                fit_col,
+                            )
+                            best_fit, cable_fit = np.zeros(df.len()), np.zeros(df.len())
+                            best_vals_dict = {}
+                        else:
+                            best_fit = fit_col.best_fit
+                            cable_fit = resonator_model_v3.fine_s21_model(  # noqa: F821
+                                f_col, fit_col.params, cable=True
+                            )
+                            best_vals_dict = {
+                                f"{fit_name_col}_{k}": float(v)
+                                for k, v in fit_col.best_values.items()
+                            }
+                        targ._properties[ccat_df.add_tone("det", tone, padding)] = (
+                            best_vals_dict
+                        )
+
+                        for name, val in zip(
+                            return_col,
+                            [
+                                best_fit.real,
+                                best_fit.imag,
+                                cable_fit.real,
+                                cable_fit.imag,
+                            ],
+                        ):
+                            results_dict[ccat_df.add_tone(name, tone, padding)] = val
+            return ccat_mp.package_results(results_dict)
+
+        if not len(args) == 7:
+            log.log(
+                "ERROR",
+                "det, nonlinear, asymm, fix_cable, and fix_thetaQ, max_workers, and ex are required arguments.",
+            )
+
+        targ, nonlinear, asymm, fix_cable, fix_thetaQ, max_workers, ex = np.array(args)
+        targ, max_workers, ex = targ[0], int(max_workers[0]), ex[0]
+        all_tones = np.array(tones)
+
+        f_col, I_col, Q_col, fit_name_col, cable_col = (
+            col_enum.FREQUENCY.value,
+            col_enum.IN_PHASE.value,
+            col_enum.QUADRATURE.value,
+            prefix_enum.COMPLEX_FIT.value,
+            prefix_enum.COMPLEX_FIT_CABLE.value,
+        )
+
+        return_col = [
+            f"{fit_name_col}_{I_col}",
+            f"{fit_name_col}_{Q_col}",
+            f"{cable_col}_{fit_name_col}_{I_col}",
+            f"{cable_col}_{fit_name_col}_{Q_col}",
+        ]
+        return_type = [pl.Float64, pl.Float64, pl.Float64, pl.Float64]
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
+            _complex_fit,
+            tones,
+            schema,
+            input_col=[f_col, I_col, Q_col],
+            return_col=return_col,
+            return_type=return_type,
+            padding=padding,
+            max_workers=max_workers,
+            recalc=recalc,
+        )
+        return expr
+
+    @staticmethod
+    def _calc_phase_fit(
+        schema,
+        *args,
+        tones: list[int],
+        padding: int = 4,
+        recalc: bool = False,
+        col_enum=None,
+        prefix_enum=None,
+    ):
+        def _phase_fit(df):
+            data = ccat_mp.struct_batches(df, 4, batch_len, max_workers)
+
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {
+                    executor.submit(
+                        ccat_mp.process_batches,
+                        ccat_fit.phase_fit,
+                        data[i][0],
+                        data[i][1],
+                        I=data[i][2],
+                        Q=data[i][3],
+                        nonlinear=nonlinear[inds],
+                        normalized=normalized[inds],
+                        method=method[inds],
+                        params=params[inds],
+                        R=radius[inds],
+                    ): all_tones[inds]
+                    for i, inds in enumerate(calc_ind)
+                }
+
+                fit_result = targ.fit_result.get(f"{fit_name_col}_{fit_result_col}", [None]*targ.num_tones)
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tones = future_to_batch[future]
+                    fit_cols = future.result()
+                    for tone, fit_col in zip(tones, fit_cols):
+                        if isinstance(fit_col, Exception):
+                            log.log(
+                                "INFO",
+                                "Fit failed for tone %s with exception: %s",
+                                tone,
+                                fit_col,
+                            )
+                            best_fit = np.full(df.len(), np.nan)
+                            properties_dict = {}
+                        else:
+                            best_fit = np.full(df.len(), np.nan)
+                            mask = fit_col.mask
+                            best_fit[mask] = fit_col.best_fit
+                            best_vals_dict = {
+                                f"{fit_name_col}_{param_names[k]}": float(v)
+                                for k, v in fit_col.best_values.items()
+                            }
+                            init_vals_dict = {
+                                f"init_{fit_name_col}_{param_names[k]}": float(v)
+                                for k, v in fit_col.init_values.items()
+                            }
+                            fit_result[tone] = fit_col
+
+                            properties_dict = best_vals_dict | init_vals_dict
+                        targ._properties[ccat_df.add_tone("det", tone, padding)] = (
+                            properties_dict
+                        )
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            best_fit
+                        )
+                targ.fit_result[f"{fit_name_col}_{fit_result_col}"] = fit_result
+            return ccat_mp.package_results(results_dict)
+
+        if not len(args) == 8:
+            log.log(
+                "ERROR",
+                "nonlinear, params, window, and max_workers are required arguments.",
+            )
+
+        (
+            targ,
+            radius,
+            nonlinear,
+            normalized,
+            method,
+            params_list,
+            max_workers,
+            ex,
+        ) = args
+        params = np.empty(len(params_list), dtype=object)
+        for i in range(len(params_list)):
+            params[i] = params_list[i]
+        radius, nonlinear, normalized, method = (
+            np.array(radius),
+            np.array(nonlinear),
+            np.array(normalized),
+            np.array(method),
+        )
+        targ, max_workers, ex = (
+            targ[0],
+            int(max_workers[0]),
+            ex[0],
+        )
+        all_tones = np.array(tones)
+
+        f_col, I_col, Q_col, phase_col, fit_name_col, fit_result_col = (
+            col_enum.FREQUENCY.value,
+            col_enum.IN_PHASE.value,
+            col_enum.QUADRATURE.value,
+            col_enum.PHASE.value,
+            prefix_enum.PHASE_FIT.value,
+            col_enum.FIT_RESULT.value
+        )
+
+        param_names = {
+            "f_0": col_enum.RESONANT_FREQUENCY.value,
+            "Qr": col_enum.TOTAL_QUALITY_FACTOR.value,
+            "theta_0": col_enum.PHASE_FIT_THETA.value,
+            "beta": col_enum.PHASE_FIT_BETA.value,
+            #"gamma": col_enum.PHASE_FIT_GAMMA.value,
+            #"delta": col_enum.PHASE_FIT_DELTA.value,
+            "R": col_enum.IQ_CIRCLE_RADIUS.value,
+        }
+
+        return_col, return_type = [f"{fit_name_col}_{phase_col}"], [pl.Float64]
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
+            _phase_fit,
+            tones,
+            schema,
+            input_col=[f_col, phase_col, I_col, Q_col],
+            return_col=return_col,
+            return_type=return_type,
+            padding=padding,
+            max_workers=max_workers,
+            recalc=recalc,
+        )
+        return expr
+
+    @staticmethod
+    def _calc_IQ_circle_fit(
+        schema,
+        *args,
+        tones: list[int],
+        padding: int = 4,
+        recalc: bool = False,
+        col_enum=None,
+        prefix_enum=None,
+    ):
+        def _circle_fit(df):
+            data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
+
+            angles = np.linspace(0, 2 * np.pi, df.len())
+            sin = np.sin(angles)
+            cos = np.cos(angles)
+
+            results_dict = {}
+            with ccat_mp.optional_executor(max_workers, ex=ex) as executor:
+                future_to_batch = {
+                    executor.submit(
+                        ccat_mp.process_batches,
+                        ccat_fit.circle_fit,
+                        data[i][0],
+                        data[i][1],
+                        full_output=[True] * len(all_tones[inds]),
+                        bounds=bounds[inds],
+                        loss=loss[inds],
+                        f_scale=f_scale[inds],
+                        method=method[inds],
+                    ): all_tones[inds]
+                    for i, inds in enumerate(calc_ind)
+                }
+
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    tones = future_to_batch[future]
+                    fit_cols = future.result()
+                    for tone, fit_col in zip(tones, fit_cols):
+                        properties_dict = {}
+                        if isinstance(fit_col, Exception):
+                            log.log(
+                                "DEBUG",
+                                "Fit failed for tone %s with exception: %s",
+                                tone,
+                                fit_col,
+                            )
+                            fit_I, fit_Q = (
+                                np.full(df.len(), np.nan),
+                                np.full(df.len(), np.nan),
+                            )
+                        else:
+                            I_c, Q_c, R, result = fit_col
+                            fit_I, fit_Q = R * cos + I_c, R * sin + Q_c
+                            properties_dict[f"{fit_name_col}_{center_I_col}"] = I_c
+                            properties_dict[f"{fit_name_col}_{center_Q_col}"] = Q_c
+                            properties_dict[f"{fit_name_col}_{R_col}"] = R
+
+                        targ._properties[ccat_df.add_tone("det", tone, padding)] = (
+                            properties_dict
+                        )
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            fit_I
+                        )
+                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = (
+                            fit_Q
+                        )
+            return ccat_mp.package_results(results_dict)
+
+        if not len(args) == 7:
+            log.log(
+                "ERROR",
+                "det, bounds, loss, f_scale, method, and max_workers are required arguments.",
+            )
+        targ, bounds, loss, f_scale, method, max_workers, ex = np.array(args)
+        targ, max_workers, ex = (
+            targ[0],
+            int(max_workers[0]),
+            ex[0],
+        )
+        all_tones = np.array(tones)
+
+        I_col, Q_col, fit_name_col = (
+            col_enum.IN_PHASE.value,
+            col_enum.QUADRATURE.value,
+            prefix_enum.IQ_CIRCLE_FIT.value,
+        )
+
+        center_I_col, center_Q_col, R_col = (
+            f"{col_enum.IQ_CIRCLE_CENTER.value}_{I_col.split('_')[-1]}",
+            f"{col_enum.IQ_CIRCLE_CENTER.value}_{Q_col.split('_')[-1]}",
+            col_enum.IQ_CIRCLE_RADIUS.value,
+        )
+
+        return_col, return_type = (
+            [f"{fit_name_col}_{I_col}", f"{fit_name_col}_{Q_col}"],
+            [pl.Float64, pl.Float64],
+        )
+        expr, calc_ind, batch_len = ccat_mp.create_batches(
+            _circle_fit,
+            tones,
+            schema,
+            input_col=[I_col, Q_col],
+            return_col=return_col,
+            return_type=return_type,
+            padding=padding,
+            max_workers=max_workers,
+            recalc=recalc,
+        )
+        return expr
+
+
     @staticmethod
     def _calc_linewidth_fit(
         schema,

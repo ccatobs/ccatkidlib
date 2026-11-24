@@ -27,6 +27,9 @@ io:
     pickle_dataframes: False    # Whether to pickle properties and data DataFrames or save them as seperate parquet files (Recommended: False)
     overwrite: False # Whether to overwrite already existing pickle and parquet files
 
+runtime:
+  return_prefix: True
+
 convention:
   name:
     # Data Names

@@ -130,8 +130,9 @@ class Timestream(Data):
     # Properties #
     # ========== #
 
-    
     def timestream_angle(self, prefix="", include=None, exclude=None, recalc=False):
+        '''
+        '''
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "phase"],
             prefix,
@@ -181,12 +182,16 @@ class Timestream(Data):
                 .collect()
             )
             ccat_df.add_data_to_properties(self, timestream_df, timestream_col_name)
-        return self.get_properties(
+
+        ret_df = self.get_properties(
             timestream_col_name,
             include=include,
             exclude=exclude,
             strict=True,
         )
+
+        ret_pre = f"{prefix_enum.CENTER_TIMESTREAM.value}{'_' if prefix else ''}{prefix}"
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
 
     # ==================#
     # Plotting Methods #
@@ -762,7 +767,8 @@ class Timestream(Data):
         max_workers: int = 1,
         ex=None,
     ) -> pl.dataframe.frame.DataFrame:
-
+        
+        if isinstance(prefix, str): prefix = [prefix]
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for key, val in mapping.items():
             if val == col_name:
@@ -820,11 +826,16 @@ class Timestream(Data):
 
         self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
 
-        return self.get_data(
+        ret_df = self.get_data(
             col_name=col_names,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [(f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}{'_' if pre else ''}{pre}", f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}{'_' if pre else ''}{pre}") for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
 
     def psd_trim(self,
                  col_name: str,
@@ -964,11 +975,16 @@ class Timestream(Data):
 
         self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
 
-        return self.get_data(
+        ret_df =  self.get_data(
             col_name=col_names,
             include=include,
             exclude=exclude,
         )
+
+        ret_pre = [(f"{prefix_enum.FOURIER_TRANSFORM.value}{'_' if pre else ''}{pre}", f"{prefix_enum.FOURIER_TRANSFORM_FREQUENCY.value}{'_' if pre else ''}{pre}") for pre, prefix_enum in zip(prefix, prefix_enums)] 
+        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+
+        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
 
     # ==================#
     # Analysis Methods #

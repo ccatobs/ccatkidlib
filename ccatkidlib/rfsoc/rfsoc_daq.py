@@ -31,7 +31,6 @@ from ccatkidlib.analysis.routines.tune import TonePowerNetwork
 import ccatkidlib.io as io
 import ccatkidlib.log as log
 import ccatkidlib.utils as utils
-import ccatkidlib.analysis.utils.pair as pair
 import ccatkidlib.rfsoc.arg_utils as autils
 import ccatkidlib.analysis.routines.tune as tune_routines
 
@@ -2011,7 +2010,7 @@ class R:
                 vna = VNA(com_to=com, data_path=vna_file)
                 stitch_bw[i] = utils.dict_get(vna.drone_cfg, "sweep_steps")
                 vna_files[i] = vna_file
-                timestamps[i] = pair.get_timestamp(vna_file)
+                timestamps[i] = io.get_timestamp(vna_file)
 
         if len(to_sweep) != 0:
             # Take VNA sweep(s) without saving configs (saved later)
@@ -2319,7 +2318,7 @@ class R:
                 target = Target(com_to=com, data_path=targ_file)
                 stitch_bw[i] = utils.dict_get(target.drone_cfg, "sweep_steps")
                 targ_files[i] = targ_file
-                timestamps[i] = pair.get_timestamp(targ_file)
+                timestamps[i] = io.get_timestamp(targ_file)
 
         if len(to_sweep) != 0:
             # Take target sweep(s) without saving config (saved later)
