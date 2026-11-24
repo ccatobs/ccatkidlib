@@ -138,7 +138,7 @@ class R:
         # Create session id from first ten digits of current time
         new_measurement = (
             sess_id is None
-            or curr_date != self.curr_date
+            #or curr_date != self.curr_date
             or self.measurement_name != self.io_cfg["name"]
             or self.measurement_desc != self.io_cfg["desc"]
         )
@@ -172,6 +172,7 @@ class R:
             self.io_cfg["io"]["terminal_level"],
             max_file_size=self.io_cfg["io"]["max_size"],
         )
+
         log.log(
             "INFO",
             f"{Style.INVERT}Date: {self.curr_date}; Session: {self.sess_id}{Style.DEFAULT}",
@@ -197,6 +198,9 @@ class R:
         self.rfsoc = OCSClient(self.io_cfg["pcs_agents"]["rfsoc_agent"], args=[])
         log.log("INFO", "Connected to queen_agent PCS agent.")
 
+        if new_measurement: 
+            self._update_measurement(name=self.io_cfg["name"], desc=self.io_cfg["desc"])
+
         # Setup boards
         # ------------
         init_boards = (
@@ -218,10 +222,6 @@ class R:
             self.setup_drones()
         log.log("INFO", f"Communicating with drones: {self.drone_list}!")
 
-        # Update Measurment Information
-        # -----------------------------
-        self._update_measurement(name=self.io_cfg["name"], desc=self.io_cfg["desc"])
-
         # Initialize streamer attribute (As None, since it is only used when g3=False)
         # ----------------------------------------------------------------------------
         self.streamer = None
@@ -240,22 +240,23 @@ class R:
 
         # Save init configs
         # -----------------
-        io.save_config(
-            self.log_dir / f"init_config_ext_{self.timestamp}.yaml",
-            self.ext_cfg,
-            self.save_cfg,
-        )
-        io.save_config(
-            self.log_dir / f"init_config_io_{self.timestamp}.yaml",
-            self.io_cfg,
-            self.save_cfg,
-        )
-        for rfsoc_dir, cfg in zip(self.config_dirs, self.drone_cfg):
+        if new_measurement:
             io.save_config(
-                rfsoc_dir / f"init_config_drone_{self.timestamp}.yaml",
-                cfg,
+                self.log_dir / f"init_config_ext_{self.timestamp}.yaml",
+                self.ext_cfg,
                 self.save_cfg,
             )
+            io.save_config(
+                self.log_dir / f"init_config_io_{self.timestamp}.yaml",
+                self.io_cfg,
+                self.save_cfg,
+            )
+            for rfsoc_dir, cfg in zip(self.config_dirs, self.drone_cfg):
+                io.save_config(
+                    rfsoc_dir / f"init_config_drone_{self.timestamp}.yaml",
+                    cfg,
+                    self.save_cfg,
+                )
 
     #################
     # Setup Methods #
@@ -726,17 +727,17 @@ class R:
             parallel_drones = self.parallel_drones
             self.parallel_drones = 1
 
-            # Group drones with the same attenuations
-            atten_dict = autils.group_args(new_com_to, new_attens)
-            for att, com in atten_dict.items():
-                args = [direction, float(att)]
-                kwargs["com_to"] = com
-                self._run_parallel(_set_atten, *args, **kwargs)
-
-            # Reset com_to and parallel_drones to what they were before
-            kwargs["com_to"] = com_to
-            self.parallel_drones = parallel_drones
-            # log.log('INFO', f'Successfully set {direction} attenuation to {list(attens)} for drones {list(com_to)}!')
+            try:
+                # Group drones with the same attenuations
+                atten_dict = autils.group_args(new_com_to, new_attens)
+                for att, com in atten_dict.items():
+                    args = [direction, float(att)]
+                    kwargs["com_to"] = com
+                    self._run_parallel(_set_atten, *args, **kwargs)
+            finally:
+                # Reset com_to and parallel_drones to what they were before
+                kwargs["com_to"] = com_to
+                self.parallel_drones = parallel_drones
 
             return attens
 
@@ -1107,28 +1108,30 @@ class R:
             self.parallel_drones = 1
 
             args = [direction]
-            rtns = self._run_parallel(_get_atten, *args, **kwargs)
-            rtns = [drone for drones in rtns for drone in drones]
+            try:
+                rtns = self._run_parallel(_get_atten, *args, **kwargs)
+                rtns = [drone for drones in rtns for drone in drones]
 
-            attens, inds = [], []
-            for rtn in rtns:
-                atten = rtn["data"]
-                com = rtn["channel"].split("_")[-2]
-                ind = self.drone_list.index(com)
-                if not isinstance(atten, float):
-                    atten = None
-                    log.log(
-                        "ERROR",
-                        f"Failed to get {direction} attenuation for drone {com}.",
-                    )
-                inds.append(ind)
-                attens.append(atten)
+                attens, inds = [], []
+                for rtn in rtns:
+                    atten = rtn["data"]
+                    com = rtn["channel"].split("_")[-2]
+                    ind = self.drone_list.index(com)
+                    if not isinstance(atten, float):
+                        atten = None
+                        log.log(
+                            "ERROR",
+                            f"Failed to get {direction} attenuation for drone {com}.",
+                        )
+                    inds.append(ind)
+                    attens.append(atten)
 
-            # Create list of attenuations for all drones, sort by drone bid.drid
-            attens = [atten for _, atten in sorted(zip(inds, attens))]
-
-            # Reset parallel_drones to what it was before
-            self.parallel_drones = parallel_drones
+                # Create list of attenuations for all drones, sort by drone bid.drid
+                attens = [atten for _, atten in sorted(zip(inds, attens))]
+            finally:
+                # Reset parallel_drones to what it was before
+                self.parallel_drones = parallel_drones    
+            
             log.log(
                 "INFO",
                 f"Successfully got {direction} attenuations {attens} for drones {com_to}!",
@@ -1598,6 +1601,9 @@ class R:
             fname = self.io_cfg["save_file_names"]["timestream"]
             fname = f"{fname}_{self.timestamp}"
 
+            save_interval = 1.25*self.io_cfg['timestream']['save_interval']
+            mv_g3 = self.io_cfg["timestream"]["mv_g3"]
+
             stream_paths = []
             for com in com_to:
                 bid, drid = com.split(".")
@@ -1625,10 +1631,12 @@ class R:
                     tstream_num -= 1
                     g3_file = g3_tstream_dir / (tstream_name + f"_{tstream_num:03d}.g3")
 
-                if self.io_cfg["timestream"]["mv_g3"]:
+                if mv_g3:
                     tstream_file = [None] * len(g3_files)
                     for i, g3_file in enumerate(g3_files[::-1]):
                         save_file = timestream_dir / f"{fname}_{i:03d}.g3"
+                        while (time_diff := time.time() - io.get_creation_time(g3_file)) < save_interval:
+                            time.sleep(save_interval - time_diff)
                         data = io.get_array(g3_file, save_file, action="mv", load=False)
                         tstream_file[i] = save_file
                 else:
@@ -1676,7 +1684,7 @@ class R:
         if g3:
             self._run_parallel(_take_timestream_g3, *args, **kwargs)
             if save_data:
-                time.sleep(2)
+                time.sleep(2*self.io_cfg['timestream']['save_interval'])
                 stream_out = _save_timestream_g3(com_to)
         else:
             if self.streamer is None:
