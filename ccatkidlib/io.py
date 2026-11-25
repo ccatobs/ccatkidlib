@@ -31,7 +31,7 @@ def create_tree(
     com_to: list[str], curr_date: str, sess_id: int, data_dir: str
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     """
-    Create file tree for storage of sweep, timestream, comb, and configuration files
+    Create file tree for storage of sweep, timestream, comb, and configuration files.
 
     Args:
         com_to: List of |RFSoC| drones to create directories for
@@ -140,7 +140,7 @@ def add_dir(
     timestamp: str | None = None,
 ) -> str:
     """
-    Add a new directory within/mimicing a pre-existing *ccatkidlib* file tree. The directory will be created in the already existing
+    Add a new directory within/mimicking a pre-existing *ccatkidlib* file tree. The directory will be created in the already existing
     file tree structure if ``save_root`` is not specified, otherwise it will mimic the already existing structure within the specified ``save_root`` directory.
 
     Args:
@@ -267,7 +267,7 @@ def edit_config(cfg: dict, key: str, value: Any, append: bool = False) -> bool:
         value: Value with which to update ``key``
         append: Whether to add a new ``key``, ``value`` pair to configuration file if ``key`` is not found
     Returns:
-        done: **True** if key was successfully updated or created, otherwise **False**
+        bool: True if key was successfully updated or created, otherwise False.
     """
     # Edit config file dictionary
     # ---------------------------
@@ -313,7 +313,7 @@ def get_most_recent_file(
         time_ref: Unix time to reference creation time of files against for determining if file is too old/new.
         ccatkidlib_file: Whether or not the files in ``dir`` are *ccatkidlib* data files. If **True**, will use the timestamp in the file name as the creation time.
     Returns:
-        File path of the most recent file if a vaild file is found, otherwise returns *"invalid/path"*
+        File path of the most recent file if a valid file is found, otherwise returns *"invalid/path"*
     """
     if time_ref is None:
         time_ref = time.time()
@@ -517,8 +517,8 @@ def combine_npy(
     Args:
         files: List of *NumPy* files to combine
         num: Number of **NpzFile** files to create
-        com:
-        fname_out:
+        com: |drone| identifier (``'Board.Drone'``) used as the key when writing output file names into ``fname_out``.
+        fname_out: Optional output dictionary that is updated in-place with ``{com: fnames}`` after the archive files are created.
     Returns:
         File names of the **NpzFile** files that were created
     """
@@ -587,7 +587,7 @@ def get_array_board(
     """
     Load *NumPy* array from |RFSoC| board
 
-    Parameters:
+    Args:
         c: *Fabric* **Connection** object of |RFSoC| board
         ip: IP address of |RFSoC| board
         ssh_key: File path of private SSH key corresponding to public key on the |RFSoC| board
