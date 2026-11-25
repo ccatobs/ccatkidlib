@@ -39,7 +39,7 @@ def create_tree(
         sess_id: Session ID of measurement
         data_dir: Directory in which to create file tree
     Returns:
-        Tuple of */config* directories, */target* directories, */timestream* directories, and */vna* directories in that order.
+        tuple[list[str], list[str], list[str], list[str]]: Tuple of */config* directories, */target* directories, */timestream* directories, and */vna* directories in that order.
     """
     data_dir = Path(data_dir)
 
@@ -151,7 +151,7 @@ def add_dir(
         sub_dirs: Sub-directories to create within new directory. If no sub-directories specified, will mimic the sub-directories of the already existing file tree.
         timestamp: Unix timestamp. If specified, will create a directory with the timestamp as the name within the specified ``sub_dirs`` (at the deepest level).
     Returns:
-        Path of the newly added directory
+        str: Path of the newly added directory
 
     """
     if not dir_name[-1] == "/":
@@ -188,7 +188,7 @@ def create_noise_files(com_to: list[str], tmp_dir: str) -> list[str]:
         com_to: List of drones for which to create noise tone files
         tmp_dir: Temporary directory where noise tone files should be created
     Returns:
-        List of noise tone file paths in order of ``com_to``
+        list[str]: List of noise tone file paths in order of ``com_to``
     """
     tmp_dir = Path(tmp_dir)
     create_dir(tmp_dir)  # Create tmp directory if it does not exist
@@ -217,7 +217,7 @@ def load_config(cfg_path: str) -> dict | list[dict]:
     Args:
         cfg_path: File path of configuration file to load
     Returns:
-        Loaded configuration file or list of loaded configuration files if ``cfg_path`` contains more than one
+        dict | list[dict]: Loaded configuration file or list of loaded configuration files if ``cfg_path`` contains more than one
     """
     cfg_path = Path(cfg_path)
     if not cfg_path.exists():
@@ -248,7 +248,7 @@ def save_config(cfg_path: str, cfg: dict, save: bool = True) -> dict:
         cfg: Configuration file to save
         save: Whether to save configuration file
     Returns:
-        Configuration file that was saved
+        dict: Configuration file that was saved
     """
     if save:
         with open(cfg_path, "w") as config:
@@ -313,7 +313,7 @@ def get_most_recent_file(
         time_ref: Unix time to reference creation time of files against for determining if file is too old/new.
         ccatkidlib_file: Whether or not the files in ``dir`` are *ccatkidlib* data files. If **True**, will use the timestamp in the file name as the creation time.
     Returns:
-        File path of the most recent file if a valid file is found, otherwise returns *"invalid/path"*
+        Path: File path of the most recent file if a valid file is found, otherwise returns *"invalid/path"*
     """
     if time_ref is None:
         time_ref = time.time()
@@ -369,7 +369,7 @@ def get_timestamp(path: str) -> int:
     Args:
         path: Path of the *ccatkidlib* data file
     Returns:
-        Timestamp of the file or -1 if no valid timestamp can be determined
+        int: Timestamp of the file or -1 if no valid timestamp can be determined
     """
 
     try:  # Check that the passed path is a string or Path object
@@ -412,7 +412,7 @@ def get_creation_time(path: str) -> float:
     Args:
         path: Path of the file to get creation time of
     Returns:
-        Creation time of file or -1 if creation time could not be determined
+        float: Creation time of file or -1 if creation time could not be determined
     """
     try:
         file = Path(path)
@@ -439,7 +439,7 @@ def get_array(
         load: Whether to load and return the contents of the *NumPy* array
         timestamp: Whether to remove timestamp from *NumPy* array file name (Use **False** if no timestamp)
     Returns:
-        Loaded *NumPy* array if ``load`` is **True** otherwise the file path where the *NumPy* array was copied or moved to.
+        np.ndarray | list | str | None: Loaded *NumPy* array if ``load`` is **True** otherwise the file path where the *NumPy* array was copied or moved to.
         Returns **None** if failed to copy/move/load *NumPy* array
 
     """
@@ -493,7 +493,7 @@ def increment_file(
         file_suffix: Sub-string of the file name after the file count
         overwrite: Whether overwriting files is allowed. Will not add file count to file name if **True**
     Returns:
-        The new file name with file count included and the file count of the file.
+        tuple[Path, int | None]: The new file name with file count included and the file count of the file.
         If overwrite is **True**, will return **None** instead of the file count
     """
 
@@ -520,7 +520,7 @@ def combine_npy(
         com: |drone| identifier (``'Board.Drone'``) used as the key when writing output file names into ``fname_out``.
         fname_out: Optional output dictionary that is updated in-place with ``{com: fnames}`` after the archive files are created.
     Returns:
-        File names of the **NpzFile** files that were created
+        list[str]: File names of the **NpzFile** files that were created
     """
 
     files = list(files)
@@ -566,7 +566,7 @@ def get_connection(ip: str, ssh_key: str) -> Connection:
         ip: IP address of |RFSoC| board
         ssh_key: File path of private SSH key corresponding to public key on the |RFSoC| board
     Returns:
-        *Fabric* **Connection** object to specified |RFSoC| board
+        Connection: *Fabric* **Connection** object to specified |RFSoC| board
     """
 
     # Get Fabric Connection to RFSoC board
@@ -596,7 +596,7 @@ def get_array_board(
         load: Whether to load and return the contents of the *NumPy* array
         timestamp: Whether to remove timestamp from *NumPy* array file name (Use **False** if no timestamp)
     Returns:
-        Loaded *NumPy* array if ``load`` is **True** otherwise the file path on the local machine where *NumPy* array was copied to.
+        np.ndarray | str | None: Loaded *NumPy* array if ``load`` is **True** otherwise the file path on the local machine where *NumPy* array was copied to.
         Returns **None** if failed to copy/load *NumPy* array
     """
     # Convert path objects to str
@@ -708,7 +708,7 @@ def get_most_recent_file_board(
         file_identifier: Sub-string used to identify/filter files
         time_past: How old the file can be in seconds. Files older than ``time_past`` will be ignored.
     Returns:
-        File path of the most recent file if valid file exists otherwise returns *"invalid/path"*
+        str: File path of the most recent file if valid file exists otherwise returns *"invalid/path"*
     """
 
     # Define command string for finding most recent file, use find to get most recent file
@@ -743,7 +743,7 @@ def path_exists(c: Connection, path: str) -> bool:
         c: *Fabric* **Connection** object of |RFSoC| board
         path: Path to check existence of
     Returns:
-        **True** if ``path`` exists, otherwise **False**
+        bool: **True** if ``path`` exists, otherwise **False**
     """
 
     path = str(path)  # Convert path objects to str

@@ -319,7 +319,7 @@ class Detector:
         """Calculate the cable delay of the detector network.
 
         Delegates to ``Target.cable_delay()`` for the target sweep, then
-        uses a VNA-derived delay as a fallback for |tone|s where the
+        uses a VNA-derived delay as a fallback for |tones| where the
         target-sweep estimate is NaN.
 
         Args:
@@ -331,9 +331,9 @@ class Detector:
                 Defaults to 5.
             mean_points (int | list[int], optional): Points to average at
                 cable-delay line endpoints. Defaults to 10.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -429,9 +429,9 @@ class Detector:
         Args:
             col_name (str | list[str], optional): Column name pattern or list of
                 names to select. Defaults to all columns.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             strict (bool, optional): Raise if a requested column is absent.
                 Defaults to *False*.
@@ -672,9 +672,9 @@ class Detector:
                 ``'timestream'``, or ``'both'``. Defaults to ``'both'``.
             use_fit (bool | list[bool], optional): Use circle-fit centre rather
                 than median |I|/|Q|. Defaults to *True*.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -942,9 +942,9 @@ class Detector:
                 ``'timestream'``, or ``'both'``. Defaults to ``'both'``.
             mean_points (int | list[int], optional): Points averaged to estimate
                 the off-resonance position. Defaults to 10.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -1027,9 +1027,9 @@ class Detector:
                 ``'timestream'``, or ``'both'``. Defaults to ``'both'``.
             mean_points (int | list[int], optional): Points averaged to estimate
                 the on-resonance position. Defaults to 10.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -1105,9 +1105,9 @@ class Detector:
             circle_fit_prefix (str | list[str], optional): Prefix under which the
                 |IQ| circle radius was stored. Defaults to
                 ``'circle_fit_unwind_rotate'``.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -1217,9 +1217,9 @@ class Detector:
             phase_up (float, optional): Upper phase bound for spline fit.
                 Defaults to 3.14 (approx. +π).
             k (int, optional): Polynomial degree for spline. Defaults to 3.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -1323,9 +1323,9 @@ class Detector:
             spline_prefix (str | list[str], optional): Prefix of phase data used
                 to construct the spline (matches the ``prefix`` passed to
                 ``phase_spline``). Defaults to the value of ``prefix``.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -1437,9 +1437,9 @@ class Detector:
                 Defaults to the ``tone_frequency`` config column.
             data (str, optional): Which data objects to convert; ``'targ'``,
                 ``'timestream'``, or ``'both'``. Defaults to ``'timestream'``.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -1534,9 +1534,9 @@ class Detector:
                 estimate Q from FWHM. Defaults to ``''``.
             mean_points (int, optional): Points averaged for FWHM estimation.
                 Defaults to 10.
-            include (int | list[int] | None, optional): |tone|s to include.
+            include (int | list[int] | None, optional): |tones| to include.
                 Defaults to *None* (all).
-            exclude (int | list[int] | None, optional): |tone|s to exclude.
+            exclude (int | list[int] | None, optional): |tones| to exclude.
                 Defaults to *None*.
             recalc (bool, optional): Recalculate even if result already exists.
                 Defaults to *False*.
@@ -1638,10 +1638,10 @@ class Detector:
         col_enum=None,
         prefix_enum=None,
     ):
-        """Polars expression factory: build phase-to-frequency splines for a batch of |tone|s."""
+        """Polars expression factory: build phase-to-frequency splines for a batch of |tones|."""
 
         def _phase_spline(df):
-            """Execute spline fitting over a batch of |tone|s and return packed result struct."""
+            """Execute spline fitting over a batch of |tones| and return packed result struct."""
             data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
 
             results_dict = {}
@@ -1754,7 +1754,7 @@ class Detector:
         """Polars expression factory: convert phase to frequency via pre-built splines."""
 
         def _phase_to_f(df):
-            """Interpolate phase-to-frequency for a batch of |tone|s and return packed results."""
+            """Interpolate phase-to-frequency for a batch of |tones| and return packed results."""
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
 
             results_dict = {}
@@ -1851,7 +1851,7 @@ class Detector:
         """Polars expression factory: build linear fractional-frequency expressions."""
 
         def _linear_frac_f(df):
-            """Compute linear fractional frequency shift for a batch of |tone|s."""
+            """Compute linear fractional frequency shift for a batch of |tones|."""
             data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
 
             results_dict = {}
@@ -1936,7 +1936,7 @@ class Detector:
         """Polars expression factory: build dissipation-correction projection expressions."""
 
         def _dissipation_correction(df):
-            """Project |I| & |Q| onto the dissipation axis for a batch of |tone|s."""
+            """Project |I| & |Q| onto the dissipation axis for a batch of |tones|."""
             data = ccat_mp.struct_batches(df, 3, batch_len, max_workers)
 
             results_dict = {}
@@ -2029,7 +2029,7 @@ class Detector:
         Args:
             col_name (str): Name of the ``properties`` column to histogram.
             bins (int | None, optional): Number of bins. Defaults to number of
-                non-NaN |tone|s divided by eight.
+                non-NaN |tones| divided by eight.
             mad_filter (bool, optional): Filter outliers using the median
                 absolute deviation before binning. Defaults to *True*.
             num_mads (int, optional): Number of MADs a value must fall within

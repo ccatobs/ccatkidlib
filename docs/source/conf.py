@@ -33,13 +33,16 @@ apidoc_modules = [
     },
 ]
 
-rst_epilog =  """
+rst_epilog = r"""
 .. |RFSoC| replace:: :term:`RFSoC`
 .. |KID| replace:: :term:`KID`
 .. |drone| replace:: :term:`drone`
 .. |tone| replace:: :term:`tone`
+.. |tones| replace:: :term:`tone`\ s
+.. |VNA| replace:: :term:`VNA`
 .. |I| replace:: :math:`I`
 .. |Q| replace:: :math:`Q`
+.. |IQ| replace:: :math:`IQ`
 
 """
 

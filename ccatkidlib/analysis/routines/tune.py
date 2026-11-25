@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 class TonePowerNetwork(Network):
     """Network subclass for tone power tuning workflows.
 
-    Extends |Network| with methods to optimize RFSoC tone power settings based on
+    Extends ``Network`` with methods to optimize RFSoC tone power settings based on
     detector response characteristics.
     """
 
@@ -302,7 +302,7 @@ def max_IQ_dist_f(
 ) -> None:
     """Find frequency of maximum |IQ| distance (steepest phase gradient).
 
-    Identifies the frequency at which adjacent points in |I||Q| space are most separated,
+    Identifies the frequency at which adjacent points in |IQ| space are most separated,
     corresponding to the steepest phase gradient and optimal frequency lock point.
 
     Args:

@@ -17,7 +17,7 @@ def dict_get(dic: dict, keys: str | list[str]) -> Any | None:
         dic: Dictionary to get value from
         keys: List of dictionary keys (in dictionary nesting order)
     Returns:
-        Value of ``dic`` corresponding to the final key in ``keys`` or **None** if final key is not found
+        Any | None: Value of ``dic`` corresponding to the final key in ``keys`` or **None** if final key is not found
     """
 
     def _dict_get_r(dic: dict, key: str) -> tuple[bool, Any]:
@@ -65,7 +65,7 @@ def dict_set(dic: dict, keys: str | list[str], value: Any) -> bool:
         keys: List of dictionary keys (in dictionary nesting order)
         value: Value to set
     Returns:
-        **True** if final key in ``keys`` was successfully set with the specified ``value`` otherwise **False**
+        bool: **True** if final key in ``keys`` was successfully set with the specified ``value`` otherwise **False**
     """
 
     def _dict_set_r(dic: dict, key: str, value: Any) -> bool:

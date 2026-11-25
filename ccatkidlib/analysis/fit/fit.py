@@ -1,7 +1,7 @@
 """
 Resonator model fitting and interpolation utilities for KID analysis.
 
-Provides methods for fitting circle models to |I||Q| data, phase fitting with
+Provides methods for fitting circle models to |IQ| data, phase fitting with
 linear and nonlinear KID models, and spline/interpolation tools for frequency
 conversion and fitting quality assessment.
 
@@ -64,7 +64,7 @@ def circle_fit(
     f_scale: float = 1,
     method: str = "trf",
 ) -> tuple[float, float, float] | tuple[float, float, float, OptimizeResult]:
-    """Fit a circle to |I||Q| data using constrained nonlinear least squares.
+    """Fit a circle to |IQ| data using constrained nonlinear least squares.
 
     Uses an iterative fitting approach based on the conic section method from
     https://doi.org/10.48550/arXiv.cs/0301001 to minimize algebraic distance.

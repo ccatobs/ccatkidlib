@@ -49,7 +49,7 @@ def check_max_workers(max_workers: int) -> int:
     Args:
         max_workers: Maximum number of workers to use for multiprocessing
     Returns:
-        ``max_workers`` if it less than or equal to the number of CPUs, otherwise returns the number of available CPU cores
+        int: ``max_workers`` if it less than or equal to the number of CPUs, otherwise returns the number of available CPU cores
     """
     return min(int(max_workers), os.cpu_count())
 

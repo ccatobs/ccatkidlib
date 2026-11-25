@@ -32,7 +32,7 @@ def is_bifurcated(
 ) -> pl.DataFrame:
     """Determine if a detector is bifurcated or has high quasiparticle nonlinearity.
 
-    Analyzes the angle of maximally separated points in |I||Q| space to classify detectors
+    Analyzes the angle of maximally separated points in |IQ| space to classify detectors
     as bifurcated or exhibiting quasiparticle-induced nonlinearity. Performs impedance
     mismatch correction, IQ circle fitting, and calculates angular metrics on the fitted circle.
 

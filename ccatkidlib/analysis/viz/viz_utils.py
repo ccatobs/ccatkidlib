@@ -37,7 +37,7 @@ def cycle_cmap(
         num_colors: Number of colors to include
         cmap_range: Range of colors to use from color map. Defaults to a range of **(0, 1)** for use with continuous color maps.
     Returns:
-        *Holoviews* **Cycle** object with ``num_colors`` colors from specified color map or *None* if invalid color map is specified
+        hv.Cycle | None: *Holoviews* **Cycle** object with ``num_colors`` colors from specified color map or *None* if invalid color map is specified
     """
     colors = None
     if cmap in list(mpl.colormaps):

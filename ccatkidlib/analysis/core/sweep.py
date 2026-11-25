@@ -142,7 +142,7 @@ class Sweep(Data):
                      Must have a **'det'** column and a **'area_sample'** column with lists of samples to use for area plots for each tone
             **kwargs**: Keyword arguments to supply to the *Holoviews* ``hvplot`` call(s) that create the figure(s)
         Returns:
-            Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
+            SweepFigure | tuple[SweepFigure, pl.DataFrame] | tuple[pl.DataFrame, str | None]: Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
             if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         """
 
@@ -286,7 +286,7 @@ class Sweep(Data):
             save_fig: Whether to save figure. Defaults to that specified in viz configuration file
             **kwargs**:
         Returns:
-            Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
+            SweepFigure | tuple[SweepFigure, pl.DataFrame] | tuple[pl.DataFrame, str | None]: Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
             if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         """
         xlabel = (
@@ -343,7 +343,7 @@ class Sweep(Data):
             **kwargs**:
 
         Returns:
-            Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
+            SweepFigure | tuple[SweepFigure, pl.DataFrame] | tuple[pl.DataFrame, str | None]: Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
             if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         """
         xlabel = (
@@ -405,7 +405,7 @@ class Sweep(Data):
             save_fig: Whether to save figure. Defaults to that specified in viz configuration file
             **kwargs**:
         Returns:
-            Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
+            SweepFigure | tuple[SweepFigure, pl.DataFrame] | tuple[pl.DataFrame, str | None]: Will return *Holoviews* figure of sweep data if ``return_fig`` is **True**. Will also return *Polars* **DataFrame** used to create figure
             if ``return_df`` is **True**. If ``return_fig`` is **False**, will return DataFrame and column names to group data by
         """
         shared_opts = {"padding": 0.1}
@@ -547,7 +547,7 @@ class Sweep(Data):
             The identified detector frequencies are **NOT** necessarily the same as the tone frequencies of the sweep!
 
         Returns:
-            *Polars* **Series** of identified detector frequencies
+            pl.Series: *Polars* **Series** of identified detector frequencies
 
         Raises:
             FileNotFoundError: If unable to load *NumPy* file of detector frequencies
@@ -582,9 +582,9 @@ class Sweep(Data):
             include: List of tones to include
             exclude: List of tones to exclude
         Returns:
-            *Polars **DataFrame** with frequency data
+            pl.DataFrame: *Polars* **DataFrame** with frequency data
 
-        """
+"""
         return self.get_data(
             col_name=self.analysis_cfg["convention"]["name"]["frequency"],
             include=include,

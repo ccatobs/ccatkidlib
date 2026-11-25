@@ -224,7 +224,7 @@ class Data:
             exclude: List of tones to exclude
             strict: Whether the data column name(s) must match ``col_name`` exactly. If **False**, data column names with prefixes *(not suffixes!)* to ``col_name`` will also be included
         Returns:
-            *Polars* **DataFrame** with specified data columns
+            pl.DataFrame: *Polars* **DataFrame** with specified data columns
 
         """
 
@@ -325,9 +325,9 @@ class Data:
             include: List of tones to include
             exclude: List of tones to exclude
         Returns:
-            *Polars* **DataFrame** with |I| data
+            pl.DataFrame: *Polars* **DataFrame** with |I| data
 
-        """
+"""
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase"], prefix, [], self.analysis_cfg
         )
@@ -355,8 +355,8 @@ class Data:
             include: List of tones to include
             exclude: List of tones to exclude
         Returns:
-            *Polars* **DataFrame** with |Q| data
-        """
+            pl.DataFrame: *Polars* **DataFrame** with |Q| data
+"""
         name_enums, prefix_enums = ccat_df.create_enums(
             ["quadrature"], prefix, [], self.analysis_cfg
         )
@@ -386,9 +386,9 @@ class Data:
             exclude: List of tones to exclude
             recalc: Whether to re-calculate if phase column already exists
         Returns:
-            *Polars* **DataFrame** with phase data
+            pl.DataFrame: *Polars* **DataFrame** with phase data
 
-        """
+"""
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "phase"], prefix, [], self.analysis_cfg
         )
@@ -429,8 +429,8 @@ class Data:
             dB: Whether to calculate magnitude in decible units. :math:`|S_{21}|_{dB} = 20\cdot\log_{10}(|S_{21}|)`
             recalc: Whether to re-calculate if magnitude column already exists
         Returns:
-            *Polars* **DataFrame** with magnitude data
-        """
+            pl.DataFrame: *Polars* **DataFrame** with magnitude data
+"""
         if isinstance(prefix, str):
             prefix = [prefix]
 
@@ -501,9 +501,9 @@ class Data:
             exclude: List of tones to exclude
             recalc: Whether to re-calculate if rotated **I** and **Q** data columns already exist
         Returns:
-            *Polars* **DataFrame** with rotated in-phase |I| and quadrature |Q| data
+            pl.DataFrame: *Polars* **DataFrame** with rotated in-phase |I| and quadrature |Q| data
 
-        """
+"""
         if isinstance(prefix, str):
             prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
@@ -577,9 +577,9 @@ class Data:
             exclude: List of tones to exclude
             recalc: Whether to re-calculate if scaled **I** and **Q** data columns already exist
         Returns:
-            *Polars* **DataFrame** with scaled in-phase |I| and quadrature |Q| data
+            pl.DataFrame: *Polars* **DataFrame** with scaled in-phase |I| and quadrature |Q| data
 
-        """
+"""
         name_dict = self.analysis_cfg["convention"]["name"]
         I_ret = self.scale(
             name_dict["in_phase"],
@@ -632,9 +632,9 @@ class Data:
             exclude: List of tones to exclude
             recalc: Whether to re-calculate if translated **I** and **Q** data columns already exist
         Returns:
-            *Polars* **DataFrame** with translated in-phase |I| and quadrature |Q| data
+            pl.DataFrame: *Polars* **DataFrame** with translated in-phase |I| and quadrature |Q| data
 
-        """
+"""
 
         name_dict = self.analysis_cfg["convention"]["name"]
         I_ret = self.shift(
@@ -693,8 +693,8 @@ class Data:
             exclude: List of tones to exclude
             recalc: Whether to re-calculate if trimmed **I** and **Q** data columns already exist
         Returns:
-            *Polars* **DataFrame** with trimmed in-phase |I| and quadrature |Q| data
-        """
+            pl.DataFrame: *Polars* **DataFrame** with trimmed in-phase |I| and quadrature |Q| data
+"""
 
         name_dict = self.analysis_cfg["convention"]["name"]
         I_ret = self.trim(
@@ -1047,8 +1047,8 @@ class Data:
             exclude: List of tones to exclude
             recalc: Whether to re-calculate if difference data column already exists
         Returns:
-            *Polars* **DataFrame** with difference data
-        """
+            pl.DataFrame: *Polars* **DataFrame** with difference data
+"""
 
         if isinstance(prefix, str):
             prefix = [prefix]
@@ -1129,7 +1129,7 @@ class Data:
             max_workers: Max number of CPU cores to use for multiprocessing. Only used if no ``ex`` provided.
             ex: *concurrent.futures* **ProcessPoolExecutor** to use for multiprocessing
         Returns:
-            *Polars* **DataFrame** with Savitzky–Golay filtered data
+            pl.DataFrame: *Polars* **DataFrame** with Savitzky–Golay filtered data
         """
         if isinstance(prefix, str):
             prefix = [prefix]
@@ -1233,7 +1233,7 @@ class Data:
             max_workers: Max number of CPU cores to use for multiprocessing. Only used if no ``ex`` provided.
             ex: *concurrent.futures* **ProcessPoolExecutor** to use for multiprocessing
         Returns:
-            *Polars* **DataFrame** with Savitzky–Golay filtered data
+            pl.DataFrame: *Polars* **DataFrame** with Savitzky–Golay filtered data
         """
         if isinstance(x_prefix, str):
             x_prefix = [x_prefix]
@@ -1356,7 +1356,7 @@ class Data:
             col_name: Data columns to apply transformation to
             recalc: Whether to re-calculate if transformed data column already exists
         Returns:
-            Full ``data`` *Polars* **DataFrame** including transformed data columns
+            pl.DataFrame: Full ``data`` *Polars* **DataFrame** including transformed data columns
         """
 
         def _get_expr(tones):
@@ -2283,7 +2283,7 @@ class Data:
             data_name: Type of data (e.g., **'phase'**, **'f'**, etc.)
             index_cols: Additional columns in ``df`` that should not be unpivoted
         Returns:
-            Unpivoted *Polars* **DataFrame**. The new DataFrame has a **'det'** column specifiying which tone each row corresponds to
+            pl.DataFrame: Unpivoted *Polars* **DataFrame**. The new DataFrame has a **'det'** column specifiying which tone each row corresponds to
         """
 
         unpivot_cols = df.columns
@@ -2314,7 +2314,7 @@ class Data:
             col_name: Full name of the column
             data_name: Data type that column corresponds to (e.g., **'phase'**, **'f'**, etc.)
         Returns:
-            Prefix of the column name
+            str: Prefix of the column name
         """
 
         segments = 0
@@ -2347,7 +2347,7 @@ class Data:
             other: ``Data`` object to join with
             in_place: Whether to perform join in-place (will modify this ``Data`` object) or to create new ``Data`` object
         Returns:
-            A reference to this ``Data`` object if ``in_place`` is **True**, otherwise the newly created ``Data`` object
+            Data: A reference to this ``Data`` object if ``in_place`` is **True**, otherwise the newly created ``Data`` object
         """
 
         def _join_consts(
