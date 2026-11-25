@@ -140,7 +140,7 @@ def setup_logging(
     log("DEBUG", "Successfully initialized logger: %s", name, name=name)
 
 
-def log(level: Level, msg: str, *args, name: str = __name__) -> None:
+def log(level: Level, msg: str, *args: Any, name: str = __name__) -> None:
     """
     Log message to logger of the specified ``name`` with custom formatting
 
@@ -189,7 +189,7 @@ def wait(t: float, desc: str = "", interval: float = 0.01) -> None:
         pbar.update(t - pbar.n)
 
 
-def header(method: Callable) -> Any:
+def header(method: Callable) -> Callable[..., Any]:
     """
     Decorator that logs **HEADER** and **FOOTER** messages and implements error handling for the wrapped method
 
@@ -227,7 +227,7 @@ def header(method: Callable) -> Any:
     return _wrapper
 
 
-def method_timer(method: Callable) -> Any:
+def method_timer(method: Callable) -> Callable[..., Any]:
     """
     Decorator that logs method execution time
 
@@ -255,7 +255,7 @@ def method_timer(method: Callable) -> Any:
     return _wrapper
 
 
-def function_timer(func: Callable) -> Any:
+def function_timer(func: Callable) -> Callable[..., Any]:
     """
     Decorator that logs function execution time
 
@@ -276,7 +276,7 @@ def function_timer(func: Callable) -> Any:
         time_diff = time.time() - start_time
 
         log(
-            "TIMER", f"Method {Style.style_name(name)} executed in {time_diff} seconds."
+            "TIMER", f"Function {Style.style_name(name)} executed in {time_diff} seconds."
         )
         return rtn
 
@@ -285,6 +285,24 @@ def function_timer(func: Callable) -> Any:
 
 @dataclass
 class Style:
+    """ANSI style codes and formatting constants for terminal log output.
+
+    Attributes:
+        ITALICS (str): ANSI escape code for italic text.
+        INVERT (str): ANSI escape code for inverted (highlight) text.
+        PCS (str): ANSI color code for the PCS log level.
+        DEBUG (str): ANSI color code for the DEBUG log level.
+        INFO (str): ANSI color code for the INFO log level.
+        HEADER (str): ANSI background color code for the HEADER log level.
+        FOOTER (str): ANSI background color code for the FOOTER log level.
+        WARNING (str): ANSI color code for the WARNING log level.
+        ERROR (str): ANSI color code for the ERROR log level.
+        CRITICAL (str): ANSI color code for the CRITICAL log level.
+        DEFAULT (str): ANSI reset code, restores default terminal formatting.
+        WAIT (str): ANSI color code for WAIT progress bar labels.
+        TIMER (str): ANSI color code for TIMER log messages.
+        LONGEST_DESC (int): Column width used to right-align log level labels.
+    """
     # Font styles
     ITALICS: str = "\033[3m"
     INVERT: str = "\033[7m"
@@ -307,6 +325,7 @@ class Style:
     # Style Properties
     LONGEST_DESC: int = 8
 
+    @staticmethod
     def style_level(level: str) -> str:
         """
         Apply style to specified log ``level``
@@ -319,6 +338,7 @@ class Style:
 
         return f"{getattr(Style, level)}{level:>{Style.LONGEST_DESC}} {Style.DEFAULT}|"
 
+    @staticmethod
     def style_name(name: str) -> str:
         """
         Apply italics style to specified function/method ``name``
