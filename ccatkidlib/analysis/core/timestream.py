@@ -277,7 +277,7 @@ class Timestream(Data):
         by: str | list[str] | None = None,
         **kwargs,
     ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
-        """Plot ``x_dim`` vs ``y_dim`` data columns for all loaded |tone|s.
+        """Plot ``x_dim`` vs ``y_dim`` data columns for all loaded |tones|.
 
         Retrieves and optionally unpivots the timestream DataFrame, creates
         hvplot elements (line or datashaded scatter), attaches holoviews
@@ -517,7 +517,7 @@ class Timestream(Data):
         overwrite: bool | None = None,
         **kwargs,
     ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
-        """Plot |I||Q| magnitude as a function of |tone| frequency.
+        """Plot |IQ| magnitude as a function of |tone| frequency.
 
         Args:
             x_prefix (str, optional): Prefix for the frequency (``"f"``)
@@ -585,7 +585,7 @@ class Timestream(Data):
         overwrite: bool | None = None,
         **kwargs,
     ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
-        """Plot |I||Q| phase angle as a function of |tone| frequency.
+        """Plot |IQ| phase angle as a function of |tone| frequency.
 
         Args:
             x_prefix (str, optional): Prefix for the frequency (``"f"``)

@@ -196,7 +196,7 @@ def header(method: Callable) -> Callable[..., Any]:
     Args:
         method: Method to decorate
     Returns:
-        The return of ``method`` if executed successfully otherwise **None**
+        Callable[..., Any]: The return of ``method`` if executed successfully otherwise **None**
     """
 
     @wraps(
@@ -234,7 +234,7 @@ def method_timer(method: Callable) -> Callable[..., Any]:
     Args:
         method: Method to decorate
     Returns:
-        The return of ``method``
+        Callable[..., Any]: The return of ``method``
     """
 
     @wraps(method)
@@ -262,7 +262,7 @@ def function_timer(func: Callable) -> Callable[..., Any]:
     Args:
         func: Function to decorate
     Returns:
-        The return of ``func``
+        Callable[..., Any]: The return of ``func``
     """
 
     @wraps(func)
@@ -333,7 +333,7 @@ class Style:
         Args:
             level: Log level to applying styling to
         Returns:
-            String with styling applied to log level
+            str: String with styling applied to log level
         """
 
         return f"{getattr(Style, level)}{level:>{Style.LONGEST_DESC}} {Style.DEFAULT}|"
@@ -346,6 +346,6 @@ class Style:
         Args:
             name: Function/method name to apply styling to
         Returns:
-            String with styling applied to function/method name
+            str: String with styling applied to function/method name
         """
         return f"{Style.ITALICS}{name}{Style.DEFAULT}"
