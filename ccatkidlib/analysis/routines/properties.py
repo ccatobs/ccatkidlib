@@ -28,33 +28,70 @@ def is_bifurcated(
     """
 
     name_enums, prefix_enums = ccat_df.create_enums(
-    [
-        "in_phase",
-        "quadrature",
-        "magnitude",
-    ],
-    prefix,
-    ["remove_impedance_mismatch"],
-    targ.analysis_cfg,
-    no_prefix=[],
+        [
+            "in_phase",
+            "quadrature",
+            "magnitude",
+        ],
+        prefix,
+        ["remove_impedance_mismatch"],
+        targ.analysis_cfg,
+        no_prefix=[],
     )
 
     name_enum, prefix_enum = name_enums[0], prefix_enums[0]
 
     property_routines.mismatch_dist(det.targ, prefix=_mismatch_prefix)
-    I_shifts = det.targ.properties[f"{_prefix['remove_impedance_mismatch']}_{_mismatch_prefix}_{_name['magnitude']}"]
+    I_shifts = det.targ.properties[
+        f"{_prefix['remove_impedance_mismatch']}_{_mismatch_prefix}_{_name['magnitude']}"
+    ]
 
-    det.targ.IQ_shift(prefix=_mismatch_prefix, shift_I = I_shifts, name='anchor')
+    det.targ.IQ_shift(prefix=_mismatch_prefix, shift_I=I_shifts, name="anchor")
 
-    det.IQ_trim(prefix=f"anchor_shift_{_mismatch_prefix}", window=2, mag_prefix=f"{_prefix['savgol_filter']}0")
+    det.IQ_trim(
+        prefix=f"anchor_shift_{_mismatch_prefix}",
+        window=2,
+        mag_prefix=f"{_prefix['savgol_filter']}0",
+    )
     det.targ.linewidth_shift(prefix=f"tail_trim_anchor_shift_{_mismatch_prefix}")
-    _fwhm_q = det.targ.properties.select((pl.col('mid_savgol0_FWHM_f')/ (pl.col('high_savgol0_FWHM_f') -pl.col('low_savgol0_FWHM_f'))).alias('FWHM_Q')).to_numpy().T[0]
-    _qs = det.targ.properties.select(pl.col('phase_fit_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_Q')).to_numpy().T[0]
-    det.targ.scale(col_name='lw', prefix=f"tail_trim_anchor_shift_{_mismatch_prefix}", scale=10e5/_fwhm_q, name='FWHM')
-    det.targ.scale(col_name='lw', prefix=f"tail_trim_anchor_shift_{_mismatch_prefix}", scale=10e5/_qs, name='Q')
+    _fwhm_q = (
+        det.targ.properties.select(
+            (
+                pl.col("mid_savgol0_FWHM_f")
+                / (pl.col("high_savgol0_FWHM_f") - pl.col("low_savgol0_FWHM_f"))
+            ).alias("FWHM_Q")
+        )
+        .to_numpy()
+        .T[0]
+    )
+    _qs = (
+        det.targ.properties.select(
+            pl.col(
+                "phase_fit_mismatch_rotate_origin_shift_origin_rotate_unwind_rotate_Q"
+            )
+        )
+        .to_numpy()
+        .T[0]
+    )
+    det.targ.scale(
+        col_name="lw",
+        prefix=f"tail_trim_anchor_shift_{_mismatch_prefix}",
+        scale=10e5 / _fwhm_q,
+        name="FWHM",
+    )
+    det.targ.scale(
+        col_name="lw",
+        prefix=f"tail_trim_anchor_shift_{_mismatch_prefix}",
+        scale=10e5 / _qs,
+        name="Q",
+    )
 
-    det.targ.diff(col_name='lw', prefix=f"Q_scale_tail_trim_anchor_shift_{_mismatch_prefix}")
-    det.targ.diff(col_name='lw', prefix=f"FWHM_scale_tail_trim_anchor_shift_{_mismatch_prefix}")
+    det.targ.diff(
+        col_name="lw", prefix=f"Q_scale_tail_trim_anchor_shift_{_mismatch_prefix}"
+    )
+    det.targ.diff(
+        col_name="lw", prefix=f"FWHM_scale_tail_trim_anchor_shift_{_mismatch_prefix}"
+    )
 
     # Get frequency corresponding to the |S_21| minimum
     # -------------------------------------------------

@@ -263,7 +263,14 @@ class Detector:
 
     @property
     def properties(self) -> pl.DataFrame:
-        """ """
+        """Lazily loaded *Polars* DataFrame of per-|tone| detector properties.
+
+        Collects any ``pl.LazyFrame``, merges in target-sweep and timestream
+        per-tone properties, and returns the unified ``_properties_df``.
+
+        Returns:
+            pl.DataFrame: Per-|tone| detector properties.
+        """
 
         def _merge_properties(new_properties_df: pl.DataFrame) -> None:
             """
@@ -295,38 +302,78 @@ class Detector:
         if isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._properties_df = value
 
-    def cable_delay(self, 
-                    prefix = "",
-                    mag_prefix = "",
-                    window: int | list[int] = 5, 
-                    mean_points: int | list[int] = 10, 
-                    include=None, 
-                    exclude=None, 
-                    recalc=False, 
-                    stitch_workers = 1, 
-                    linear_fit_workers=1, 
-                    ex=None):
-        delay_col = self.analysis_cfg['convention']['name']['cable_delay']
+    def cable_delay(
+        self,
+        prefix: str = "",
+        mag_prefix: str = "",
+        window: int | list[int] = 5,
+        mean_points: int | list[int] = 10,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        stitch_workers: int = 1,
+        linear_fit_workers: int = 1,
+        ex: Any | None = None,
+    ) -> pl.DataFrame:
+        """Calculate the cable delay of the detector network.
+
+        Delegates to ``Target.cable_delay()`` for the target sweep, then
+        uses a VNA-derived delay as a fallback for |tone|s where the
+        target-sweep estimate is NaN.
+
+        Args:
+            prefix (str, optional): Prefix of |I| & |Q| data. Defaults to
+                ``''``.
+            mag_prefix (str, optional): Prefix of magnitude data. Defaults to
+                ``''``.
+            window (int | list[int], optional): Smoothing window for stitch.
+                Defaults to 5.
+            mean_points (int | list[int], optional): Points to average at
+                cable-delay line endpoints. Defaults to 10.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+            stitch_workers (int, optional): Worker processes for stitching.
+                Defaults to 1.
+            linear_fit_workers (int, optional): Worker processes for linear fit.
+                Defaults to 1.
+            ex (Any | None, optional): Existing executor to reuse. Defaults to
+                *None*.
+        Returns:
+            pl.DataFrame: Sub-frame of ``properties`` with VNA and target
+            cable-delay columns.
+        """
+        delay_col = self.analysis_cfg["convention"]["name"]["cable_delay"]
         vna_col, targ_col = "_".join(["vna", delay_col]), "_".join(["targ", delay_col])
 
-        self.targ.cable_delay(prefix=prefix, 
-                              mag_prefix=mag_prefix, 
-                              window=window, 
-                              mean_points=mean_points, 
-                              include=include, 
-                              exclude=exclude, 
-                              recalc=recalc, 
-                              stitch_workers=stitch_workers, 
-                              linear_fit_workers=linear_fit_workers, 
-                              ex=ex)
+        self.targ.cable_delay(
+            prefix=prefix,
+            mag_prefix=mag_prefix,
+            window=window,
+            mean_points=mean_points,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+            stitch_workers=stitch_workers,
+            linear_fit_workers=linear_fit_workers,
+            ex=ex,
+        )
         vna_delay = self.vna.cable_delay() if isinstance(self.vna, VNA) else 0
-        self._properties_df = (self.properties.with_columns(pl.lit(vna_delay).alias(vna_col))
-                                              .with_columns(pl.when(pl.col(targ_col).is_nan())
-                                                              .then(pl.col(vna_col))
-                                                              .otherwise(pl.col(targ_col)) 
-                                                              .alias(targ_col)))
-        
-        return self.get_properties([vna_col, targ_col], strict=True, include=include, exclude=exclude)
+        self._properties_df = self.properties.with_columns(
+            pl.lit(vna_delay).alias(vna_col)
+        ).with_columns(
+            pl.when(pl.col(targ_col).is_nan())
+            .then(pl.col(vna_col))
+            .otherwise(pl.col(targ_col))
+            .alias(targ_col)
+        )
+
+        return self.get_properties(
+            [vna_col, targ_col], strict=True, include=include, exclude=exclude
+        )
 
     @cached_property
     def fig_dir(self) -> str:
@@ -361,7 +408,8 @@ class Detector:
         return pickle_dir
 
     @cached_property
-    def fit_dir(self):
+    def fit_dir(self) -> str:
+        """Directory path where fit files are stored, from analysis config."""
         return self.analysis_cfg["file_paths"]["fit_dir"]
 
     # =====================#
@@ -374,15 +422,21 @@ class Detector:
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         strict: bool = False,
-    ):
-        """Get the specified data columns and rows from the ``properties`` Polars DataFrame
+    ) -> pl.DataFrame:
+        """Get the specified data columns and rows from the ``properties`` Polars DataFrame.
 
         Args:
-            col_name (str | list[str], optional): Defaults to all columns
-            include (int | list[int] | None, optional): Defaults to *None*
-            exclude (int | list[int] | None, optional): Defaults to *None*
-            strict (bool, optional): Defaults to *False*
-
+            col_name (str | list[str], optional): Column name pattern or list of
+                names to select. Defaults to all columns.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            strict (bool, optional): Raise if a requested column is absent.
+                Defaults to *False*.
+        Returns:
+            pl.DataFrame: Sub-frame of ``properties`` matching ``col_name`` and
+            detector filters.
         """
         return ccat_df.get_properties(
             self, col_name=col_name, include=include, exclude=exclude, strict=strict
@@ -414,14 +468,10 @@ class Detector:
         Returns:
             pl.Dataframe: Polars DataFrame with unwound I & Q data
         """
-        if isinstance(prefix, str): prefix = [prefix]
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
-            [
-                "frequency",
-                "in_phase",
-                "quadrature",
-                "tone_frequency"
-            ],
+            ["frequency", "in_phase", "quadrature", "tone_frequency"],
             prefix,
             ["rotate", "remove_cable"],
             self.analysis_cfg,
@@ -466,18 +516,23 @@ class Detector:
                             delays,
                         )
                     ]
-                    if data_obj.data_type == 'targ'
+                    if data_obj.data_type == "targ"
                     else [
                         delay * tone_freq
                         for tone_freq, delay in zip(
-                            data_obj.comb[name_enums[0].TONE_FREQUENCY.value].to_numpy().T, delays
+                            data_obj.comb[name_enums[0].TONE_FREQUENCY.value]
+                            .to_numpy()
+                            .T,
+                            delays,
                         )
                     ]
                 )
                 unwind_df, unwind_prefix = data_obj.IQ_rotate(
                     prefix=prefix,
                     angle=angle,
-                    name=[prefix_enum.REMOVE_CABLE.value for prefix_enum in prefix_enums],
+                    name=[
+                        prefix_enum.REMOVE_CABLE.value for prefix_enum in prefix_enums
+                    ],
                     include=include,
                     exclude=exclude,
                     recalc=recalc,
@@ -485,9 +540,10 @@ class Detector:
                 unwind_dfs.append(unwind_df)
 
             ret_pre = unwind_prefix
-            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+            if len(ret_pre) == 1:
+                ret_pre = ret_pre[0]
 
-            return unwind_dfs, ret_pre if ret_prefix else unwind_dfs        
+            return unwind_dfs, ret_pre if ret_prefix else unwind_dfs
 
     def IQ_norm(
         self,
@@ -502,13 +558,14 @@ class Detector:
         Divide out cable baseline from target sweep and/or timestream I & Q data
 
         """
-        if isinstance(prefix, str): prefix = [prefix]
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
-            ["frequency", "in_phase", "quadrature", "magnitude", 'tone_frequency'],
+            ["frequency", "in_phase", "quadrature", "magnitude", "tone_frequency"],
             prefix,
             ["scale", "normalize"],
             self.analysis_cfg,
-            no_prefix=["frequency", "magnitude", 'tone_frequency'],
+            no_prefix=["frequency", "magnitude", "tone_frequency"],
         )
 
         data_objs = self._get_data_obj(data)
@@ -520,7 +577,10 @@ class Detector:
             raise ValueError(error)
 
         tone_freqs = self.get_properties(
-            name_enums[0].TONE_FREQUENCY.value, include=include, exclude=exclude, strict=True
+            name_enums[0].TONE_FREQUENCY.value,
+            include=include,
+            exclude=exclude,
+            strict=True,
         )
 
         with return_prefix(self.analysis_cfg) as ret_prefix:
@@ -533,7 +593,7 @@ class Detector:
                     exclude=exclude,
                     strict=True,
                 )
-                if data_obj.data_type == 'targ':
+                if data_obj.data_type == "targ":
                     scale = 1 / cable_mags.to_numpy().T
                 else:
                     # TODO: Probably unnecessary computation to find data point corresponding to tone. Should always be sample = num_samples/2 (unless timestream tone frequency is changed without retaking target sweep)
@@ -543,7 +603,9 @@ class Detector:
                             f_col, include=include, exclude=exclude, strict=True
                         )
                         .unpivot(variable_name="det", value_name=f_col)
-                        .with_columns(pl.col("det").str.strip_prefix(f"{f_col}_").cast(int))
+                        .with_columns(
+                            pl.col("det").str.strip_prefix(f"{f_col}_").cast(int)
+                        )
                     )
                     cable_df = cable_mags.unpivot(
                         variable_name="temp", value_name="cable"
@@ -553,15 +615,23 @@ class Detector:
                         tone_freqs, on="det", how="left", coalesce=True
                     )
                     scale = (
-                    1/
-                    (
+                        1
+                        / (
                             f_cable_df.lazy()
-                            .with_columns((pl.col(f_col) - pl.col(name_enums[0].TONE_FREQUENCY.value)).abs().alias('diff'))
-                            .filter(pl.col("diff") == pl.col("diff").min().over('det'))
-                            .select('cable')
+                            .with_columns(
+                                (
+                                    pl.col(f_col)
+                                    - pl.col(name_enums[0].TONE_FREQUENCY.value)
+                                )
+                                .abs()
+                                .alias("diff")
+                            )
+                            .filter(pl.col("diff") == pl.col("diff").min().over("det"))
+                            .select("cable")
                             .collect()
-                        ).to_numpy().T[0]
-    
+                        )
+                        .to_numpy()
+                        .T[0]
                     )
 
                 norm_df, norm_prefix = data_obj.IQ_scale(
@@ -575,24 +645,44 @@ class Detector:
 
                 norm_dfs.append(norm_df)
             ret_pre = norm_prefix
-            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+            if len(ret_pre) == 1:
+                ret_pre = ret_pre[0]
 
             return norm_dfs, ret_pre if ret_prefix else norm_dfs
 
     def IQ_circle_origin(
         self,
         prefix: str | list[str] = "unwind_rotate",
-        circle_fit_prefix="",
+        circle_fit_prefix: str | list[str] = "",
         data: str = "both",
         use_fit: bool | list[bool] = True,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
     ) -> list[pl.DataFrame]:
+        """Rotate and centre the target-sweep |IQ| circle onto the real axis at the origin.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of |I| & |Q| data.
+                Defaults to ``'unwind_rotate'``.
+            circle_fit_prefix (str | list[str], optional): Prefix of circle-fit
+                results used to retrieve the circle centre. Defaults to ``''``.
+            data (str, optional): Which data objects to transform; ``'targ'``,
+                ``'timestream'``, or ``'both'``. Defaults to ``'both'``.
+            use_fit (bool | list[bool], optional): Use circle-fit centre rather
+                than median |I|/|Q|. Defaults to *True*.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+        Returns:
+            list[pl.DataFrame]: Transformed data DataFrames (one per data
+            object).
         """
-        Rotate and center the target sweep circle in the IQ plane onto the real axis
-        """
-        if isinstance(prefix, str): prefix = [prefix]
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "magnitude", "phase"],
             prefix,
@@ -717,9 +807,7 @@ class Detector:
 
             data_objs = self._get_data_obj(data)
             if not data_objs:
-                error = (
-                    f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
-                )
+                error = f"Invalid data type {data}, must be 'targ', 'timestream', or 'both'."
                 log.log("ERROR", error)
                 raise ValueError(error)
 
@@ -728,7 +816,9 @@ class Detector:
                 _, rotate_prefix = data_obj.IQ_rotate(
                     prefix=prefix,
                     angle=angles,
-                    name=[prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums],
+                    name=[
+                        prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums
+                    ],
                     include=include,
                     exclude=exclude,
                     recalc=recalc,
@@ -736,7 +826,9 @@ class Detector:
                 shift_df, shift_prefix = data_obj.IQ_shift(
                     prefix=rotate_prefix,
                     shift_I=shifts,
-                    name=[prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums],
+                    name=[
+                        prefix_enum.CENTER_ORIGIN.value for prefix_enum in prefix_enums
+                    ],
                     include=include,
                     exclude=exclude,
                     recalc=recalc,
@@ -744,9 +836,10 @@ class Detector:
                 shift_dfs.append(shift_df)
 
             ret_pre = shift_prefix
-            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+            if len(ret_pre) == 1:
+                ret_pre = ret_pre[0]
 
-            return shift_dfs, ret_pre if ret_prefix else shift_dfs        
+            return shift_dfs, ret_pre if ret_prefix else shift_dfs
 
     def IQ_circle_rotate(
         self,
@@ -786,20 +879,21 @@ class Detector:
             ):
                 if rot.lower() == "mismatch":
                     mismatch_df, _ = self.targ.mismatch_angle(
-                            pre,
-                            mean_points=mean_point,
-                            include=include,
-                            exclude=exclude,
-                            recalc=recalc,
-                        )
+                        pre,
+                        mean_points=mean_point,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                    )
                     angles[i] = mismatch_df.to_numpy().T[1]
                     rot_names[i] = prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value
                 elif rot.lower() == "timestream":
-                    stream_df, _ = self.stream.timestream_angle(pre,
-                                                            include=include,
-                                                            exclude=exclude,
-                                                            recalc=recalc,
-                                                        )
+                    stream_df, _ = self.stream.timestream_angle(
+                        pre,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                    )
                     angles[i] = stream_df.to_numpy().T[1]
                     rot_names[i] = prefix_enum.CENTER_TIMESTREAM.value
                 else:
@@ -821,21 +915,42 @@ class Detector:
                 rotation_dfs.append(rotate_df)
 
             ret_pre = rotate_prefix
-            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+            if len(ret_pre) == 1:
+                ret_pre = ret_pre[0]
 
-            return rotation_dfs, ret_pre if ret_prefix else rotation_dfs        
+            return rotation_dfs, ret_pre if ret_prefix else rotation_dfs
 
     def IQ_circle_natural(
-                          self,
-                          prefix="",
-                          data="both",
-                          mean_points = 10,
-                          include=None,
-                          exclude=None,
-                          recalc=False):
-        '''
-        Transform IQ circle centered at the origin to the natural coordinates for a resonator (off-resonance at (1, 0)).
-        '''
+        self,
+        prefix: str | list[str] = "",
+        data: str = "both",
+        mean_points: int | list[int] = 10,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> list[pl.DataFrame]:
+        """Shift an origin-centred |IQ| circle to the natural resonator coordinates.
+
+        In natural coordinates the off-resonance point sits at ``(1, 0)``.
+        The shift distance is computed as ``1 − mismatch_dist``.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of |I| & |Q| data.
+                Defaults to ``''``.
+            data (str, optional): Which data objects to transform; ``'targ'``,
+                ``'timestream'``, or ``'both'``. Defaults to ``'both'``.
+            mean_points (int | list[int], optional): Points averaged to estimate
+                the off-resonance position. Defaults to 10.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+        Returns:
+            list[pl.DataFrame]: Transformed data DataFrames (one per data
+            object).
+        """
         if isinstance(prefix, str):
             prefix = [prefix]
 
@@ -851,48 +966,76 @@ class Detector:
         mean_points = ccat_df.check_args(mean_points, num_prefix, int)
 
         with return_prefix(self.analysis_cfg) as ret_prefix:
-            dists = [None]*num_prefix
+            dists = [None] * num_prefix
             for i, (pre, mean_point) in enumerate(zip(prefix, mean_points)):
-                dist, _ = self.targ.mismatch_dist(prefix=pre, 
-                                                  mean_points=mean_point, 
-                                                  include=include, 
-                                                  exclude=exclude, 
-                                                  recalc=recalc)
+                dist, _ = self.targ.mismatch_dist(
+                    prefix=pre,
+                    mean_points=mean_point,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
                 dists[i] = 1 - dist.to_numpy().T[1]
 
             data_objs = self._get_data_obj(data)
-            nat_dfs = [None]*len(data_objs)
+            nat_dfs = [None] * len(data_objs)
             for i, data_obj in enumerate(data_objs):
-                _, rotate_prefix = data_obj.IQ_rotate(prefix=prefix,
-                                angle=np.pi,
-                                name="half",
-                                include=include,
-                                exclude=exclude,
-                                recalc=recalc)
-                nat_df, nat_prefix = data_obj.IQ_shift(prefix=rotate_prefix,
-                                                       shift_I = dists,
-                                                       shift_Q = 0,
-                                                       name = prefix_enums[0].CENTER_NATURAL.value,
-                                                       include=include,
-                                                       exclude=exclude,
-                                                       recalc=recalc)
+                _, rotate_prefix = data_obj.IQ_rotate(
+                    prefix=prefix,
+                    angle=np.pi,
+                    name="half",
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
+                nat_df, nat_prefix = data_obj.IQ_shift(
+                    prefix=rotate_prefix,
+                    shift_I=dists,
+                    shift_Q=0,
+                    name=prefix_enums[0].CENTER_NATURAL.value,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
                 nat_dfs[i] = nat_df
-            
+
             ret_pre = nat_prefix
-            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+            if len(ret_pre) == 1:
+                ret_pre = ret_pre[0]
 
-            return nat_dfs, ret_pre if ret_prefix else nat_dfs        
+            return nat_dfs, ret_pre if ret_prefix else nat_dfs
 
-    def IQ_circle_tail(self,
-                       prefix="",
-                       data="both",
-                       mean_points = 10,
-                       include=None,
-                       exclude=None,
-                       recalc=False):
-        '''
-        Transform IQ circle centered at the origin to the natural coordinates for a resonator (off-resonance at (1, 0)).
-        '''
+    def IQ_circle_tail(
+        self,
+        prefix: str | list[str] = "",
+        data: str = "both",
+        mean_points: int | list[int] = 10,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> list[pl.DataFrame]:
+        """Shift an origin-centred |IQ| circle so the on-resonance tail sits at the origin.
+
+        The shift distance equals ``mismatch_dist`` (versus ``1 − mismatch_dist``
+        used by ``IQ_circle_natural``), placing the resonance tail at ``(0, 0)``.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of |I| & |Q| data.
+                Defaults to ``''``.
+            data (str, optional): Which data objects to transform; ``'targ'``,
+                ``'timestream'``, or ``'both'``. Defaults to ``'both'``.
+            mean_points (int | list[int], optional): Points averaged to estimate
+                the on-resonance position. Defaults to 10.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+        Returns:
+            list[pl.DataFrame]: Transformed data DataFrames (one per data
+            object).
+        """
         if isinstance(prefix, str):
             prefix = [prefix]
 
@@ -908,31 +1051,36 @@ class Detector:
         mean_points = ccat_df.check_args(mean_points, num_prefix, int)
 
         with return_prefix(self.analysis_cfg) as ret_prefix:
-            dists = [None]*num_prefix
+            dists = [None] * num_prefix
             for i, (pre, mean_point) in enumerate(zip(prefix, mean_points)):
-                dist, _ = self.targ.mismatch_dist(prefix=pre, 
-                                                  mean_points=mean_point, 
-                                                  include=include, 
-                                                  exclude=exclude, 
-                                                  recalc=recalc)
+                dist, _ = self.targ.mismatch_dist(
+                    prefix=pre,
+                    mean_points=mean_point,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
                 dists[i] = dist.to_numpy().T[1]
 
             data_objs = self._get_data_obj(data)
-            tail_dfs = [None]*len(data_objs)
+            tail_dfs = [None] * len(data_objs)
             for i, data_obj in enumerate(data_objs):
-                tail_df, tail_prefix = data_obj.IQ_shift(prefix=prefix,
-                                            shift_I = dists,
-                                            shift_Q = 0,
-                                            name = prefix_enums[0].CENTER_TAIL.value,
-                                            include=include,
-                                            exclude=exclude,
-                                            recalc=recalc)
+                tail_df, tail_prefix = data_obj.IQ_shift(
+                    prefix=prefix,
+                    shift_I=dists,
+                    shift_Q=0,
+                    name=prefix_enums[0].CENTER_TAIL.value,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
                 tail_dfs[i] = tail_df
-            
-            ret_pre = tail_prefix
-            if len(ret_pre) == 1: ret_pre = ret_pre[0]
 
-            return tail_dfs, ret_pre if ret_prefix else tail_dfs        
+            ret_pre = tail_prefix
+            if len(ret_pre) == 1:
+                ret_pre = ret_pre[0]
+
+            return tail_dfs, ret_pre if ret_prefix else tail_dfs
 
     def IQ_circle_diss_corr(
         self,
@@ -941,16 +1089,42 @@ class Detector:
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
-        max_workers=1,
-        ex=None,
-        **kwargs):
+        max_workers: int = 1,
+        ex: Any | None = None,
+        **kwargs,
+    ) -> pl.DataFrame:
+        """Apply dissipation correction to origin-centred |IQ| circle data.
+
+        Projects |I| & |Q| onto the dissipation axis using the circle radius
+        from a prior circle fit.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of |I| & |Q| data.
+                Defaults to ``''``.
+            circle_fit_prefix (str | list[str], optional): Prefix under which the
+                |IQ| circle radius was stored. Defaults to
+                ``'circle_fit_unwind_rotate'``.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+            max_workers (int, optional): Worker processes for computation.
+                Defaults to 1.
+            ex (Any | None, optional): Existing executor to reuse. Defaults to
+                *None*.
+        Returns:
+            pl.DataFrame: Target-sweep DataFrame with dissipation-corrected
+            columns.
+        """
         if isinstance(prefix, str):
             prefix = [prefix]
 
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "magnitude"],
             prefix,
-            ['dissipation_correction'],
+            ["dissipation_correction"],
             self.analysis_cfg,
             no_prefix=[],
         )
@@ -969,7 +1143,9 @@ class Detector:
             for pre in circle_fit_prefix
         ]
 
-        args = [[radius, ccat_mp.check_max_workers(max_workers), ex] for radius in radii]
+        args = [
+            [radius, ccat_mp.check_max_workers(max_workers), ex] for radius in radii
+        ]
         self.targ.transform(
             [Detector._calc_dissipation_correction] * num_prefix,
             *args,
@@ -997,10 +1173,16 @@ class Detector:
             exclude=exclude,
         )
 
-        ret_pre = [f"{prefix_enum.DISSIPATION_CORRECTION.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            f"{prefix_enum.DISSIPATION_CORRECTION.value}{'_' if pre else ''}{pre}"
+            for pre, prefix_enum in zip(prefix, prefix_enums)
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
     # Timesteream conversion
     # ---------------------
@@ -1014,19 +1196,42 @@ class Detector:
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
-        max_workers=1,
-        ex=None,
+        max_workers: int = 1,
+        ex: Any | None = None,
         **kwargs,
     ) -> pl.DataFrame:
-        """Interpolate target sweep phase vs. frequency data and add interpolating splines to ``properties`` attribute
+        """Interpolate target-sweep phase vs. frequency and store splines in ``properties``.
+
+        Fits bidirectional interpolating splines (phase→frequency and
+        frequency→phase) over the unwind-rotated target sweep for each |tone|,
+        then writes the spline objects to ``stream.spline_dict`` and their
+        string keys to ``properties``.
 
         Args:
-            phase_low (float): Lower bound of phase to use for interpolation. Defaults to -pi
-            phase_up (float): Upper bound of phase to use for interpolation. Defaults to +pi
-            k (int): Degree of polynomials to use for interpolation. Defaults to degree 3.
+            prefix (str | list[str], optional): Prefix of phase and frequency
+                data. Defaults to
+                ``'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'``.
+            phase_low (float, optional): Lower phase bound for spline fit.
+                Defaults to -3.14 (approx. −π).
+            phase_up (float, optional): Upper phase bound for spline fit.
+                Defaults to 3.14 (approx. +π).
+            k (int, optional): Polynomial degree for spline. Defaults to 3.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+            max_workers (int, optional): Worker processes. Defaults to 1.
+            ex (Any | None, optional): Existing executor to reuse. Defaults to
+                *None*.
+        Returns:
+            pl.DataFrame: Target-sweep DataFrame with spline-interpolated
+            columns.
         """
-        
-        if isinstance(prefix, str): prefix = [prefix]
+
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["frequency", "phase"],
             prefix,
@@ -1075,43 +1280,64 @@ class Detector:
         )
 
         ret_df = self.targ.get_data(
-            col_name=col_name,
-            include=include,
-            exclude=exclude,
-            strict=True
+            col_name=col_name, include=include, exclude=exclude, strict=True
         )
 
-        ret_pre = [(f"{self.stream.timestamp}_{prefix_enum.SPLINE.value}_{name_enum.FREQUENCY.value}_to{'_' if pre else ''}{pre}", 
-                   f"{self.stream.timestamp}_{prefix_enum.SPLINE.value}_{name_enum.PHASE.value}_to") for pre, prefix_enum, name_enum in zip(prefix, prefix_enums, name_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            (
+                f"{self.stream.timestamp}_{prefix_enum.SPLINE.value}_{name_enum.FREQUENCY.value}_to{'_' if pre else ''}{pre}",
+                f"{self.stream.timestamp}_{prefix_enum.SPLINE.value}_{name_enum.PHASE.value}_to",
+            )
+            for pre, prefix_enum, name_enum in zip(prefix, prefix_enums, name_enums)
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
     def phase_to_f(
         self,
-        prefix: str | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
-        spline_prefix: str | list[str] = '',
+        prefix: str
+        | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
+        spline_prefix: str | list[str] = "",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
-        max_workers=1,
-        ex=None,
+        max_workers: int = 1,
+        ex: Any | None = None,
         **kwargs,
     ) -> pl.DataFrame:
-        """
-        Convert timestream phase data to frequency using target sweep phase vs. frequency interpolating spline
+        """Convert timestream phase data to frequency via a target-sweep spline.
+
+        Looks up pre-built phase→frequency splines from ``stream.spline_dict``
+        (keyed by their string representation stored in ``properties``) and
+        applies them to the timestream phase columns.
 
         Args:
-            prefix (str | list[str]): Prefix of phase data to convert to frequency
-            spline_prefix (str): Prefix of phase data used to construct spline
-            phase_bounds (float): Amount to add to min and max timestream phase to determine phase vs. frequency spline bounds (i.e., ``phase_low = min_stream_phase - phase_bounds`` & ``phase_up = max_stream_phase + phase_bounds``)
-            k (int): Order of polynomials to use for phase vs. frequency spline
-            include (int | list[int] | None, optional): Detector(s) for which to perform calculation
-            exclude (int | list[int] | None, optional): Detector(s) for which not to perform calculation
-            recalc (bool): Whether to recalculate if data is already in ``data`` DataFrame. Defaults to False
-            max_workers (int): Number of processor cores to use for calculation. Defaults to 1.
+            prefix (str | list[str], optional): Prefix of phase data to convert.
+                Defaults to
+                ``'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'``.
+            spline_prefix (str | list[str], optional): Prefix of phase data used
+                to construct the spline (matches the ``prefix`` passed to
+                ``phase_spline``). Defaults to the value of ``prefix``.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+            max_workers (int, optional): Worker processes for computation.
+                Defaults to 1.
+            ex (Any | None, optional): Existing executor to reuse. Defaults to
+                *None*.
+        Returns:
+            pl.DataFrame: Timestream DataFrame with frequency columns derived
+            from phase via the target-sweep spline.
         """
-        if not spline_prefix: spline_prefix = prefix
+        if not spline_prefix:
+            spline_prefix = prefix
 
         name_enums, prefix_enums = ccat_df.create_enums(
             ["frequency", "phase"],
@@ -1181,29 +1407,47 @@ class Detector:
             self.stream, [f"struct_{name}" for name in col_name]
         )
         ret_df = self.stream.get_data(
-            col_name=col_name,
-            include=include,
-            exclude=exclude,
-            strict=True
+            col_name=col_name, include=include, exclude=exclude, strict=True
         )
-        
-        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df   
+
+        return ret_df, prefix if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
     def frac_f(
         self,
         prefix: str
         | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
         ref_f: str | list[float] = "",
-        data='timestream',
+        data: str = "timestream",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         **kwargs,
     ) -> pl.DataFrame:
+        r"""Convert frequency data to fractional frequency shift :math:`\delta f / f_0`.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of frequency data to
+                convert. Defaults to
+                ``'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'``.
+            ref_f (str | list[float], optional): Reference frequency: either
+                a ``properties`` column name (str) or per-|tone| float values.
+                Defaults to the ``tone_frequency`` config column.
+            data (str, optional): Which data objects to convert; ``'targ'``,
+                ``'timestream'``, or ``'both'``. Defaults to ``'timestream'``.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+        Returns:
+            list[pl.DataFrame]: Data DataFrames with fractional-frequency
+            columns (one per data object).
         """
-        Convert timestream frequency data to fractional frequency shift
-        """
-        if not ref_f: ref_f = self.analysis_cfg['convention']['name']['tone_frequency']
+        if not ref_f:
+            ref_f = self.analysis_cfg["convention"]["name"]["tone_frequency"]
 
         name_enums, prefix_enums = ccat_df.create_enums(
             ["frequency", "fractional_frequency"],
@@ -1248,32 +1492,67 @@ class Detector:
 
             frac_f_dfs.append(
                 data_obj.get_data(
-                    col_name=[name_enum.FRACTIONAL_FREQUENCY.value for name_enum in name_enums],
+                    col_name=[
+                        name_enum.FRACTIONAL_FREQUENCY.value for name_enum in name_enums
+                    ],
                     include=include,
                     exclude=exclude,
-                    strict=True
-                    ))
+                    strict=True,
+                )
+            )
 
-        return frac_f_dfs, prefix if self.analysis_cfg['runtime']['return_prefix'] else frac_f_dfs   
+        return frac_f_dfs, prefix if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else frac_f_dfs
 
-    def linear_frac_f(self,
-                      prefix: str | list[str] = "",
-                      circle_fit_prefix: str | list[str] = "circle_fit_unwind_rotate",
-                      mag_prefix: str = "",
-                      mean_points: int = 10,
-                      include: int | list[int] | None = None,
-                      exclude: int | list[int] | None = None,
-                      recalc: bool = False,
-                      max_workers=1,
-                      ex=None,
-                      **kwargs):
+    def linear_frac_f(
+        self,
+        prefix: str | list[str] = "",
+        circle_fit_prefix: str | list[str] = "circle_fit_unwind_rotate",
+        mag_prefix: str = "",
+        mean_points: int = 10,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        max_workers: int = 1,
+        ex: Any | None = None,
+        **kwargs,
+    ) -> pl.DataFrame:
+        r"""Estimate fractional frequency shift linearly from origin-centred |IQ| position.
+
+        Uses the circle radius and total quality factor Q to convert |I|/|Q|
+        displacement to :math:`\delta f / f_0` without requiring a phase spline.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of |I| & |Q| data.
+                Defaults to ``''``.
+            circle_fit_prefix (str | list[str], optional): Prefix of circle-fit
+                results used to retrieve the radius. Defaults to
+                ``'circle_fit_unwind_rotate'``.
+            mag_prefix (str, optional): Prefix of magnitude data used to
+                estimate Q from FWHM. Defaults to ``''``.
+            mean_points (int, optional): Points averaged for FWHM estimation.
+                Defaults to 10.
+            include (int | list[int] | None, optional): |tone|s to include.
+                Defaults to *None* (all).
+            exclude (int | list[int] | None, optional): |tone|s to exclude.
+                Defaults to *None*.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
+            max_workers (int, optional): Worker processes. Defaults to 1.
+            ex (Any | None, optional): Existing executor to reuse. Defaults to
+                *None*.
+        Returns:
+            pl.DataFrame: Target-sweep DataFrame with linear fractional-
+            frequency columns.
+        """
         if isinstance(prefix, str):
             prefix = [prefix]
 
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "fractional_frequency"],
             prefix,
-            ['linear'],
+            ["linear"],
             self.analysis_cfg,
             no_prefix=[],
         )
@@ -1298,21 +1577,28 @@ class Detector:
 
         # Estimate detector total quality factors
         # ---------------------------------------
-        Qs, return_prefix = [[]]*num_prefix, self.analysis_cfg['runtime']['return_prefix']
+        Qs, return_prefix = (
+            [[]] * num_prefix,
+            self.analysis_cfg["runtime"]["return_prefix"],
+        )
         for i, (mag_pre, mean_point) in enumerate(zip(mag_prefix, mean_points)):
             fwhm_df = self.targ.fwhm(
-                    mag_pre,
-                    mean_points=mean_point,
-                    include=include,
-                    exclude=exclude,
-                    recalc=recalc,
-                )
-            if return_prefix: fwhm_df = fwhm_df[0]
+                mag_pre,
+                mean_points=mean_point,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+            )
+            if return_prefix:
+                fwhm_df = fwhm_df[0]
             f_low, f_mid, f_high = fwhm_df.to_numpy().T[4:]
             fwhm = f_high - f_low
-            Qs[i] = f_mid/fwhm
+            Qs[i] = f_mid / fwhm
 
-        args = [[radius, Q, ccat_mp.check_max_workers(max_workers), ex] for radius, Q in zip(radii, Qs)]
+        args = [
+            [radius, Q, ccat_mp.check_max_workers(max_workers), ex]
+            for radius, Q in zip(radii, Qs)
+        ]
         self.targ.transform(
             [Detector._calc_linear_frac_f] * num_prefix,
             *args,
@@ -1323,7 +1609,10 @@ class Detector:
             prefix_enum=prefix_enums,
         )
 
-        col_names = [f"{prefix_enum.LINEAR.value}_{name_enum.FRACTIONAL_FREQUENCY.value}" for prefix_enum, name_enum in zip(prefix_enums, name_enums)]
+        col_names = [
+            f"{prefix_enum.LINEAR.value}_{name_enum.FRACTIONAL_FREQUENCY.value}"
+            for prefix_enum, name_enum in zip(prefix_enums, name_enums)
+        ]
 
         self.targ.data = ccat_df.unnest(
             self.targ, [f"struct_{name}" for name in col_names]
@@ -1337,7 +1626,7 @@ class Detector:
     # ==================#
     # Analysis Methods #
     # ==================#
-    
+
     @staticmethod
     def _calc_phase_spline(
         schema,
@@ -1348,7 +1637,10 @@ class Detector:
         col_enum=None,
         prefix_enum=None,
     ):
+        """Polars expression factory: build phase-to-frequency splines for a batch of |tone|s."""
+
         def _phase_spline(df):
+            """Execute spline fitting over a batch of |tone|s and return packed result struct."""
             data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
 
             results_dict = {}
@@ -1392,8 +1684,12 @@ class Detector:
                         det.stream._properties[
                             ccat_df.add_tone("det", tone, padding)
                         ] = property_dict
-                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = spline_data[0]
-                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = spline_data[1]
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            spline_data[0]
+                        )
+                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = (
+                            spline_data[1]
+                        )
             return ccat_mp.package_results(results_dict)
 
         if not len(args) == 7:
@@ -1454,7 +1750,10 @@ class Detector:
         col_enum=None,
         prefix_enum=None,
     ):
+        """Polars expression factory: convert phase to frequency via pre-built splines."""
+
         def _phase_to_f(df):
+            """Interpolate phase-to-frequency for a batch of |tone|s and return packed results."""
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
 
             results_dict = {}
@@ -1522,6 +1821,7 @@ class Detector:
         col_enum=None,
         prefix_enum=None,
     ):
+        """Return Polars expressions for fractional frequency shift ``(f - f0) / f0``."""
         if not len(args) == 1:
             log.log("ERROR", "'f_0' is a required argument")
         f_0 = args[0]
@@ -1547,7 +1847,10 @@ class Detector:
         col_enum=None,
         prefix_enum=None,
     ):
+        """Polars expression factory: build linear fractional-frequency expressions."""
+
         def _linear_frac_f(df):
+            """Compute linear fractional frequency shift for a batch of |tone|s."""
             data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
 
             results_dict = {}
@@ -1559,7 +1862,7 @@ class Detector:
                         np.array(data[i][0]),
                         np.array(data[i][1]),
                         R[inds],
-                        Qr[inds]
+                        Qr[inds],
                     ): all_tones[inds]
                     for i, inds in enumerate(calc_ind)
                 }
@@ -1578,8 +1881,10 @@ class Detector:
                             frac_f = np.full(df.len(), np.nan)
                         else:
                             frac_f = frac_f_col
-                            
-                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = frac_f
+
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            frac_f
+                        )
             return ccat_mp.package_results(results_dict)
 
         if not len(args) == 4:
@@ -1593,7 +1898,12 @@ class Detector:
             ex[0],
         )
         all_tones = np.array(tones)
-        I_col, Q_col, frac_f_col, linear_prefix = col_enum.IN_PHASE.value, col_enum.QUADRATURE.value, col_enum.FRACTIONAL_FREQUENCY.value, prefix_enum.LINEAR.value
+        I_col, Q_col, frac_f_col, linear_prefix = (
+            col_enum.IN_PHASE.value,
+            col_enum.QUADRATURE.value,
+            col_enum.FRACTIONAL_FREQUENCY.value,
+            prefix_enum.LINEAR.value,
+        )
 
         return_col, return_type = (
             [f"{linear_prefix}_{frac_f_col}"],
@@ -1622,7 +1932,10 @@ class Detector:
         col_enum=None,
         prefix_enum=None,
     ):
+        """Polars expression factory: build dissipation-correction projection expressions."""
+
         def _dissipation_correction(df):
+            """Project |I| & |Q| onto the dissipation axis for a batch of |tone|s."""
             data = ccat_mp.struct_batches(df, 3, batch_len, max_workers)
 
             results_dict = {}
@@ -1634,7 +1947,7 @@ class Detector:
                         np.array(data[i][0]),
                         np.array(data[i][1]),
                         np.array(data[i][2]),
-                        R[inds]
+                        R[inds],
                     ): all_tones[inds]
                     for i, inds in enumerate(calc_ind)
                 }
@@ -1656,7 +1969,7 @@ class Detector:
                             )
                         else:
                             proj_I, proj_Q = proj_col
-                            
+
                         results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
                             proj_I
                         )
@@ -1676,7 +1989,12 @@ class Detector:
             ex[0],
         )
         all_tones = np.array(tones)
-        I_col, Q_col, mag_col, corr_prefix = col_enum.IN_PHASE.value, col_enum.QUADRATURE.value, col_enum.MAGNITUDE.value, prefix_enum.DISSIPATION_CORRECTION.value
+        I_col, Q_col, mag_col, corr_prefix = (
+            col_enum.IN_PHASE.value,
+            col_enum.QUADRATURE.value,
+            col_enum.MAGNITUDE.value,
+            prefix_enum.DISSIPATION_CORRECTION.value,
+        )
 
         return_col, return_type = (
             [f"{corr_prefix}_{I_col}", f"{corr_prefix}_{Q_col}"],
@@ -1697,24 +2015,31 @@ class Detector:
 
     def properties_histogram(
         self,
-        col_name,
-        bins=None,
-        mad_filter=True,
-        num_mads=10,
-        filter_exprs=[],
-        recalc=False,
+        col_name: str,
+        bins: int | None = None,
+        mad_filter: bool = True,
+        num_mads: int = 10,
+        filter_exprs: list = [],
+        recalc: bool = False,
         **kwargs,
-    ):
-        """Calculate histogram of a detector property
+    ) -> pl.DataFrame:
+        """Calculate histogram of a detector property.
 
         Args:
-            col_name (str): Name of property
-            bins (int | None, optional): Number of bins to use for histogram. Defaults to number of tones used in histogram divided by five
-            mad_filter (bool, optional): Whether to use the median absolute deviation (MAD) to filter outliers before creating histogram. Defaults to True
-            num_mads (int, optional): Number of MADs data must be within to keep. Defaults to 10
-            recalc (bool, optional): Whether to recalculate histogram if data already exists. Defaults to False
+            col_name (str): Name of the ``properties`` column to histogram.
+            bins (int | None, optional): Number of bins. Defaults to number of
+                non-NaN |tone|s divided by eight.
+            mad_filter (bool, optional): Filter outliers using the median
+                absolute deviation before binning. Defaults to *True*.
+            num_mads (int, optional): Number of MADs a value must fall within
+                to be kept. Defaults to 10.
+            filter_exprs (list, optional): Additional *Polars* filter
+                expressions applied before binning. Defaults to ``[]``.
+            recalc (bool, optional): Recalculate even if result already exists.
+                Defaults to *False*.
         Returns:
-            return (pl.DataFrame): Polars DataFrame with histogram counts and bin edges
+            pl.DataFrame: *Polars* DataFrame with histogram counts and bin
+            edges.
         """
         hist_col_name = ["counts", "edges"]
         hist_col_name = [f"hist_{name}_{col_name}" for name in hist_col_name]
@@ -1780,6 +2105,7 @@ class Detector:
 
     @staticmethod
     def _plot_histogram(df, plot_opts, *args, **kwargs):
+        """Build a *Holoviews* histogram (optionally with median spike) from a binned DataFrame."""
         dynamic = kwargs["dynamic"] if "dynamic" in kwargs else True
         by, plot_median = args
 
@@ -1816,30 +2142,59 @@ class Detector:
 
     def properties_histogram_plot(
         self,
-        col_name,
-        plot_median=None,
-        xlabel="",
-        title="",
-        filter_exprs=[],
+        col_name: str,
+        plot_median: bool | None = None,
+        xlabel: str = "",
+        title: str = "",
+        filter_exprs: list = [],
         save_fig: bool | None = None,
         figs_per_file: int | None = None,
         overwrite: bool | None = None,
         save_dir: str | Path | None = None,
         save_name: str = None,
         save_fmt: Format | None = None,
-        return_fig=True,
-        return_df=False,
-        df=None,
-        by=None,
+        return_fig: bool = True,
+        return_df: bool = False,
+        df: pl.DataFrame | None = None,
+        by: str | list[str] | None = None,
         **kwargs,
-    ):
-        """Plot histogram of a detector property
+    ) -> hv.Histogram:
+        """Plot a histogram of a detector property.
 
         Args:
-            col_name (str): Name of property
-            plot_median (bool): Whether to plot a vertical line at the median
+            col_name (str): Name of the ``properties`` column to histogram.
+            plot_median (bool | None, optional): Plot a vertical line at the
+                median. Defaults to the value in ``viz_cfg``.
+            xlabel (str, optional): X-axis label. Defaults to ``col_name``.
+            title (str, optional): Plot title. Defaults to the detector-type
+                label from the drone config.
+            filter_exprs (list, optional): Additional *Polars* filter
+                expressions applied before plotting. Defaults to ``[]``.
+            save_fig (bool | None, optional): Save the figure to disk. Defaults
+                to the value in ``viz_cfg``.
+            figs_per_file (int | None, optional): Figures per output file.
+                Defaults to the value in ``viz_cfg``.
+            overwrite (bool | None, optional): Overwrite existing figure files.
+                Defaults to the value in ``viz_cfg``.
+            save_dir (str | Path | None, optional): Directory for saved figures.
+                Defaults to ``fig_dir``.
+            save_name (str, optional): Base filename for saved figures. Defaults
+                to *None*.
+            save_fmt (Format | None, optional): Output file format
+                (``'png'``, ``'jpeg'``, or ``'pdf'``). Defaults to the value in
+                ``viz_cfg``.
+            return_fig (bool, optional): Return the *Holoviews* figure object.
+                Defaults to *True*.
+            return_df (bool, optional): Also return the histogram DataFrame.
+                Defaults to *False*.
+            df (pl.DataFrame | None, optional): Pre-computed histogram DataFrame
+                to plot directly (skips ``properties_histogram``). Defaults to
+                *None*.
+            by (str | list[str] | None, optional): Column(s) to group the
+                histogram by. Defaults to *None*.
         Returns:
-            return (hv.Histogram | hv.Overlay): Holoviews histogram figure
+            hv.Histogram: *Holoviews* histogram figure (or ``hv.Overlay`` when
+            plotting the median line).
         """
 
         if df is None:
@@ -1991,10 +2346,29 @@ class Detector:
                 data = None
         return data
 
-    def join(self, other, in_place=False):
+    def join(self, other: "Detector", in_place: bool = False) -> "Detector":
+        """Join two ``Detector`` objects into one, concatenating their data.
+
+        Merges ``Target``, ``Timestream`` (if both present), ``VNA``, and
+        ``properties`` DataFrames.  Both objects must either have a
+        ``Timestream`` or neither must.
+
+        Args:
+            other (Detector): The ``Detector`` to join with this one.
+            in_place (bool, optional): Modify this object in place instead of
+                returning a deep copy. Defaults to *False*.
+        Returns:
+            Detector: Combined ``Detector`` with concatenated data.
+        Raises:
+            ValueError: If ``other`` is not a ``Detector``.
+            ValueError: If one ``Detector`` has a ``Timestream`` and the other
+                does not.
+        """
+
         def _join_consts(
             left_const: Any | list[Any], right_const: Any | list[Any]
         ) -> list[Any]:
+            """Merge two scalar-or-list constants into a single combined list."""
             if not isinstance(left_const, list):
                 left_const = [left_const]
             if not isinstance(right_const, list):
@@ -2038,6 +2412,7 @@ class Detector:
     # ============= #
 
     def __str__(self):
+        """Return string identifier for the ``Detector``."""
         return f"detector_{self.timestamp}"
 
     # =============================== #
@@ -2045,6 +2420,7 @@ class Detector:
     # =============================== #
 
     def __getstate__(self):
+        """Serialise state, optionally writing ``properties`` to parquet before pickling."""
         state = self.__dict__.copy()
         if (
             not self.analysis_cfg["io"]["pickle"]["pickle_dataframes"]
@@ -2065,6 +2441,7 @@ class Detector:
         return state
 
     def __setstate__(self, state):
+        """Restore state, lazily scanning ``properties`` parquet when not pickled inline."""
         self.__dict__.update(state)
         if not self.analysis_cfg["io"]["pickle"]["pickle_dataframes"] and getattr(
             self, "_properties_df", True

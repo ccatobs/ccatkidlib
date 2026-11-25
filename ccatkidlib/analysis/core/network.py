@@ -1,9 +1,18 @@
+"""Module for managing and analyzing a network of |KID| detectors.
+
+Defines the ``Network`` class, which loads and organises a collection of ``Detector`` objects
+(one per |RFSoC| session) into a *Polars* DataFrame for array-level analysis and plotting.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
 import concurrent.futures
 import polars as pl
 import holoviews as hv
 import time
 
 from collections.abc import Iterable
+from typing import Any
 from pathlib import Path
 from tqdm import tqdm
 from holoviews import opts
@@ -41,7 +50,7 @@ class Network:
         analysis_cfg: dict | None = None,
         viz_cfg: dict | None = None,
         **kwargs,
-    ):
+    ) -> None:
         """Initialize Network object by creating Detector objects and loading them into a Polars DataFrame with the specified data columns
 
         Note:
@@ -256,13 +265,17 @@ class Network:
         return pickle_dir
 
     def add_columns(
-        self, data_cols: str | list[str], max_workers: int = 1, ex=None
+        self, data_cols: str | list[str], max_workers: int = 1, ex: Any = None
     ) -> pl.dataframe.frame.DataFrame:
-        """Add columns to the Network.data DataFrame using fields from the ext_cfg or drone_cfg
+        """Add columns to the ``Network.data`` DataFrame using fields from the ext_cfg or drone_cfg.
 
         Args:
-            data_cols (str, list[str]): List of data column names to add. Names must exactly match a field in the ext_cfg or drone_cfg
-            max_workers (int, optional): Maximum number of CPU cores to use. Defaults to 1.
+            data_cols (str | list[str]): Data column name(s) to add. Names must exactly match a
+                field in the ``ext_cfg`` or ``drone_cfg`` of each ``Detector``.
+            max_workers (int, optional): Maximum number of CPU cores to use. Defaults to ``1``.
+            ex: Existing *concurrent.futures* ``ProcessPoolExecutor`` to reuse. Defaults to **None**.
+        Returns:
+            pl.dataframe.frame.DataFrame: Updated ``Network.data`` DataFrame with new columns appended.
         """
         detectors = self.data.select(pl.col(["detector", "type"])).to_numpy()
         detectors = [
@@ -302,7 +315,17 @@ class Network:
         self.data = pl.concat([self.data, data_df], how="horizontal")
         return self.data
 
-    def combine_properties(self, data_cols=[]):
+    def combine_properties(self, data_cols: list[str] = []) -> pl.DataFrame:
+        """Concatenate the ``properties`` DataFrames of all detectors in the network.
+
+        Optionally appends extra columns from ``Network.data`` alongside each detector's properties.
+
+        Args:
+            data_cols (list[str], optional): Column names from ``Network.data`` to include as
+                additional columns in each detector's properties block. Defaults to ``[]``.
+        Returns:
+            pl.DataFrame: Combined properties DataFrame (diagonal concatenation across detectors).
+        """
         properties_df = None
         for i, (det, *cols) in enumerate(
             self.data.select(["detector"] + data_cols).iter_rows()
@@ -328,6 +351,7 @@ class Network:
     # ==================#
     @staticmethod
     def _plot(df, plot_opts, *plot_args, **kwargs):
+        """Render a single *Holoviews* figure for the network using the specified plot function."""
         plot_func, by, overlay_cols, args = plot_args
 
         kwargs["save_fig"] = False
@@ -341,24 +365,46 @@ class Network:
 
     def plot(
         self,
-        func,
-        data_type,
+        func: str,
+        data_type: str,
         *args,
-        data_cols=[],
-        filter_exprs=[],
-        return_df=False,
+        data_cols: list = [],
+        filter_exprs: list = [],
+        return_df: bool = False,
         save_fig: bool | None = None,
         overwrite: bool | None = None,
         save_name: str = None,
         overlay_cols: str | list[str] = None,
         **kwargs,
     ):
-        """
+        """Create a *Holoviews* figure for all detectors in the network using a shared plot function.
 
+        Collects per-detector plot DataFrames, concatenates them, and renders a combined figure
+        with optional overlay grouping.
 
         Args:
-            func (str):
-            data_type (str):
+            func (str): Name of the plot method to call on each data object (e.g., ``'plot'``,
+                ``'IQ_plot'``). A ``'_plot'`` suffix is appended if not already present.
+            data_type (str): Data object to call the plot method on. One of ``'vna'``, ``'targ'``,
+                ``'stream'``, or ``'detector'``.
+            *args: Positional arguments forwarded to the per-detector plot method.
+            data_cols (list[str], optional): Column names from ``Network.data`` to add as grouping
+                dimensions. Defaults to ``[]``.
+            filter_exprs (list[pl.Expr], optional): *Polars* expressions to filter the combined
+                plot DataFrame. Defaults to ``[]``.
+            return_df (bool, optional): Whether to also return the combined plot DataFrame.
+                Defaults to **False**.
+            save_fig (bool | None, optional): Whether to save the figure. Defaults to that
+                specified in the viz config.
+            overwrite (bool | None, optional): Whether to overwrite existing files. Defaults to
+                that specified in the viz config.
+            save_name (str | None, optional): File name stem for saving. Defaults to **None**.
+            overlay_cols (str | list[str] | None, optional): Column(s) to overlay in the figure.
+                Defaults to **None**.
+            **kwargs: Additional keyword arguments forwarded to the per-detector plot method.
+        Returns:
+            hv.element.Element | tuple[hv.element.Element, pl.DataFrame]: *Holoviews* figure,
+            and optionally the combined plot DataFrame if ``return_df`` is **True**.
         """
 
         # Validate data_type
@@ -476,10 +522,10 @@ class Network:
         vnas,
         targs,
     ):
-        """ """
+        """Create a list of ``Detector`` objects from a dict of data file paths."""
 
         def _create_sweep(sweep_path, sweep_dict, sweep_class, dets):
-            """ """
+            """Return cached or newly created sweep object for ``sweep_path``."""
             if Path(sweep_path).exists():
                 sweep = sweep_dict[str(sweep_path)]
                 if sweep is None:
@@ -531,7 +577,8 @@ class Network:
         return detectors, detector_types, detector_timestamps
 
     @staticmethod
-    def _extract_data(cfgs, data_cols):
+    def _extract_data(cfgs: list[dict], data_cols: list[str]) -> list:
+        """Extract values for ``data_cols`` from a list of config dicts, using the first match."""
         data = [None] * len(data_cols)
         for i, col in enumerate(data_cols):
             for cfg in cfgs:

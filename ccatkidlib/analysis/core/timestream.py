@@ -17,7 +17,7 @@ from scipy.signal import welch
 from functools import cached_property
 from pathlib import Path
 from collections.abc import Iterable
-from typing import TypeAlias, Literal
+from typing import Any, TypeAlias, Literal
 from spt3g import core
 
 import holoviews as hv
@@ -130,9 +130,33 @@ class Timestream(Data):
     # Properties #
     # ========== #
 
-    def timestream_angle(self, prefix="", include=None, exclude=None, recalc=False):
-        '''
-        '''
+    def timestream_angle(
+        self,
+        prefix: str = "",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> tuple[pl.DataFrame, str] | pl.DataFrame:
+        """Compute the phase angle of the timestream center for each |tone|.
+
+        The center is defined as the median |I| and |Q| values across the
+        timestream.  The result is added to the ``properties`` DataFrame under
+        a column named ``{center_timestream_prefix}_{phase_col}``.
+
+        Args:
+            prefix (str, optional): Prefix applied to column naming enums.
+                Defaults to ``""``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all tones.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            recalc (bool, optional): If ``True``, recompute even when already
+                cached.  Defaults to ``False``.
+        Returns:
+            tuple[pl.DataFrame, str] | pl.DataFrame: Properties DataFrame
+                filtered to the angle column, and the prefix string when
+                ``return_prefix`` is enabled in the analysis config.
+        """
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "phase"],
             prefix,
@@ -190,14 +214,19 @@ class Timestream(Data):
             strict=True,
         )
 
-        ret_pre = f"{prefix_enum.CENTER_TIMESTREAM.value}{'_' if prefix else ''}{prefix}"
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+        ret_pre = (
+            f"{prefix_enum.CENTER_TIMESTREAM.value}{'_' if prefix else ''}{prefix}"
+        )
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
     # ==================#
     # Plotting Methods #
     # ==================#
     @staticmethod
     def _plot(df, plot_opts, *args, **kwargs):
+        """Render an hvplot element from a DataFrame, with optional datashading."""
         x_dim, y_dim = args
         datashade_plot = kwargs.pop("datashade")
 
@@ -224,8 +253,8 @@ class Timestream(Data):
 
     def plot(
         self,
-        x_dim,
-        y_dim,
+        x_dim: str,
+        y_dim: str,
         x_prefix: str = "",
         y_prefix: str = "",
         xlabel: str = "",
@@ -233,21 +262,76 @@ class Timestream(Data):
         grouping: str = "groupby",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        plot_opts=None,
-        filter_exprs=[],
-        unpivot_x=True,
-        return_df=False,
+        plot_opts: Any | None = None,
+        filter_exprs: list = [],
+        unpivot_x: bool = True,
+        return_df: bool = False,
         save_fig: bool | None = None,
         figs_per_file: int | None = None,
         overwrite: bool | None = None,
         save_dir: str | Path | None = None,
         save_name: str = None,
         save_fmt: Format | None = None,
-        return_fig=True,
+        return_fig: bool = True,
         df: pl.DataFrame | None = None,
         by: str | list[str] | None = None,
         **kwargs,
-    ):
+    ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
+        """Plot ``x_dim`` vs ``y_dim`` data columns for all loaded |tone|s.
+
+        Retrieves and optionally unpivots the timestream DataFrame, creates
+        hvplot elements (line or datashaded scatter), attaches holoviews
+        ``opts``, and optionally saves the figure to disk.
+
+        Args:
+            x_dim (str): Name of the x-axis data column.
+            y_dim (str): Name of the y-axis data column.
+            x_prefix (str, optional): Prefix prepended to ``x_dim`` column
+                lookup.  Defaults to ``""``.
+            y_prefix (str, optional): Prefix prepended to ``y_dim`` column
+                lookup.  Defaults to ``""``.
+            xlabel (str, optional): x-axis label for the plot.  Defaults to
+                ``""``.
+            ylabel (str, optional): y-axis label for the plot.  Defaults to
+                ``""``.
+            grouping (str, optional): hvplot grouping strategy; one of
+                ``"groupby"`` or ``"by"``.  Defaults to ``"groupby"``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            plot_opts (Any | None, optional): Additional holoviews opts object
+                (e.g., ``opts.Curve(...)``) to overlay.  Defaults to ``None``.
+            filter_exprs (list, optional): *Polars* filter expressions applied
+                before plotting.  Defaults to ``[]``.
+            unpivot_x (bool, optional): Whether to unpivot the x column before
+                plotting.  Defaults to ``True``.
+            return_df (bool, optional): Whether to also return the plotting
+                DataFrame.  Defaults to ``False``.
+            save_fig (bool | None, optional): Whether to save the figure.
+                Defaults to ``None`` (uses config).
+            figs_per_file (int | None, optional): Number of figures per output
+                file.  Defaults to ``None``.
+            overwrite (bool | None, optional): Whether to overwrite existing
+                files.  Defaults to ``None``.
+            save_dir (str | Path | None, optional): Directory to save figures.
+                Defaults to ``None``.
+            save_name (str, optional): Base name for the saved figure file.
+                Defaults to ``None``.
+            save_fmt (Format | None, optional): Output format for saved figures.
+                Defaults to ``None``.
+            return_fig (bool, optional): If ``False``, return the DataFrame and
+                ``by`` grouping instead of a plot.  Defaults to ``True``.
+            df (pl.DataFrame | None, optional): Pre-built DataFrame to plot.
+                Defaults to ``None``.
+            by (str | list[str] | None, optional): Grouping column(s) when
+                ``df`` is provided.  Defaults to ``None``.
+            **kwargs: Additional keyword arguments forwarded to hvplot.
+        Returns:
+            hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]: The holoviews
+                plot object, or a tuple of ``(plot, df)`` when
+                ``return_df=True``.
+        """
         # Get DataFrame with data to plot
         # -------------------------------
         col_dict = {"sample": "sample", "x": x_dim, "y": y_dim}
@@ -355,27 +439,44 @@ class Timestream(Data):
         self,
         col_name: str,
         prefix: str = "",
-        time_col="t",
-        grouping="groupby",
-        datashade=None,
+        time_col: str = "t",
+        grouping: str = "groupby",
+        datashade: bool | None = None,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        return_df=False,
+        return_df: bool = False,
         save_fig: bool | None = None,
         overwrite: bool | None = None,
         **kwargs,
-    ):
-        """Plot the specified data column as a function of time
+    ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
+        """Plot the specified data column as a function of time.
 
         Args:
-            col_name (str): Name of data column (e.g., *I*, *Q*, *mag*, etc.)
-            prefix (str, optional): Defaults to ""
-            return_df (bool): Whether to return the Polars DataFrame that was used to create the plot. Defaults to *False*
-            include (int | list[int] | None, optional): Defaults to *None*
-            exclude (int | list[int] | None, optional): Defaults to *None*
+            col_name (str): Name of the data column to plot (e.g., ``"phase"``,
+                ``"mag"``).
+            prefix (str, optional): Prefix prepended to ``col_name`` for column
+                lookup.  Defaults to ``""``.
+            time_col (str, optional): Name of the time column to use as the
+                x-axis.  Defaults to ``"t"``.
+            grouping (str, optional): hvplot grouping strategy; one of
+                ``"groupby"`` or ``"by"``.  Defaults to ``"groupby"``.
+            datashade (bool | None, optional): Whether to apply datashading.
+                Defaults to ``None`` (uses viz config).
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            return_df (bool, optional): Whether to also return the plotting
+                DataFrame.  Defaults to ``False``.
+            save_fig (bool | None, optional): Whether to save the figure.
+                Defaults to ``None`` (uses config).
+            overwrite (bool | None, optional): Whether to overwrite existing
+                files.  Defaults to ``None``.
+            **kwargs: Additional keyword arguments forwarded to ``plot``.
         Returns:
-            return (hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]):
-
+            hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]: The holoviews
+                plot object, or a tuple of ``(plot, df)`` when
+                ``return_df=True``.
         """
         xlabel, ylabel = r"$Time [s]$", f"{prefix}_{col_name}"
         save_name = f"timestream_{prefix}{'_' if prefix else ''}{col_name}_stream"
@@ -407,15 +508,42 @@ class Timestream(Data):
         self,
         x_prefix: str = "",
         y_prefix: str = "",
-        grouping="groupby",
-        datashade=None,
+        grouping: str = "groupby",
+        datashade: bool | None = None,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        return_df=False,
+        return_df: bool = False,
         save_fig: bool | None = None,
         overwrite: bool | None = None,
         **kwargs,
-    ):
+    ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
+        """Plot |I||Q| magnitude as a function of |tone| frequency.
+
+        Args:
+            x_prefix (str, optional): Prefix for the frequency (``"f"``)
+                column.  Defaults to ``""``.
+            y_prefix (str, optional): Prefix for the magnitude (``"mag"``)
+                column.  Defaults to ``""``.
+            grouping (str, optional): hvplot grouping strategy; one of
+                ``"groupby"`` or ``"by"``.  Defaults to ``"groupby"``.
+            datashade (bool | None, optional): Whether to apply datashading.
+                Defaults to ``None`` (uses viz config).
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            return_df (bool, optional): Whether to also return the plotting
+                DataFrame.  Defaults to ``False``.
+            save_fig (bool | None, optional): Whether to save the figure.
+                Defaults to ``None`` (uses config).
+            overwrite (bool | None, optional): Whether to overwrite existing
+                files.  Defaults to ``None``.
+            **kwargs: Additional keyword arguments forwarded to ``plot``.
+        Returns:
+            hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]: The holoviews
+                plot object, or a tuple of ``(plot, df)`` when
+                ``return_df=True``.
+        """
         xlabel, ylabel = r"$Frequency\ [Hz]$", r"$|S_{21}|$"
         save_name = f"timestream_{y_prefix}{'_' if y_prefix else ''}mag"
 
@@ -448,15 +576,42 @@ class Timestream(Data):
         self,
         x_prefix: str = "",
         y_prefix: str = "",
-        grouping="groupby",
-        datashade=None,
+        grouping: str = "groupby",
+        datashade: bool | None = None,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        return_df=False,
+        return_df: bool = False,
         save_fig: bool | None = None,
         overwrite: bool | None = None,
         **kwargs,
-    ):
+    ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
+        """Plot |I||Q| phase angle as a function of |tone| frequency.
+
+        Args:
+            x_prefix (str, optional): Prefix for the frequency (``"f"``)
+                column.  Defaults to ``""``.
+            y_prefix (str, optional): Prefix for the phase (``"phase"``)
+                column.  Defaults to ``""``.
+            grouping (str, optional): hvplot grouping strategy; one of
+                ``"groupby"`` or ``"by"``.  Defaults to ``"groupby"``.
+            datashade (bool | None, optional): Whether to apply datashading.
+                Defaults to ``None`` (uses viz config).
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            return_df (bool, optional): Whether to also return the plotting
+                DataFrame.  Defaults to ``False``.
+            save_fig (bool | None, optional): Whether to save the figure.
+                Defaults to ``None`` (uses config).
+            overwrite (bool | None, optional): Whether to overwrite existing
+                files.  Defaults to ``None``.
+            **kwargs: Additional keyword arguments forwarded to ``plot``.
+        Returns:
+            hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]: The holoviews
+                plot object, or a tuple of ``(plot, df)`` when
+                ``return_df=True``.
+        """
         xlabel, ylabel = r"$Frequency\ [Hz]$", r"$Phase\ [rad]$"
         save_name = f"timestream_{y_prefix}{'_' if y_prefix else ''}phase"
 
@@ -488,16 +643,44 @@ class Timestream(Data):
     def IQ_plot(
         self,
         prefix: str = "",
-        projection="IQ",
-        grouping="groupby",
-        datashade=True,
+        projection: str = "IQ",
+        grouping: str = "groupby",
+        datashade: bool = True,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        return_df=False,
+        return_df: bool = False,
         save_fig: bool | None = None,
         overwrite: bool | None = None,
         **kwargs,
-    ):
+    ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
+        """Plot |I| vs |Q| (or phase vs magnitude in polar projection) for each |tone|.
+
+        Args:
+            prefix (str, optional): Prefix for the |I| and |Q| column lookup.
+                Defaults to ``""``.
+            projection (str, optional): Plot projection; either ``"IQ"`` for
+                Cartesian or ``"polar"`` for polar projection.  Defaults to
+                ``"IQ"``.
+            grouping (str, optional): hvplot grouping strategy; one of
+                ``"groupby"`` or ``"by"``.  Defaults to ``"groupby"``.
+            datashade (bool, optional): Whether to apply datashading.  Defaults
+                to ``True``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            return_df (bool, optional): Whether to also return the plotting
+                DataFrame.  Defaults to ``False``.
+            save_fig (bool | None, optional): Whether to save the figure.
+                Defaults to ``None`` (uses config).
+            overwrite (bool | None, optional): Whether to overwrite existing
+                files.  Defaults to ``None``.
+            **kwargs: Additional keyword arguments forwarded to ``plot``.
+        Returns:
+            hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]: The holoviews
+                plot object, or a tuple of ``(plot, df)`` when
+                ``return_df=True``.
+        """
         if projection == "IQ" or datashade:
             xlabel, ylabel = r"$I\ [arb]$", r"$Q\ [arb]$"
             x_dim, y_dim = "I", "Q"
@@ -540,16 +723,40 @@ class Timestream(Data):
 
     def psd_plot(
         self,
-        col_name,
+        col_name: str,
         prefix: str = "",
-        grouping="groupby",
+        grouping: str = "groupby",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        return_df=False,
+        return_df: bool = False,
         save_fig: bool | None = None,
         overwrite: bool | None = None,
         **kwargs,
-    ):
+    ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
+        """Plot the power spectral density (PSD) of the specified data column.
+
+        Args:
+            col_name (str): Name of the data column whose PSD is to be plotted.
+            prefix (str, optional): Prefix for the PSD column lookup.  Defaults
+                to ``""``.
+            grouping (str, optional): hvplot grouping strategy; one of
+                ``"groupby"`` or ``"by"``.  Defaults to ``"groupby"``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            return_df (bool, optional): Whether to also return the plotting
+                DataFrame.  Defaults to ``False``.
+            save_fig (bool | None, optional): Whether to save the figure.
+                Defaults to ``None`` (uses config).
+            overwrite (bool | None, optional): Whether to overwrite existing
+                files.  Defaults to ``None``.
+            **kwargs: Additional keyword arguments forwarded to ``plot``.
+        Returns:
+            hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]: The holoviews
+                plot object, or a tuple of ``(plot, df)`` when
+                ``return_df=True``.
+        """
         xlabel, ylabel = r"$PSD\ Frequency\ [Hz]$", rf"psd_{prefix}_{col_name}"
         save_name = f"timestream_{prefix}{'_' if prefix else ''}{col_name}_psd"
 
@@ -580,16 +787,40 @@ class Timestream(Data):
 
     def fft_plot(
         self,
-        col_name,
+        col_name: str,
         prefix: str = "",
-        grouping="groupby",
+        grouping: str = "groupby",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
-        return_df=False,
+        return_df: bool = False,
         save_fig: bool | None = None,
         overwrite: bool | None = None,
         **kwargs,
-    ):
+    ) -> hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]:
+        """Plot the fast Fourier transform (FFT) amplitude of the specified data column.
+
+        Args:
+            col_name (str): Name of the data column whose FFT is to be plotted.
+            prefix (str, optional): Prefix for the FFT column lookup.  Defaults
+                to ``""``.
+            grouping (str, optional): hvplot grouping strategy; one of
+                ``"groupby"`` or ``"by"``.  Defaults to ``"groupby"``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            return_df (bool, optional): Whether to also return the plotting
+                DataFrame.  Defaults to ``False``.
+            save_fig (bool | None, optional): Whether to save the figure.
+                Defaults to ``None`` (uses config).
+            overwrite (bool | None, optional): Whether to overwrite existing
+                files.  Defaults to ``None``.
+            **kwargs: Additional keyword arguments forwarded to ``plot``.
+        Returns:
+            hv.NdOverlay | tuple[hv.NdOverlay, pl.DataFrame]: The holoviews
+                plot object, or a tuple of ``(plot, df)`` when
+                ``return_df=True``.
+        """
         xlabel, ylabel = r"$FFT\ Frequency\ [Hz]$", f"fft_{prefix}_{col_name}"
         save_name = f"timestream_{prefix}{'_' if prefix else ''}{col_name}_fft"
 
@@ -620,9 +851,18 @@ class Timestream(Data):
     # ==========================#
 
     @property
-    def data(self):
-        """
-        Load timestream I, Q data.
+    def data(self) -> pl.DataFrame:
+        """Lazily load and cache |I| and |Q| timestream data into a *Polars* DataFrame.
+
+        On first access, reads ``.g3``, ``.txt``, ``.npy``, or ``.npz`` files
+        from ``data_path``, filters to the requested time range (``start`` to
+        ``end``), and stores the result in ``_data``.  Subsequent accesses
+        return the cached DataFrame.  If ``_data`` is a ``LazyFrame``, it is
+        collected on access.
+
+        Returns:
+            pl.DataFrame: DataFrame with columns ``sample``, ``t``, ``dt``,
+                ``zt``, and per-|tone| ``I_{tone}`` and ``Q_{tone}`` columns.
         """
 
         if self._data is None:
@@ -669,7 +909,8 @@ class Timestream(Data):
         return self._data
 
     @data.setter
-    def data(self, value: pl.lazyframe.frame.LazyFrame | None):
+    def data(self, value: pl.lazyframe.frame.LazyFrame | None) -> None:
+        """Set the internal ``_data`` cache to a DataFrame or LazyFrame."""
         if value is None or isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._data = value
         else:
@@ -680,7 +921,19 @@ class Timestream(Data):
             )
 
     @property
-    def properties(self):
+    def properties(self) -> pl.DataFrame:
+        """Lazily build and return the per-|tone| properties *Polars* DataFrame.
+
+        On first access, constructs ``_properties_df`` from the comb
+        configuration, then merges in any per-|tone| scalar results stored in
+        the internal ``_properties`` dict.  Subsequent accesses return the
+        cached DataFrame (collecting a ``LazyFrame`` if needed).
+
+        Returns:
+            pl.DataFrame: DataFrame with one row per |tone| and columns for
+                each computed property (e.g., resonance frequency, Q factor,
+                PSD indices).
+        """
         if isinstance(self._properties_df, pl.LazyFrame):
             self._properties_df = self._properties_df.collect()
         elif self._properties_df is None:
@@ -721,12 +974,14 @@ class Timestream(Data):
         return self._properties_df
 
     @properties.setter
-    def properties(self, value):
+    def properties(self, value: pl.DataFrame | pl.LazyFrame) -> None:
+        """Set ``_properties_df`` to a DataFrame or LazyFrame; other types are silently ignored."""
         if isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._properties_df = value
 
     @cached_property
-    def sampling_freq(self):
+    def sampling_freq(self) -> float:
+        """Sampling frequency of the timestream in Hz, read from the |drone| IO config."""
         return self.io_cfg["boards"][f"b{self.bid}"]["sampling_freq"]
 
     def get_properties(
@@ -735,7 +990,7 @@ class Timestream(Data):
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         strict: bool = False,
-    ):
+    ) -> pl.DataFrame:
         """Get the specified data columns and rows from the ``properties`` Polars DataFrame
 
         Args:
@@ -743,7 +998,8 @@ class Timestream(Data):
             include (int | list[int] | None, optional): Defaults to *None*
             exclude (int | list[int] | None, optional): Defaults to *None*
             strict (bool, optional): Defaults to *False*
-
+        Returns:
+            pl.DataFrame: Filtered properties DataFrame.
         """
         return ccat_df.get_properties(
             self, col_name=col_name, include=include, exclude=exclude, strict=strict
@@ -755,20 +1011,53 @@ class Timestream(Data):
 
     def psd(
         self,
-        col_name: str, 
+        col_name: str,
         prefix: str | list[str] = "",
-        window="hann",
-        nperseg=None,
-        detrend=False,
-        average="mean",
+        window: str = "hann",
+        nperseg: int | None = None,
+        detrend: bool | str = False,
+        average: str = "mean",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex=None,
+        ex: concurrent.futures.Executor | None = None,
     ) -> pl.dataframe.frame.DataFrame:
-        
-        if isinstance(prefix, str): prefix = [prefix]
+        """Compute the power spectral density (PSD) for the specified data column.
+
+        Uses ``scipy.signal.welch`` to estimate the one-sided PSD for each
+        |tone|.  Results are stored as new columns in ``data``, then returned.
+
+        Args:
+            col_name (str): Name of the data column to compute the PSD for.
+            prefix (str | list[str], optional): Prefix or list of prefixes for
+                column naming.  Defaults to ``""``.
+            window (str, optional): Window function name passed to ``welch``.
+                Defaults to ``"hann"``.
+            nperseg (int | None, optional): Number of samples per segment for
+                ``welch``.  Defaults to ``None`` (auto-computed as the nearest
+                power of two to ``N/5``).
+            detrend (bool | str, optional): Detrending applied before PSD;
+                passed directly to ``welch``.  Defaults to ``False``.
+            average (str, optional): Averaging method for ``welch``; ``"mean"``
+                or ``"median"``.  Defaults to ``"mean"``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            recalc (bool, optional): If ``True``, recompute even when already
+                cached.  Defaults to ``False``.
+            max_workers (int, optional): Maximum number of parallel workers.
+                Defaults to ``1``.
+            ex (concurrent.futures.Executor | None, optional): Existing
+                executor to reuse.  Defaults to ``None``.
+        Returns:
+            tuple[pl.DataFrame, tuple[str, str]] | pl.DataFrame: DataFrame of
+                PSD columns, and a ``(psd_prefix, psd_f_prefix)`` tuple when
+                ``return_prefix`` is enabled in the analysis config.
+        """
+        if isinstance(prefix, str):
+            prefix = [prefix]
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for key, val in mapping.items():
             if val == col_name:
@@ -832,21 +1121,58 @@ class Timestream(Data):
             exclude=exclude,
         )
 
-        ret_pre = [(f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}{'_' if pre else ''}{pre}", f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}{'_' if pre else ''}{pre}") for pre, prefix_enum in zip(prefix, prefix_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            (
+                f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}{'_' if pre else ''}{pre}",
+                f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}{'_' if pre else ''}{pre}",
+            )
+            for pre, prefix_enum in zip(prefix, prefix_enums)
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
-    def psd_trim(self,
-                 col_name: str,
-                 prefix: str | list[str] = "",
-                 low_f = 0, 
-                 high_f = 10000,
-                 name='',
-                 include=None,
-                 exclude=None,
-                 recalc=False
-                 ):
+    def psd_trim(
+        self,
+        col_name: str,
+        prefix: str | list[str] = "",
+        low_f: float = 0,
+        high_f: float = 10000,
+        name: str = "",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> pl.DataFrame:
+        """Trim a previously computed PSD to a frequency sub-range.
+
+        Locates the sample indices corresponding to frequencies in
+        ``[low_f, high_f]`` within the PSD frequency column, records these as
+        lower and upper trim indices in the ``properties`` DataFrame, then
+        delegates to ``trim`` to slice the data columns.
+
+        Args:
+            col_name (str): Name of the data column whose PSD should be
+                trimmed.
+            prefix (str | list[str], optional): Prefix(es) identifying the PSD
+                columns to trim.  Defaults to ``""``.
+            low_f (float, optional): Lower frequency bound in Hz.  Defaults to
+                ``0``.
+            high_f (float, optional): Upper frequency bound in Hz.  Defaults to
+                ``10000``.
+            name (str, optional): Optional name prepended to trim index column
+                names.  Defaults to ``""``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            recalc (bool, optional): If ``True``, recompute trim indices even
+                when cached.  Defaults to ``False``.
+        Returns:
+            pl.DataFrame: Trimmed data DataFrame.
+        """
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for key, val in mapping.items():
             if val == col_name:
@@ -859,24 +1185,30 @@ class Timestream(Data):
             raise KeyError(error)
 
         name_enums, prefix_enums = ccat_df.create_enums(
-            ['sample', enum_key],
+            ["sample", enum_key],
             prefix,
-            ['trim', 'power_spectral_density', 'power_spectral_density_frequency'],
+            ["trim", "power_spectral_density", "power_spectral_density_frequency"],
             self.analysis_cfg,
-            no_prefix=['sample']
+            no_prefix=["sample"],
         )
         num_prefix = len(name_enums)
 
         low_f = ccat_df.check_args(low_f, num_prefix, float)
         high_f = ccat_df.check_args(high_f, num_prefix, float)
 
-        low_inds, up_inds = [None]*num_prefix, [None]*num_prefix
-        for i, (name_enum, prefix_enum, lf, hf) in enumerate(zip(name_enums, prefix_enums, low_f, high_f)):
-            sample_col, data_col, f_col = (name_enum.SAMPLE.value, 
-                                          f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{name_enum[enum_key.upper()].value}",
-                                          f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}_{name_enum[enum_key.upper()].value}")
-            low_index_col, up_index_col = (f"{name}{'_' if name else ''}{prefix_enum.TRIM.value}_{data_col}_lower_{sample_col}",
-                                           f"{name}{'_' if name else ''}{prefix_enum.TRIM.value}_{data_col}_upper_{sample_col}")
+        low_inds, up_inds = [None] * num_prefix, [None] * num_prefix
+        for i, (name_enum, prefix_enum, lf, hf) in enumerate(
+            zip(name_enums, prefix_enums, low_f, high_f)
+        ):
+            sample_col, data_col, f_col = (
+                name_enum.SAMPLE.value,
+                f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{name_enum[enum_key.upper()].value}",
+                f"{prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value}_{name_enum[enum_key.upper()].value}",
+            )
+            low_index_col, up_index_col = (
+                f"{name}{'_' if name else ''}{prefix_enum.TRIM.value}_{data_col}_lower_{sample_col}",
+                f"{name}{'_' if name else ''}{prefix_enum.TRIM.value}_{data_col}_upper_{sample_col}",
+            )
             include_subset = ccat_df.check_properties(
                 self,
                 low_index_col,
@@ -885,52 +1217,105 @@ class Timestream(Data):
                 recalc=recalc,
             )
             if not len(include_subset) == 0:
-                index_df = (self.get_data([sample_col, f_col], strict=True, include=include_subset)
-                                .unpivot(index=sample_col,
-                                    variable_name="det",
-                                    value_name=f_col)
-                                .lazy()
-                                .with_columns(pl.col("det").str.strip_prefix(f"{f_col}_").cast(pl.Int32))
-                                .filter(pl.col(f_col).is_between(lf, hf))
-                                .with_columns(pl.col(sample_col).get(pl.col(f_col).arg_min().over('det')).alias(low_index_col),
-                                              pl.col(sample_col).get(pl.col(f_col).arg_max().over('det')).alias(up_index_col))   
-                                .select('det', low_index_col, up_index_col)
-                                .unique()
-                                .collect()
-                            )
-                shared_cols = [low_index_col, up_index_col] if low_index_col in self._properties_df.schema else []
+                index_df = (
+                    self.get_data(
+                        [sample_col, f_col], strict=True, include=include_subset
+                    )
+                    .unpivot(index=sample_col, variable_name="det", value_name=f_col)
+                    .lazy()
+                    .with_columns(
+                        pl.col("det").str.strip_prefix(f"{f_col}_").cast(pl.Int32)
+                    )
+                    .filter(pl.col(f_col).is_between(lf, hf))
+                    .with_columns(
+                        pl.col(sample_col)
+                        .get(pl.col(f_col).arg_min().over("det"))
+                        .alias(low_index_col),
+                        pl.col(sample_col)
+                        .get(pl.col(f_col).arg_max().over("det"))
+                        .alias(up_index_col),
+                    )
+                    .select("det", low_index_col, up_index_col)
+                    .unique()
+                    .collect()
+                )
+                shared_cols = (
+                    [low_index_col, up_index_col]
+                    if low_index_col in self._properties_df.schema
+                    else []
+                )
                 self._properties_df = ccat_df.coalesce_join(
                     self._properties_df,
                     index_df,
                     "det",
                     shared_cols,
                 )
-            low_inds[i], up_inds[i] = self.get_properties([low_index_col, up_index_col], include=include, exclude=exclude, strict=True).to_numpy().T[1:3]
-        
+            low_inds[i], up_inds[i] = (
+                self.get_properties(
+                    [low_index_col, up_index_col],
+                    include=include,
+                    exclude=exclude,
+                    strict=True,
+                )
+                .to_numpy()
+                .T[1:3]
+            )
+
         if isinstance(prefix, str):
             prefix = [prefix]
 
-        return self.trim(col_name=col_name,
-                         prefix=[f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{pre}" for prefix_enum, pre in zip(prefix_enums, prefix)],
-                         lower_index=low_inds,
-                         upper_index=up_inds,
-                         name=name,
-                         include=include,
-                         exclude=exclude,
-                         recalc=recalc)
+        return self.trim(
+            col_name=col_name,
+            prefix=[
+                f"{prefix_enum.POWER_SPECTRAL_DENSITY.value}_{pre}"
+                for prefix_enum, pre in zip(prefix_enums, prefix)
+            ],
+            lower_index=low_inds,
+            upper_index=up_inds,
+            name=name,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
 
     def fft(
         self,
         prefix: str | list[str] = "",
         col_name: str = "phase",
-        sampling_freq=None,
+        sampling_freq: float | None = None,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex=None,
+        ex: concurrent.futures.Executor | None = None,
     ) -> pl.dataframe.frame.DataFrame:
+        """Compute the fast Fourier transform (FFT) amplitude for the specified data column.
 
+        Uses ``numpy.fft.fft`` to compute the FFT for each |tone|.  Results
+        are stored as new columns in ``data``, then returned.
+
+        Args:
+            prefix (str | list[str], optional): Prefix or list of prefixes for
+                column naming.  Defaults to ``""``.
+            col_name (str, optional): Name of the data column to transform.
+                Defaults to ``"phase"``.
+            sampling_freq (float | None, optional): Sampling frequency in Hz.
+                Defaults to ``None`` (uses ``self.sampling_freq``).
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to all.
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to ``None``.
+            recalc (bool, optional): If ``True``, recompute even when already
+                cached.  Defaults to ``False``.
+            max_workers (int, optional): Maximum number of parallel workers.
+                Defaults to ``1``.
+            ex (concurrent.futures.Executor | None, optional): Existing
+                executor to reuse.  Defaults to ``None``.
+        Returns:
+            tuple[pl.DataFrame, tuple[str, str]] | pl.DataFrame: DataFrame of
+                FFT columns, and a ``(fft_prefix, fft_f_prefix)`` tuple when
+                ``return_prefix`` is enabled in the analysis config.
+        """
         enum_key, mapping = None, self.analysis_cfg["convention"]["name"]
         for key, val in mapping.items():
             if val == col_name:
@@ -963,7 +1348,7 @@ class Timestream(Data):
             exclude=exclude,
             recalc=recalc,
             col_enum=name_enums,
-            prefix_enum=prefix_enums
+            prefix_enum=prefix_enums,
         )
 
         col_names = []
@@ -975,16 +1360,25 @@ class Timestream(Data):
 
         self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
 
-        ret_df =  self.get_data(
+        ret_df = self.get_data(
             col_name=col_names,
             include=include,
             exclude=exclude,
         )
 
-        ret_pre = [(f"{prefix_enum.FOURIER_TRANSFORM.value}{'_' if pre else ''}{pre}", f"{prefix_enum.FOURIER_TRANSFORM_FREQUENCY.value}{'_' if pre else ''}{pre}") for pre, prefix_enum in zip(prefix, prefix_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            (
+                f"{prefix_enum.FOURIER_TRANSFORM.value}{'_' if pre else ''}{pre}",
+                f"{prefix_enum.FOURIER_TRANSFORM_FREQUENCY.value}{'_' if pre else ''}{pre}",
+            )
+            for pre, prefix_enum in zip(prefix, prefix_enums)
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
     # ==================#
     # Analysis Methods #
@@ -998,9 +1392,12 @@ class Timestream(Data):
         padding: int = 4,
         recalc: bool = False,
         col_enum=None,
-        prefix_enum=None
+        prefix_enum=None,
     ):
+        """Build a *Polars* map-batches expression for computing per-tone PSD using multiprocessing."""
+
         def _mp_psd(df):
+            """Run PSD computation on a single batch of |tone| data and return structured results."""
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
 
             results_dict = {}
@@ -1036,8 +1433,12 @@ class Timestream(Data):
                             )
                         else:
                             psd_f, psd = psd_col
-                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = psd
-                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = psd_f
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            psd
+                        )
+                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = (
+                            psd_f
+                        )
             return ccat_mp.package_results(results_dict)
 
         if not len(args) == 8:
@@ -1060,11 +1461,13 @@ class Timestream(Data):
         all_tones = np.array(tones)
 
         data_col, psd_prefix, psd_f_prefix = (
-            [name for name in col_enum][0].value, # Enum should only ever have one member so can extract without name. Could pass name as arg but would create more overhead
+            [name for name in col_enum][
+                0
+            ].value,  # Enum should only ever have one member so can extract without name. Could pass name as arg but would create more overhead
             prefix_enum.POWER_SPECTRAL_DENSITY.value,
-            prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value
+            prefix_enum.POWER_SPECTRAL_DENSITY_FREQUENCY.value,
         )
-            
+
         return_col, return_type = (
             [f"{psd_prefix}_{data_col}", f"{psd_f_prefix}_{data_col}"],
             [pl.Float64, pl.Float64],
@@ -1090,9 +1493,12 @@ class Timestream(Data):
         padding: int = 4,
         recalc: bool = False,
         col_enum=None,
-        prefix_enum=None
+        prefix_enum=None,
     ):
+        """Build a *Polars* map-batches expression for computing per-tone FFT using multiprocessing."""
+
         def _mp_fft(df):
+            """Run FFT computation on a single batch of |tone| data and return structured results."""
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
 
             results_dict = {}
@@ -1124,8 +1530,12 @@ class Timestream(Data):
                             )
                         else:
                             fft_f, fft = fft_col
-                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = fft
-                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = fft_f
+                        results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
+                            fft
+                        )
+                        results_dict[ccat_df.add_tone(return_col[1], tone, padding)] = (
+                            fft_f
+                        )
             return ccat_mp.package_results(results_dict)
 
         if not len(args) == 4:
@@ -1138,11 +1548,13 @@ class Timestream(Data):
         all_tones = np.array(tones)
 
         data_col, fft_prefix, fft_f_prefix = (
-            [name for name in col_enum][0].value, # Enum should only ever have one member so can extract without name. Could pass name as arg but would create more overhead
+            [name for name in col_enum][
+                0
+            ].value,  # Enum should only ever have one member so can extract without name. Could pass name as arg but would create more overhead
             prefix_enum.FOURIER_TRANSFORM.value,
-            prefix_enum.FOURIER_TRANSFORM_FREQUENCY.value
+            prefix_enum.FOURIER_TRANSFORM_FREQUENCY.value,
         )
-            
+
         return_col, return_type = (
             [f"{fft_prefix}_{data_col}", f"{fft_f_prefix}_{data_col}"],
             [pl.Float64, pl.Float64],
@@ -1166,11 +1578,31 @@ class Timestream(Data):
 
     def load_frame(
         self,
-        frame,
+        frame: core.G3Frame,
         start_time: float,
         time_precision: int = 1e8,
         mask: list[bool] = None,
     ) -> tuple[list[float], list[list[float]], list[list[float]]]:
+        """Extract |I|, |Q|, and timestamp arrays from a single G3 scan frame.
+
+        Optionally filters the extracted samples to the time range defined by
+        ``self.start`` and ``self.end``.  Also appends any packet counts found
+        in the frame to ``self.packet_counts``.
+
+        Args:
+            frame (core.G3Frame): G3 scan frame containing the timestream data.
+            start_time (float): Reference start time in units of
+                ``time_precision`` seconds.
+            time_precision (int, optional): Divisor to convert raw timestamps
+                to seconds.  Defaults to ``1e8``.
+            mask (list[bool], optional): Boolean mask for selecting samples.
+                If ``None``, the mask is derived from ``start_time``,
+                ``self.start``, and ``self.end``.  Defaults to ``None``.
+        Returns:
+            tuple[list[float], list[list[float]], list[list[float]]]: Tuple of
+                ``(timestamps, I_arrays, Q_arrays)`` filtered to the requested
+                time window.
+        """
         if "packet_counts" in frame:
             self.packet_counts += list(frame["packet_counts"])
 
@@ -1371,20 +1803,37 @@ class Timestream(Data):
     # Data Getter Methods #
     # =====================#
 
-    def t(self):
+    def t(self) -> pl.DataFrame:
+        """Return the raw timestamp column as a *Polars* DataFrame."""
         return self.get_data(col_name=self.analysis_cfg["convention"]["name"]["time"])
 
-    def dt(self):
+    def dt(self) -> pl.DataFrame:
+        """Return the datetime-typed timestamp column as a *Polars* DataFrame."""
         return self.get_data(
             col_name=self.analysis_cfg["convention"]["name"]["datetime"]
         )
 
-    def zt(self):
+    def zt(self) -> pl.DataFrame:
+        """Return the zero-referenced time column as a *Polars* DataFrame."""
         return self.get_data(
             col_name=self.analysis_cfg["convention"]["name"]["zerotime"]
         )
 
-    def join(self, other, in_place=False):
+    def join(self, other: "Timestream", in_place: bool = False) -> "Timestream":
+        """Join this ``Timestream`` with another, merging both data and properties DataFrames.
+
+        Calls ``super().join`` for the data columns, then concatenates the
+        ``properties`` DataFrames diagonally and re-assigns the ``det`` column
+        to match the combined tone list.
+
+        Args:
+            other (Timestream): The other ``Timestream`` to join.
+            in_place (bool, optional): If ``True``, mutate this object instead
+                of returning a new one.  Defaults to ``False``.
+        Returns:
+            Timestream: A new (or updated) ``Timestream`` with merged data and
+                properties.
+        """
         new_data = super().join(other, in_place=in_place)
         left_prop, right_prop = self.properties, other.properties
         new_data._properties_df = pl.concat(
@@ -1397,6 +1846,7 @@ class Timestream(Data):
     # =============================== #
 
     def __getstate__(self):
+        """Serialize the timestream; optionally offload the properties DataFrame to Parquet."""
         state = super().__getstate__()
         if not self.analysis_cfg["io"]["pickle"]["pickle_dataframes"] and state.get(
             "_data", True
@@ -1415,6 +1865,7 @@ class Timestream(Data):
         return state
 
     def __setstate__(self, state):
+        """Restore the timestream; lazily reload the properties DataFrame from Parquet if needed."""
         super().__setstate__(state)
 
         if (
@@ -1440,6 +1891,7 @@ class Timestream(Data):
 
 
 def _psd(data, height, fs, window="hann", nperseg=None, detrend=False, average="mean"):
+    """Compute the Welch PSD for a single |tone| data array, padded to ``height`` samples."""
     try:
         if nperseg is None:
             nperseg = 2 ** round(np.log2(height / 5))
@@ -1462,7 +1914,9 @@ def _psd(data, height, fs, window="hann", nperseg=None, detrend=False, average="
         psd_f, psd = np.zeros(height), np.zeros(height)
     return psd_f, psd
 
+
 def _fft(data, height, fs):
+    """Compute the FFT amplitude for a single |tone| data array, padded to ``height`` samples."""
     try:
         fft_f, fft = (
             np.fft.fftshift(np.fft.fftfreq(height, d=1 / fs)),

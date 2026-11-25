@@ -1,3 +1,11 @@
+"""Module for |VNA|-style |RFSoC| frequency sweep analysis.
+
+Defines the ``VNA`` class and *Numba* gufunc helpers for stitching phase/magnitude data
+across sweep bins and filtering spurious resonance candidates.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
 import numpy as np
 import polars as pl
 
@@ -21,7 +29,12 @@ class VNA(Sweep):
         cable_delay (float): Cable delay of the RF chain in nanoseconds
     """
 
-    def __init__(self, com_to: str, **kwargs):
+    def __init__(self, com_to: str, **kwargs) -> None:
+        """
+        Args:
+            com_to (str): |drone| that took the data. In form ``'Board.Drone'``
+            **kwargs: Keyword arguments forwarded to the base ``Sweep`` / ``Data`` class
+        """
         kwargs["data_type"] = "vna"
         super().__init__(com_to, **kwargs)
 
@@ -35,17 +48,17 @@ class VNA(Sweep):
         stitch_percent: float = 10.0,
         recalc: bool = False,
     ) -> pl.lazyframe.frame.LazyFrame:
-        """Stitch the VNA sweep phase data to remove discontinuites from wrapping and bin edges
-
-        Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+        """Stitch the |VNA| sweep phase data to remove discontinuities from wrapping and bin edges.
 
         Args:
-            include (int | list[int], optional): List of tones to include. Defaults to None
-            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+            threshold (float, optional): Phase difference threshold (radians) above which a
+                discontinuity is treated as phase wrapping. Defaults to ``1.9π`` (radians).
+            stitch_percent (float, optional): Percent of bin-edge data to use when linearly
+                fitting adjacent bin edges. Defaults to ``10.0``.
+            recalc (bool, optional): Force recalculation even if column already exists.
+                Defaults to **False**.
         Returns:
-            polars.lazyframe.frame.LazyFrame: Polars DataFrame with specified data columns
-
+            polars.lazyframe.frame.LazyFrame: Lazy frame with the stitched phase column.
         """
         # Get sweep steps from drone config
         try:
@@ -77,17 +90,17 @@ class VNA(Sweep):
     def stitch_mag(
         self, stitch_percent: float = 10.0, med_win: int = 3, recalc: bool = False
     ) -> pl.lazyframe.frame.LazyFrame:
-        """Stitch the VNA sweep mag data to remove discontinuites at bin edges
-
-        Note:
-            Only one of ``include`` and ``exclude`` arguments can be specified. If neither are specified, returns data for all tones.
+        """Stitch the |VNA| sweep magnitude data to remove discontinuities at bin edges.
 
         Args:
-            include (int | list[int], optional): List of tones to include. Defaults to None
-            exclude (int | list[int], optional): List of tones to exclude. Defaults to None
+            stitch_percent (float, optional): Percent of bin-edge data to use when linearly
+                fitting adjacent bin edges. Defaults to ``10.0``.
+            med_win (int, optional): Median filter window size for smoothing before stitching.
+                Defaults to ``3``.
+            recalc (bool, optional): Force recalculation even if column already exists.
+                Defaults to **False**.
         Returns:
-            polars.lazyframe.frame.LazyFrame: Polars DataFrame with specified data columns
-
+            polars.lazyframe.frame.LazyFrame: Lazy frame with the stitched magnitude column.
         """
 
         # Get sweep steps from drone config
@@ -125,6 +138,7 @@ class VNA(Sweep):
     def _calc_stitch_phase(
         schema, *args, tones=None, recalc: bool = False, col_enum=None, prefix_enum=None
     ):
+        """Return *Polars* expression for stitching phase per |tone|."""
         if len(args) == 3:
             sweep_steps, threshold, stitch_percent = args
         else:
@@ -160,6 +174,7 @@ class VNA(Sweep):
     def _calc_stitch_mag(
         schema, *args, tones=None, recalc: bool = False, col_enum=None, prefix_enum=None
     ):
+        """Return *Polars* expression for stitching magnitude per |tone|."""
         if len(args) == 3:
             sweep_steps, stitch_percent, med_win = args
         else:
@@ -242,7 +257,8 @@ class VNA(Sweep):
     # Internal Loading Methods #
     # ==========================#
 
-    def _get_res_s21z(self):
+    def _get_res_s21z(self) -> list | None:
+        """Return S21 values at resonance frequencies from the VNA sweep data."""
         res_s21z = None
         s21z = self.s21z
         fs = list(self.fs())
@@ -331,6 +347,20 @@ def stitch_phase(f, phase, sweep_steps, threshold, stitch_percent, result):
     "(n),(n),(),(),()->(n)",
 )
 def stitch_mag(f, mag, sweep_steps, stitch_percent, med_win, result):
+    """NumPy generalized universal function for stitching |VNA| sweep magnitude data to remove discontinuities at bin edges.
+
+    Applies a median filter to smooth the magnitude, then stitches adjacent bins by linearly
+    fitting the bin edges and removing the offset between them.
+
+    Args:
+        f (np.array[float64]): |VNA| sweep frequency data
+        mag (np.array[float64]): |VNA| sweep magnitude data
+        sweep_steps (int): Number of frequency points per |tone| bin
+        stitch_percent (float): Percent of bin-edge data to use for fitting adjacent bins
+        med_win (int): Median filter window size for smoothing
+    Returns:
+        result (np.array[float64]): Stitched |VNA| sweep magnitude data
+    """
     mag_filt = np.ones(mag.size)
 
     offset = (med_win - 1) // 2
@@ -374,6 +404,20 @@ def stitch_mag(f, mag, sweep_steps, stitch_percent, med_win, result):
 
 @njit(parallel=True, cache=True)
 def filter_det_f(f, phase, det_f, win):
+    """JIT-compiled function for computing phase slopes around candidate resonance frequencies.
+
+    Fits a linear slope to the phase within a window of ``win`` points centred on each candidate
+    resonance frequency. Positive slopes indicate real resonances; zero or negative slopes suggest
+    spurious candidates.
+
+    Args:
+        f (np.array[float64]): VNA sweep frequency array
+        phase (np.array[float64]): VNA sweep phase array
+        det_f (np.array[float64]): Candidate resonance frequencies
+        win (int): Window size for linear phase fit around each candidate frequency
+    Returns:
+        np.array[float64]: Phase slope for each candidate frequency.
+    """
     offset = (win - 1) // 2
     slopes = np.zeros(det_f.size)
     for i in range(det_f.size):

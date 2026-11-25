@@ -1,3 +1,9 @@
+"""
+Helper functions for constructing and manipulating *Polars* DataFrames used throughout the *ccatkidlib* analysis pipeline.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
 import polars as pl
 import ccatkidlib.log as log
 
@@ -7,7 +13,20 @@ from typing import Callable, TypeAlias, Any
 
 ExprFunction: TypeAlias = Callable[[list[int], Any], list[pl.Expr]]
 
-def check_args(args, num_prefix, data_type):
+
+def check_args(args: Any, num_prefix: int, data_type: type) -> list:
+    """Normalize ``args`` into a list of length ``num_prefix``.
+
+    If ``args`` is an instance of ``data_type``, is not iterable, or does not have
+    length ``num_prefix``, it is broadcast to a list of ``num_prefix`` copies.
+
+    Args:
+        args (Any): Argument value(s) to normalize
+        num_prefix (int): Expected length of the resulting list
+        data_type (type): Type that, if matched, triggers broadcasting
+    Returns:
+        list: Normalized list of length ``num_prefix``
+    """
     if (
         isinstance(args, data_type)
         or not isinstance(args, Iterable)
@@ -16,13 +35,29 @@ def check_args(args, num_prefix, data_type):
         args = [args] * num_prefix
     return args
 
+
 def create_enums(
     name: list[str],
     input_prefix: str | list[str],
     output_prefix: list[str],
     mapping: dict,
     no_prefix: list[str] = [],
-):
+) -> tuple[list[Enum], list[Enum]]:
+    """Create *Polars* column-name and prefix ``Enum`` objects from the analysis config ``mapping``.
+
+    Builds one ``Name`` enum per input prefix and a single ``Prefix`` enum for the output prefixes,
+    using the ``convention`` section of the analysis configuration dictionary.
+
+    Args:
+        name (list[str]): Short data-column names to look up in the name convention mapping
+        input_prefix (str | list[str]): Input prefix or list of input prefixes
+        output_prefix (list[str]): Output prefix names to look up in the prefix convention mapping
+        mapping (dict): Analysis configuration dictionary containing a ``'convention'`` key
+        no_prefix (list[str], optional): Column names that should not be prefixed. Defaults to ``[]``
+    Returns:
+        tuple[list[Enum], list[Enum]]: ``(name_enums, prefix_enums)`` — one ``Name`` enum per
+        input prefix and one ``Prefix`` enum (broadcast across all input prefixes).
+    """
     if isinstance(input_prefix, str):
         input_prefix = [input_prefix]
     name_mapping, prefix_mapping = (
@@ -58,7 +93,17 @@ def create_enums(
     ] * len(input_prefix)
     return name_enums, prefix_enums
 
-def add_tone(col_name: str, tone: int | None, padding: int):
+
+def add_tone(col_name: str, tone: int | None, padding: int) -> str:
+    """Append a zero-padded |tone| suffix to a column name.
+
+    Args:
+        col_name (str): Base column name (e.g., ``'I'``)
+        tone (int | None): |tone| number to append. If **None**, ``col_name`` is returned unchanged.
+        padding (int): Total width of the zero-padded tone suffix (e.g., ``4`` → ``'_0007'``)
+    Returns:
+        str: Column name with appended tone suffix, or the original ``col_name`` if ``tone`` is **None**.
+    """
     return col_name if tone is None else f"{col_name}_{tone:0{padding}d}"
 
 
@@ -69,8 +114,25 @@ def parse_tones(
     include: int | list[int] | None = None,
     exclude: int | list[int] | None = None,
     *args,
-) -> any:
-    """ """
+) -> list[pl.Expr]:
+    """Dispatch to one of three tone-selection functions based on ``include``/``exclude`` arguments.
+
+    Exactly one of ``include`` or ``exclude`` may be specified. If both are given an error is logged.
+    If neither is given, ``func_all`` is called.
+
+    Args:
+        func_include (ExprFunction): Function to call when ``include`` is specified. Receives the
+            list of included tone numbers plus any extra ``*args``.
+        func_exclude (ExprFunction): Function to call when ``exclude`` is specified. Receives the
+            list of excluded tone numbers plus any extra ``*args``.
+        func_all (Callable[[Any], list[pl.Expr]]): Function to call when neither is specified.
+            Receives any extra ``*args``.
+        include (int | list[int] | None, optional): Tone number(s) to include. Defaults to **None**.
+        exclude (int | list[int] | None, optional): Tone number(s) to exclude. Defaults to **None**.
+        *args: Additional positional arguments forwarded to the dispatched function.
+    Returns:
+        list[pl.Expr]: *Polars* expression list returned by the dispatched function.
+    """
 
     if include is not None and exclude is not None:
         log.log(
@@ -88,8 +150,18 @@ def parse_tones(
         return func_all(*args)
 
 
-def unnest(data_obj, col_names: str | list[str]) -> pl.DataFrame:
-    """ """
+def unnest(data_obj: Any, col_names: str | list[str]) -> pl.DataFrame:
+    """Unnest struct columns matching ``col_names`` from a data object's ``data`` DataFrame.
+
+    Struct columns whose names contain any of the specified ``col_names`` are unnested in-place
+    on ``data_obj.data``. Existing columns that duplicate keys in the struct are dropped first.
+
+    Args:
+        data_obj (Any): *ccatkidlib* data object with a ``data`` attribute that is a *Polars* DataFrame
+        col_names (str | list[str]): Column name substring(s) to match against struct columns
+    Returns:
+        pl.DataFrame: The unnested *Polars* DataFrame (also updates ``data_obj.data`` in place).
+    """
     struct_cols = []
     if isinstance(col_names, str):
         col_names = [col_names]
@@ -116,7 +188,7 @@ def coalesce_join(
         on (str | list[str]): Columns to join two DataFrames on
         shared_columns (str | list[str]): Shared columns between both DataFrames
     Returns:
-        return (pl.DataFrame): Joined DataFrame
+        pl.DataFrame: Joined DataFrame
     """
 
     if isinstance(shared_cols, str):
@@ -142,20 +214,24 @@ def coalesce_join(
 
 
 def get_properties(
-    obj,
+    obj: Any,
     col_name: str | list[str] = ".*",
     include: int | list[int] | None = None,
     exclude: int | list[int] | None = None,
     strict: bool = False,
-):
-    """Get the specified data columns and rows from the ``properties`` Polars DataFrame
+) -> pl.DataFrame:
+    """Get the specified data columns and rows from the ``properties`` *Polars* DataFrame.
 
     Args:
-        col_name (str | list[str], optional): Defaults to all columns
-        include (int | list[int] | None, optional): Defaults to *None*
-        exclude (int | list[int] | None, optional): Defaults to *None*
-        strict (bool, optional): Defaults to *False*
-
+        obj (Any): *ccatkidlib* data object with ``properties`` and ``tones`` attributes
+        col_name (str | list[str], optional): Regex pattern(s) to select columns. Defaults to ``'.*'`` (all columns).
+        include (int | list[int] | None, optional): Tone number(s) to include. Defaults to **None**.
+        exclude (int | list[int] | None, optional): Tone number(s) to exclude. Defaults to **None**.
+        strict (bool, optional): When **True**, column names are matched exactly; when **False** they are
+            matched as substrings. Defaults to **False**.
+    Returns:
+        pl.DataFrame: Filtered ``properties`` *Polars* DataFrame with the ``'det'`` column plus the
+        requested data columns.
     """
 
     def _get_expr(tones):
@@ -203,21 +279,23 @@ def get_properties(
 
 
 def check_properties(
-    obj,
+    obj: Any,
     col_name: str,
     include: int | list[int] | None = None,
     exclude: int | list[int] | None = None,
     recalc: bool = False,
 ) -> list[int]:
-    """Check which subset of detectors do not have a value for the specified column
+    """Check which subset of detectors do not have a value for the specified column.
 
     Args:
-        col_name (str): Name of data column
-        include ():
-        exclude ():
-        recalc (bool):
+        obj (Any): *ccatkidlib* data object with a ``properties`` DataFrame
+        col_name (str): Name of data column to check
+        include (int | list[int] | None, optional): Tone number(s) to include. Defaults to **None**.
+        exclude (int | list[int] | None, optional): Tone number(s) to exclude. Defaults to **None**.
+        recalc (bool, optional): When **True**, returns all tones regardless of existing values.
+            Defaults to **False**.
     Returns:
-        return (list[int]): List of tones without a value for the specified column
+        list[int]: List of tones without a value for the specified column.
     """
 
     property_df = get_properties(
@@ -229,19 +307,23 @@ def check_properties(
     return tones
 
 
-def add_data_to_properties(obj, df, col_name) -> pl.DataFrame:
-    """
-    Add a quantity calculated with a data object's ``data`` DataFrame to the ``properties`` DataFrame
+def add_data_to_properties(obj: Any, df: pl.DataFrame, col_name: str) -> pl.DataFrame:
+    """Add a quantity to a data object's ``properties`` DataFrame.
+
+    Pivots ``df`` from wide to long format, then coalesce-joins the result into
+    ``obj._properties_df``, replacing any existing values for ``col_name``.
 
     Note:
-        - The ``df`` DataFrame does not necessarily need to derive from a data object's ``data`` DataFrame, but the structure of this method is designed specifically for that use case
-
-    Example:
-        -
+        ``df`` must be in wide format with column names matching zero-padded tone numbers
+        (e.g., ``'0000'``, ``'0001'``, …).
 
     Args:
-        df (pl.DataFrame): Polars DataFrame with the data to be added to the ``properties`` DataFrame. The DataFrame must be in wide format with the column names being tone numbers (e.g., '0000', '0001', etc.)
-        col_name (str): Name of column to add to ``properties`` DataFrame
+        obj (Any): *ccatkidlib* data object with a ``_properties_df`` attribute
+        df (pl.DataFrame): Wide-format *Polars* DataFrame whose columns are tone numbers and
+            whose single value row holds the per-|tone| quantity to add
+        col_name (str): Name of the column to add to the ``properties`` DataFrame
+    Returns:
+        pl.DataFrame: Updated ``properties`` *Polars* DataFrame.
     """
 
     df = (

@@ -129,21 +129,19 @@ def save_fig(
 
 
 def _save_fig(
-    plot_func,
-    data,
-    timestamp,
-    plot_opts,
-    overwrite,
-    save_dir,
-    save_name,
-    save_fmt,
-    figs_per_file,
-    args,
+    plot_func: Callable,
+    data: Any,
+    timestamp: int | str,
+    plot_opts: list,
+    overwrite: bool,
+    save_dir: str | Path,
+    save_name: str,
+    save_fmt: Format,
+    figs_per_file: int,
+    args: tuple,
     **kwargs,
-):
-    """
-    Worker function for saving Holoviews figures in a background process
-    """
+) -> None:
+    """Worker function for saving *Holoviews* figures in a background process."""
     import holoviews as hv
     import hvplot.polars
 

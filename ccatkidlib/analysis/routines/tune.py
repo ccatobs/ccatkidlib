@@ -22,51 +22,94 @@ class TonePowerNetwork(Network):
 
         return
 
-def max_linewidth_dist_f(det,
-                         prefix="",
-                         Q_col = "",
-                         trim_mag_prefix = "",
-                         trim_window = 2,
-                         mean_points=10,
-                         savgol_window: int = 21,
-                         savgol_k: int = 1,
-                         include=None,
-                         exclude=None,
-                         recalc=False,
-                         max_workers=1,
-                         ex=None):
-    
+
+def max_linewidth_dist_f(
+    det,
+    prefix="",
+    Q_col="",
+    trim_mag_prefix="",
+    trim_window=2,
+    mean_points=10,
+    savgol_window: int = 21,
+    savgol_k: int = 1,
+    include=None,
+    exclude=None,
+    recalc=False,
+    max_workers=1,
+    ex=None,
+):
+
     name_dict, prefix_dict = (
         det.targ.analysis_cfg["convention"]["name"],
         det.targ.analysis_cfg["convention"]["prefix"],
     )
-    
-    det.targ.mismatch_dist(prefix=prefix, mean_points=mean_points, include=include, exclude=exclude, recalc=recalc)
-    I_shifts = det.targ.get_properties(f"{prefix_dict['remove_impedance_mismatch']}_{prefix}_{name_dict['magnitude']}", include=include, exclude=exclude, strict=True).to_numpy().T[1]
-    
-    det.targ.IQ_shift(prefix=prefix, shift_I = I_shifts, name=prefix_dict['center_tail'], include=include, exclude=exclude, recalc=recalc)
+
+    det.targ.mismatch_dist(
+        prefix=prefix,
+        mean_points=mean_points,
+        include=include,
+        exclude=exclude,
+        recalc=recalc,
+    )
+    I_shifts = (
+        det.targ.get_properties(
+            f"{prefix_dict['remove_impedance_mismatch']}_{prefix}_{name_dict['magnitude']}",
+            include=include,
+            exclude=exclude,
+            strict=True,
+        )
+        .to_numpy()
+        .T[1]
+    )
+
+    det.targ.IQ_shift(
+        prefix=prefix,
+        shift_I=I_shifts,
+        name=prefix_dict["center_tail"],
+        include=include,
+        exclude=exclude,
+        recalc=recalc,
+    )
     shift_prefix = f"{prefix_dict['center_tail']}_{prefix_dict['translate']}_{prefix}"
-    
-    det.IQ_trim(prefix=shift_prefix, 
-                window=trim_window, 
-                mean_points=meam_points, 
-                mag_prefix=trim_mag_prefix,
-                include=include,
-                exclude=exclude,
-                recalc=recalc)
+
+    det.IQ_trim(
+        prefix=shift_prefix,
+        window=trim_window,
+        mean_points=meam_points,
+        mag_prefix=trim_mag_prefix,
+        include=include,
+        exclude=exclude,
+        recalc=recalc,
+    )
     trim_prefix = f"{prefix_dict['trim_tail']}_{prefix_dict['trim']}_{shift_prefix}"
 
-    det.targ.linewidth_shift(prefix=trim_prefix, include=include, exclude=exclude, recalc=recalc)
+    det.targ.linewidth_shift(
+        prefix=trim_prefix, include=include, exclude=exclude, recalc=recalc
+    )
     if Q_col:
-        Qs = det.targ.get_properties(Q_col, include=include, exclude=exclude, strict=True).to_numpy().T[1]    
-        det.targ.scale(col_name=name_dict['linewidth_shift'], prefix=trim_prefix, scale=10e5/Qs, name=Q_col, include=include, exclude=exclude, recalc=recalc)
+        Qs = (
+            det.targ.get_properties(
+                Q_col, include=include, exclude=exclude, strict=True
+            )
+            .to_numpy()
+            .T[1]
+        )
+        det.targ.scale(
+            col_name=name_dict["linewidth_shift"],
+            prefix=trim_prefix,
+            scale=10e5 / Qs,
+            name=Q_col,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
         scale_prefix = f"{Q_col}_{prefix_dict['scale']}_{trim_prefix}"
     else:
         scale_prefix = trim_prefix
 
     if savgol_window > 1:
         det.targ.savgol(
-            col_name=name_dict['linewidth_shift'],
+            col_name=name_dict["linewidth_shift"],
             prefix=scale_prefix,
             window=savgol_window,
             k=savgol_k,
@@ -79,16 +122,27 @@ def max_linewidth_dist_f(det,
         )
         diff_prefix = f"{prefix_dict['savgol_filter']}1"
     else:
-        det.targ.diff(col_name=name_dict['linewidth_shift'], prefix=scale_prefix, include=include, exclude=exclude, recalc=recalc)
-        diff_prefix =  prefix_dict["difference"]
+        det.targ.diff(
+            col_name=name_dict["linewidth_shift"],
+            prefix=scale_prefix,
+            include=include,
+            exclude=exclude,
+            recalc=recalc,
+        )
+        diff_prefix = prefix_dict["difference"]
 
-    sample_col, freq_col, lw_col = name_dict["sample"], name_dict["frequency"], f"{diff_prefix}_{scale_prefix}_{name_dict['linewidth_shift']}"
-    low_sample_col, high_sample_col, low_lw_col, high_lw_col, low_f_col, high_f_col = (f"{prefix_dict['low_frequency_side']}_max_{lw_col}_{sample_col}",
-                                                                                       f"{prefix_dict['high_frequency_side']}_max_{lw_col}_{sample_col}",
-                                                                                       f"{prefix_dict['low_frequency_side']}_max_{lw_col}",
-                                                                                       f"{prefix_dict['high_frequency_side']}_max_{lw_col}",
-                                                                                       f"{prefix_dict['low_frequency_side']}_max_{lw_col}_{freq_col}",
-                                                                                       f"{prefix_dict['high_frequency_side']}_max_{lw_col}_{freq_col}",
+    sample_col, freq_col, lw_col = (
+        name_dict["sample"],
+        name_dict["frequency"],
+        f"{diff_prefix}_{scale_prefix}_{name_dict['linewidth_shift']}",
+    )
+    low_sample_col, high_sample_col, low_lw_col, high_lw_col, low_f_col, high_f_col = (
+        f"{prefix_dict['low_frequency_side']}_max_{lw_col}_{sample_col}",
+        f"{prefix_dict['high_frequency_side']}_max_{lw_col}_{sample_col}",
+        f"{prefix_dict['low_frequency_side']}_max_{lw_col}",
+        f"{prefix_dict['high_frequency_side']}_max_{lw_col}",
+        f"{prefix_dict['low_frequency_side']}_max_{lw_col}_{freq_col}",
+        f"{prefix_dict['high_frequency_side']}_max_{lw_col}_{freq_col}",
     )
 
     include_subset = ccat_df.check_properties(
@@ -130,23 +184,45 @@ def max_linewidth_dist_f(det,
         mid_f_df = det.targ.get_properties([mid_sample_col], include=include_subset)
 
         lw_mid_f_df = (
-            lw_f_df
-            .join(mid_f_df, on="det", how="left", coalesce=True)
+            lw_f_df.join(mid_f_df, on="det", how="left", coalesce=True)
             .lazy()
-            .with_columns(
-                (pl.col(sample_col) < pl.col(mid_sample_col)).alias("low")
-            )
+            .with_columns((pl.col(sample_col) < pl.col(mid_sample_col)).alias("low"))
         )
-        max_df = lw_mid_f_df.filter(pl.col(lw_col) == pl.col(lw_col).max().over('det', 'low')).collect()
+        max_df = lw_mid_f_df.filter(
+            pl.col(lw_col) == pl.col(lw_col).max().over("det", "low")
+        ).collect()
 
-        max_lw_df = max_df.pivot(on="low", index="det", values=lw_col, aggregate_function = 'first' ).rename({'true': low_lw_col, 'false': high_lw_col}).with_columns((-1*pl.col(low_lw_col)).alias(low_lw_col))
-        max_sample_df = max_df.pivot(on="low", index="det", values=sample_col, aggregate_function = 'first').rename({'true': low_sample_col, 'false': high_sample_col})
-        max_f_df = max_df.pivot(on="low", index="det", values=freq_col, aggregate_function = 'first').rename({'true': low_f_col , 'false': high_f_col})
+        max_lw_df = (
+            max_df.pivot(
+                on="low", index="det", values=lw_col, aggregate_function="first"
+            )
+            .rename({"true": low_lw_col, "false": high_lw_col})
+            .with_columns((-1 * pl.col(low_lw_col)).alias(low_lw_col))
+        )
+        max_sample_df = max_df.pivot(
+            on="low", index="det", values=sample_col, aggregate_function="first"
+        ).rename({"true": low_sample_col, "false": high_sample_col})
+        max_f_df = max_df.pivot(
+            on="low", index="det", values=freq_col, aggregate_function="first"
+        ).rename({"true": low_f_col, "false": high_f_col})
 
-        max_lw_sample_df = max_lw_df.join(max_sample_df, on='det', how='left') 
-        max_lw_sample_f_df = max_lw_sample_df.join(max_f_df, on='det', how='left').sort('det')
+        max_lw_sample_df = max_lw_df.join(max_sample_df, on="det", how="left")
+        max_lw_sample_f_df = max_lw_sample_df.join(max_f_df, on="det", how="left").sort(
+            "det"
+        )
 
-        shared_cols = [low_lw_col, high_lw_col, low_sample_col, high_sample_col, low_f_col, high_f_col] if low_lw_col in det.targ._properties_df.schema else []
+        shared_cols = (
+            [
+                low_lw_col,
+                high_lw_col,
+                low_sample_col,
+                high_sample_col,
+                low_f_col,
+                high_f_col,
+            ]
+            if low_lw_col in det.targ._properties_df.schema
+            else []
+        )
         det.targ._properties_df = ccat_df.coalesce_join(
             det.targ._properties_df, max_lw_sample_f_df, "det", shared_cols
         )
@@ -155,9 +231,11 @@ def max_linewidth_dist_f(det,
         [low_lw_col, high_lw_col], include=include, exclude=exclude, strict=True
     )
     return max_lw_df
-    
+
+
 # Tone Frequency Tuning
 # ---------------------
+
 
 def max_IQ_dist_f(
     det,

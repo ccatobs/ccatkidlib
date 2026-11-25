@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from typing import Callable, Iterator, Any, TYPE_CHECKING
 
 import ccatkidlib.analysis.utils.dataframe as ccat_df
+
 if TYPE_CHECKING:
     import numpy as np
 
@@ -66,28 +67,46 @@ def create_batches(
 ) -> tuple[
     pl.Expr, list[list[int]], list[list[int]], str | list[str], list[list[str]], int
 ]:
-    """
+    """Build *Polars* batch-processing expressions and tone index batches for parallel analysis.
+
+    Determines which tones need to be (re-)calculated, constructs a ``pl.struct.map_batches``
+    expression that applies ``func`` over all required tones at once, and splits the work into
+    ``max_workers`` batches for parallel execution.
 
     Args:
-        func (Callable[[pl.DataFrame], pl.Series]): Analysis function to apply to tones. Must take a Polars DataFrame as the input and return a Polars Series
-        tones [list[int]]:
-
+        func (Callable[[pl.DataFrame], pl.Series]): Analysis function applied per |tone|.
+            Must accept a *Polars* DataFrame and return a *Polars* Series.
+        tones (list[int]): List of |tone| numbers to consider
+        schema (pl.Schema): Current DataFrame schema used to skip already-computed columns
+        input_col (list[str]): Base input column names (without tone suffix)
+        return_col (list[str]): Base output column names (without tone suffix)
+        return_type (list[pl.DataType]): *Polars* data types for each output column
+        padding (int, optional): Zero-padding width for tone column name suffixes. Defaults to ``4``.
+        max_workers (int, optional): Number of worker processes for batching. Defaults to ``1``.
+        recalc (bool, optional): When **True**, recalculate even if the output column already exists.
+            Defaults to **False**.
+    Returns:
+        tuple[pl.Expr, list[list[int]], list[list[int]], str | list[str], list[list[str]], int]:
+        ``(expr, calc_ind, batch_len)`` — the batch *Polars* expression, per-worker tone index
+        batches, and batch length. ``expr`` is an empty list if no tones need calculating.
     """
     # Determine which tones need calculating
     to_calc, calc_ind = [], []
-    for i, tone in enumerate(tones): 
+    for i, tone in enumerate(tones):
         if recalc or ccat_df.add_tone(return_col[0], tone, padding) not in schema:
             to_calc.append(tone), calc_ind.append(i)
-    
+
     expr, batches, batch_len = [], [], 0
     if (num_calc := (len(to_calc))) != 0:
         batches, returns = num_calc * [None], num_calc * [None]
         for i, tone in enumerate(to_calc):
-            batches[i] = [ccat_df.add_tone(name, tone, padding) for name in input_col] # Get all input columns needed for calculations
+            batches[i] = [
+                ccat_df.add_tone(name, tone, padding) for name in input_col
+            ]  # Get all input columns needed for calculations
             returns[i] = [
                 pl.Field(ccat_df.add_tone(name, tone, padding), dtype)
                 for name, dtype in zip(return_col, return_type)
-            ] # Map batches requires explicit return data types specified
+            ]  # Map batches requires explicit return data types specified
 
         struct_col = f"struct_{return_col[0]}"
         batches_flat, returns_flat = (
@@ -109,10 +128,24 @@ def create_batches(
         calc_ind = new_calc_ind
     return expr, calc_ind, batch_len
 
+
 def struct_batches(
     struct: pl.Struct, num_data_cols: int, batch_len: int, max_workers: int
 ) -> list[list[np.ndarray]]:
-    """ """
+    """Unpack a *Polars* struct column into per-worker batches of NumPy arrays.
+
+    Unnests the struct, converts to a NumPy array, reshapes into ``(num_data_cols, n_tones, n_samples)``,
+    then slices along the tone dimension into ``max_workers`` batches of length ``batch_len``.
+
+    Args:
+        struct (pl.Struct): *Polars* struct column to unpack
+        num_data_cols (int): Number of data columns packed into the struct per |tone|
+        batch_len (int): Number of tones per worker batch
+        max_workers (int): Number of worker batches to produce
+    Returns:
+        list[list[np.ndarray]]: Nested list of shape ``[max_workers][num_data_cols]`` where each
+        element is a NumPy array of shape ``(batch_len, n_samples)``.
+    """
 
     data = (
         struct.struct.unnest().to_numpy().T
@@ -128,7 +161,19 @@ def struct_batches(
 
 
 def process_batches(func: Callable, *args, **kwargs) -> list[Any | Exception]:
-    """ """
+    """Execute ``func`` over batches of positional and keyword arguments, capturing exceptions.
+
+    Zips each positional ``args`` iterable and each keyword ``kwargs`` iterable element-wise,
+    then calls ``func`` with each combined set of arguments. Any exception raised by ``func``
+    for a given batch is caught and stored in the results list rather than propagated.
+
+    Args:
+        func (Callable): Function to apply to each batch
+        *args: Iterables of positional arguments; zipped element-wise across batches
+        **kwargs: Iterables of keyword argument values; zipped element-wise across batches
+    Returns:
+        list[Any | Exception]: Results (or caught exceptions) for each batch, in order.
+    """
     func_args = list(zip(*args))
     func_kwargs = [dict(zip(kwargs.keys(), values)) for values in zip(*kwargs.values())]
     if not func_kwargs:
@@ -144,7 +189,16 @@ def process_batches(func: Callable, *args, **kwargs) -> list[Any | Exception]:
 
 
 def package_results(results_dict: dict) -> pl.Series:
-    """ """
+    """Package a dictionary of per-|tone| results into a *Polars* struct Series.
+
+    Sorts the dictionary by key, constructs a *Polars* DataFrame, then returns the rows as a
+    struct Series — the format expected by ``pl.struct.map_batches`` return values.
+
+    Args:
+        results_dict (dict): Mapping of column names to result values, keyed by column name
+    Returns:
+        pl.Series: Single-element *Polars* Series of struct type containing the results.
+    """
 
     df = pl.DataFrame(dict(sorted(results_dict.items())))
     return pl.Series(df.select(pl.struct(df.columns)))

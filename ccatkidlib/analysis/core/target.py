@@ -92,7 +92,17 @@ class Target(Sweep):
     # ======================== #
 
     @property
-    def data(self):
+    def data(self) -> pl.DataFrame:
+        """Load and return the sweep data as a *Polars* DataFrame.
+
+        If ``tones`` was specified on construction the raw array is reshaped
+        so that each |tone| occupies its own set of ``frequency``, |I|, and
+        |Q| columns.  Subsequent accesses return the cached result.
+
+        Returns:
+            pl.DataFrame: Sweep data with per-|tone| frequency, |I|, and
+            |Q| columns.
+        """
         if self._data is None:
             data = super().data  # Get DataFrame of sweep data
             tones = self.tones  # Define local variable since it will be used often
@@ -148,7 +158,13 @@ class Target(Sweep):
         return self._data
 
     @data.setter
-    def data(self, value: pl.lazyframe.frame.LazyFrame | None):
+    def data(self, value: pl.lazyframe.frame.LazyFrame | None) -> None:
+        """Set the internal sweep data.
+
+        Args:
+            value (pl.LazyFrame | pl.DataFrame | None): Replacement sweep
+                data.  Must be a *Polars* DataFrame, LazyFrame, or ``None``.
+        """
         if value is None or isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._data = value
         else:
@@ -157,7 +173,17 @@ class Target(Sweep):
             )
 
     @property
-    def properties(self):
+    def properties(self) -> pl.DataFrame:
+        """Return the per-|tone| properties as a *Polars* DataFrame.
+
+        On first access the DataFrame is built from the ``comb`` DataFrame
+        with ``com_to`` and ``timestamp`` columns appended.  Subsequent
+        calls incorporate any per-|tone| scalar results stored in
+        ``_properties`` by fitting methods.
+
+        Returns:
+            pl.DataFrame: Per-|tone| scalar properties indexed by ``det``.
+        """
         if isinstance(self._properties_df, pl.LazyFrame):
             self._properties_df = self._properties_df.collect()
         elif self._properties_df is None:
@@ -201,7 +227,12 @@ class Target(Sweep):
         return self._properties_df
 
     @properties.setter
-    def properties(self, value):
+    def properties(self, value: pl.DataFrame | pl.LazyFrame) -> None:
+        """Set the internal properties DataFrame.
+
+        Args:
+            value (pl.DataFrame | pl.LazyFrame): Replacement properties table.
+        """
         if isinstance(value, (pl.DataFrame, pl.LazyFrame)):
             self._properties_df = value
 
@@ -211,15 +242,21 @@ class Target(Sweep):
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         strict: bool = False,
-    ):
-        """Get the specified data columns and rows from the ``properties`` Polars DataFrame
+    ) -> pl.DataFrame:
+        """Get the specified data columns and rows from the ``properties`` *Polars* DataFrame.
 
         Args:
-            col_name (str | list[str], optional): Defaults to all columns
-            include (int | list[int] | None, optional): Defaults to *None*
-            exclude (int | list[int] | None, optional): Defaults to *None*
-            strict (bool, optional): Defaults to *False*
-
+            col_name (str | list[str], optional): Column name or regex pattern
+                to select.  Defaults to ``'.*'`` (all columns).
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            strict (bool, optional): Raise an error if a requested column is
+                absent.  Defaults to *False*.
+        Returns:
+            pl.DataFrame: Subset of the ``properties`` DataFrame matching the
+            requested columns and |tone| filter.
         """
         return ccat_df.get_properties(
             self, col_name=col_name, include=include, exclude=exclude, strict=strict
@@ -229,18 +266,44 @@ class Target(Sweep):
     # Transformation Methods #
     # ====================== #
 
-    def stitch_phase(self, 
-                     prefix: str = '',
-                     threshold: float = 2*np.pi, 
-                     include: int | list[int] | None = None, 
-                     exclude: int | list[int] | None = None, 
-                     recalc: bool =False,
-                     max_workers: int = 1, 
-                     ex = None):
-        '''
-        '''
+    def stitch_phase(
+        self,
+        prefix: str = "",
+        threshold: float = 2 * np.pi,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        max_workers: int = 1,
+        ex: concurrent.futures.Executor | None = None,
+    ) -> tuple[pl.DataFrame, str]:
+        """Stitch phase discontinuities caused by wrapping across ±π.
 
-        if isinstance(prefix, str): prefix = [prefix]
+        Applies ``numpy.unwrap`` column-wise so the stitched phase varies
+        continuously.  The result is stored in a new column prefixed with
+        ``stitch``.
+
+        Args:
+            prefix (str, optional): Prefix of the ``phase`` column to stitch.
+                Defaults to ``''``.
+            threshold (float, optional): Phase-jump magnitude that triggers
+                stitching.  Defaults to ``2*numpy.pi``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation even if the column
+                already exists.  Defaults to *False*.
+            max_workers (int, optional): Number of parallel workers.
+                Defaults to 1.
+            ex (concurrent.futures.Executor | None, optional): Pre-existing
+                executor to reuse.  Defaults to *None*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of stitched phase columns and
+            the output prefix string.
+        """
+
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["phase"],
             prefix,
@@ -269,35 +332,41 @@ class Target(Sweep):
             prefix_enum=prefix_enums,
         )
 
-        col_name = ["_".join([prefix_enum.STITCH.value, name_enum.PHASE.value]) for name_enum, prefix_enum in zip(name_enums, prefix_enums)]
+        col_name = [
+            "_".join([prefix_enum.STITCH.value, name_enum.PHASE.value])
+            for name_enum, prefix_enum in zip(name_enums, prefix_enums)
+        ]
 
-        self.data = ccat_df.unnest(
-            self, [f"struct_{name}" for name in col_name]
-        )
-        ret_df =  self.get_data(
-            col_name=col_name,
-            include=include,
-            exclude=exclude,
-            strict=True
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_name])
+        ret_df = self.get_data(
+            col_name=col_name, include=include, exclude=exclude, strict=True
         )
 
-        ret_pre = [f"{prefix_enum.STITCH.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            f"{prefix_enum.STITCH.value}{'_' if pre else ''}{pre}"
+            for pre, prefix_enum in zip(prefix, prefix_enums)
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
-    def res_trim(self,
-                    col_name: str,
-                    prefix: str | list[str] = "",
-                    window: float | list[float] = 1.5,
-                    mean_points: int = 10,
-                    mag_prefix: str = "",
-                    invert: bool = False,
-                    include: int | list[int] | None = None,
-                    exclude: int | list[int] | None = None,
-                    recalc: bool = False,) -> pl.DataFrame:
+    def res_trim(
+        self,
+        col_name: str,
+        prefix: str | list[str] = "",
+        window: float | list[float] = 1.5,
+        mean_points: int = 10,
+        mag_prefix: str = "",
+        invert: bool = False,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> pl.DataFrame:
         """
-        Trim target sweep IQ data based on resonator linewidths. 
+        Trim target sweep IQ data based on resonator linewidths.
 
         Args:
             prefix: Prefix of the IQ data to trim.
@@ -307,7 +376,7 @@ class Target(Sweep):
             Q_col (str): Name of column in ``properties`` DataFrame with total quality factors to use if ``use_fit`` is True.
             mean_points (int): Number of points to average to determine max magnitude of resonator profile. Used if ``use_fit`` is False. Defaults to 10
         Returns:
-            return (pl.DataFrame): Polars DataFrame with trimmed I & Q data
+            pl.DataFrame: Polars DataFrame with trimmed I & Q data
         """
         name_enums, prefix_enums = ccat_df.create_enums(
             [],
@@ -335,31 +404,41 @@ class Target(Sweep):
                 )
                 HM_low, HM_mid, HM_high = fwhm_df.to_numpy().T[1:4]
 
-                lower_bounds[i] = np.maximum((HM_mid - (HM_mid - HM_low) * win).astype(int), 0)
+                lower_bounds[i] = np.maximum(
+                    (HM_mid - (HM_mid - HM_low) * win).astype(int), 0
+                )
                 upper_bounds[i] = (HM_mid + (HM_high - HM_mid) * win).astype(int)
 
-            return self.trim(col_name=col_name,
-                            prefix=prefix,
-                            lower_index=lower_bounds,
-                            upper_index=upper_bounds,
-                            name=[prefix_enum.TRIM_RESONANCE.value if invert else prefix_enum.TRIM_TAIL.value for prefix_enum in prefix_enums],
-                            invert=invert,
-                            include=include,
-                            exclude=exclude,
-                            recalc=recalc,
-                            )
-        
-    def res_IQ_trim(self,
-                prefix: str | list[str] = "",
-                window: float | list[float] = 1.5,
-                mean_points: int = 10,
-                mag_prefix: str = "",
-                invert: bool = False,
-                include: int | list[int] | None = None,
-                exclude: int | list[int] | None = None,
-                recalc: bool = False,) -> pl.DataFrame:
+            return self.trim(
+                col_name=col_name,
+                prefix=prefix,
+                lower_index=lower_bounds,
+                upper_index=upper_bounds,
+                name=[
+                    prefix_enum.TRIM_RESONANCE.value
+                    if invert
+                    else prefix_enum.TRIM_TAIL.value
+                    for prefix_enum in prefix_enums
+                ],
+                invert=invert,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+            )
+
+    def res_IQ_trim(
+        self,
+        prefix: str | list[str] = "",
+        window: float | list[float] = 1.5,
+        mean_points: int = 10,
+        mag_prefix: str = "",
+        invert: bool = False,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> pl.DataFrame:
         """
-        Trim target sweep IQ data based on resonator linewidths. 
+        Trim target sweep IQ data based on resonator linewidths.
 
         Args:
             prefix: Prefix of the IQ data to trim.
@@ -369,39 +448,62 @@ class Target(Sweep):
             Q_col (str): Name of column in ``properties`` DataFrame with total quality factors to use if ``use_fit`` is True.
             mean_points (int): Number of points to average to determine max magnitude of resonator profile. Used if ``use_fit`` is False. Defaults to 10
         Returns:
-            return (pl.DataFrame): Polars DataFrame with trimmed I & Q data
+            pl.DataFrame: Polars DataFrame with trimmed I & Q data
         """
 
-        name_dict = self.analysis_cfg['convention']['name']
+        name_dict = self.analysis_cfg["convention"]["name"]
         with return_prefix(self.analysis_cfg) as ret_prefix:
-            I_df, I_pre = self.res_trim(name_dict['in_phase'],
-                    prefix=prefix,
-                    window=window,
-                    mean_points=mean_points,
-                    mag_prefix=mag_prefix,
-                    invert=invert,
-                    include=include,
-                    exclude=exclude,
-                    recalc=recalc)
+            I_df, I_pre = self.res_trim(
+                name_dict["in_phase"],
+                prefix=prefix,
+                window=window,
+                mean_points=mean_points,
+                mag_prefix=mag_prefix,
+                invert=invert,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+            )
 
-            Q_df, Q_pre = self.res_trim(name_dict['quadrature'],
-                    prefix=prefix,
-                    window=window,
-                    mean_points=mean_points,
-                    mag_prefix=mag_prefix,
-                    invert=invert,
-                    include=include,
-                    exclude=exclude,
-                    recalc=recalc)
+            Q_df, Q_pre = self.res_trim(
+                name_dict["quadrature"],
+                prefix=prefix,
+                window=window,
+                mean_points=mean_points,
+                mag_prefix=mag_prefix,
+                invert=invert,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+            )
 
-            IQ_df = pl.concat([I_df, Q_df], how='horizontal')
+            IQ_df = pl.concat([I_df, Q_df], how="horizontal")
             return IQ_df, I_pre if ret_prefix else IQ_df
 
-    def linewidth(self,
-                  prefix: str | list[str] = "",
-                  include: int | list[int] | None = None,
-                  exclude: int | list[int] | None = None,
-                  recalc: bool = False,):
+    def linewidth(
+        self,
+        prefix: str | list[str] = "",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> tuple[pl.DataFrame, str]:
+        """Compute the |KID| half-linewidth from |I| and |Q| sweep data.
+
+        The linewidth column is defined as :math:`Q / (-2 I)` for each |tone|
+        and is stored with the ``linewidth`` name key.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of the |I| and |Q|
+                columns.  Defaults to ``''``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of linewidth columns and the
+            output prefix string.
+        """
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "linewidth"], prefix, [], self.analysis_cfg
         )
@@ -414,22 +516,46 @@ class Target(Sweep):
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        ret_df =  self.get_data(
+        ret_df = self.get_data(
             col_name=[name_enum.LINEWIDTH.value for name_enum in name_enums],
             include=include,
             exclude=exclude,
             strict=True,
         )
 
-        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
-    
-    def coupling_linewidth(self,
-                            prefix: str | list[str] = "",
-                            include: int | list[int] | None = None,
-                            exclude: int | list[int] | None = None,
-                            recalc: bool = False,):
+        return ret_df, prefix if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
+
+    def coupling_linewidth(
+        self,
+        prefix: str | list[str] = "",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> tuple[pl.DataFrame, str]:
+        """Compute the coupling linewidth from the total linewidth and IQ circle diameter.
+
+        The coupling linewidth is defined as ``linewidth / IQ_circle_diameter``
+        for each |tone|.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of the ``linewidth``
+                and ``IQ_circle_diameter`` columns.  Defaults to ``''``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of coupling linewidth columns
+            and the output prefix string.
+        """
         name_enums, prefix_enums = ccat_df.create_enums(
-            ["linewidth", "IQ_circle_diameter", "coupling_linewidth"], prefix, [], self.analysis_cfg
+            ["linewidth", "IQ_circle_diameter", "coupling_linewidth"],
+            prefix,
+            [],
+            self.analysis_cfg,
         )
 
         self.transform(
@@ -447,30 +573,99 @@ class Target(Sweep):
             strict=True,
         )
 
-        return ret_df, prefix if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
-    
-    def linewidth_shift(self,
-                        prefix: str | list[str] = "",
-                        mag_prefix = "",
-                        coupling_linewidth = True,
-                        m: float | list[float] | None = None,
-                        b: float | list[float] | None = None,
-                        res_trim_window = 2,
-                        tail_trim_window = 3,
-                        mean_points=10,
-                        include=None,
-                        exclude=None,
-                        recalc=False, 
-                        return_fit_params = False,
-                        max_workers=1, 
-                        ex=None):
-        if isinstance(prefix, str): prefix = [prefix]
+        return ret_df, prefix if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
+
+    def linewidth_shift(
+        self,
+        prefix: str | list[str] = "",
+        mag_prefix: str | list[str] = "",
+        coupling_linewidth: bool | list[bool] = True,
+        m: float | list[float] | None = None,
+        b: float | list[float] | None = None,
+        res_trim_window: float | list[float] = 2,
+        tail_trim_window: float | list[float] = 3,
+        mean_points: int | list[int] = 10,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        return_fit_params: bool = False,
+        max_workers: int = 1,
+        ex: concurrent.futures.Executor | None = None,
+    ) -> tuple[pl.DataFrame, str]:
+        """Compute the linewidth shift relative to a linear background.
+
+        A linear baseline is fitted to off-resonance linewidth data (using
+        ``res_trim`` with ``invert=False`` then ``invert=True``) and
+        subtracted so that the residual reflects the physics of the
+        resonator.  When ``m`` and ``b`` are provided the linear fit is
+        skipped and the supplied slope and intercept are used directly.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of the |I| and |Q|
+                columns used to derive linewidths.  Defaults to ``''``.
+            mag_prefix (str | list[str], optional): Prefix of the magnitude
+                column used for trimming.  Defaults to ``''``.
+            coupling_linewidth (bool | list[bool], optional): Use coupling
+                linewidth instead of total linewidth.  Defaults to *True*.
+            m (float | list[float] | None, optional): Pre-computed linear
+                slope(s).  *None* triggers automatic fitting.  Defaults to
+                *None*.
+            b (float | list[float] | None, optional): Pre-computed linear
+                intercept(s).  *None* triggers automatic fitting.  Defaults
+                to *None*.
+            res_trim_window (float | list[float], optional): Number of
+                linewidths to keep around the resonance when trimming.
+                Defaults to 2.
+            tail_trim_window (float | list[float], optional): Number of
+                linewidths to keep in the off-resonance tail region.
+                Defaults to 3.
+            mean_points (int | list[int], optional): Points averaged to
+                estimate the half-maximum magnitude.  Defaults to 10.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+            return_fit_params (bool, optional): Also return the fitted slope
+                and intercept arrays.  Defaults to *False*.
+            max_workers (int, optional): Number of parallel workers for the
+                linear fit.  Defaults to 1.
+            ex (concurrent.futures.Executor | None, optional): Pre-existing
+                executor to reuse.  Defaults to *None*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of linewidth-shift columns and
+            the output prefix string.  When ``return_fit_params`` is *True*
+            the tuple is extended with the slope and intercept arrays.
+        """
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
-            ["frequency", "linewidth", "coupling_linewidth", "linear_fit_slope", "linear_fit_intercept"], 
-            prefix, 
-            ["translate", "trim_tail", "trim_resonance", "trim", "linear", "linear_fit"], 
+            [
+                "frequency",
+                "linewidth",
+                "coupling_linewidth",
+                "linear_fit_slope",
+                "linear_fit_intercept",
+            ],
+            prefix,
+            [
+                "translate",
+                "trim_tail",
+                "trim_resonance",
+                "trim",
+                "linear",
+                "linear_fit",
+            ],
             self.analysis_cfg,
-            no_prefix = ["frequency", "linewidth", "coupling_linewidth", "linear_fit_slope", "linear_fit_intercept"]
+            no_prefix=[
+                "frequency",
+                "linewidth",
+                "coupling_linewidth",
+                "linear_fit_slope",
+                "linear_fit_intercept",
+            ],
         )
 
         num_prefix = len(name_enums)
@@ -481,48 +676,126 @@ class Target(Sweep):
         res_trim_window = ccat_df.check_args(res_trim_window, num_prefix, float)
         tail_trim_window = ccat_df.check_args(tail_trim_window, num_prefix, float)
         mean_points = ccat_df.check_args(mean_points, num_prefix, int)
-        
+
         with return_prefix(self.analysis_cfg) as ret_prefix:
             f_col = name_enums[0].FREQUENCY.value
-            ms, bs = [[]]*num_prefix, [[]]*num_prefix
-            shift_dfs, shift_pres = [[]]*num_prefix, [[]]*num_prefix
-            for i, (pre, mag_pre, mm, bb, clw, res_win, tail_win, mean_point) in enumerate(zip(prefix, mag_prefix, m, b, coupling_linewidth, res_trim_window, tail_trim_window, mean_points)):
-                lw_col = name_enums[0].COUPLING_LINEWIDTH.value if clw else name_enums[0].LINEWIDTH.value 
+            ms, bs = [[]] * num_prefix, [[]] * num_prefix
+            shift_dfs, shift_pres = [[]] * num_prefix, [[]] * num_prefix
+            for i, (
+                pre,
+                mag_pre,
+                mm,
+                bb,
+                clw,
+                res_win,
+                tail_win,
+                mean_point,
+            ) in enumerate(
+                zip(
+                    prefix,
+                    mag_prefix,
+                    m,
+                    b,
+                    coupling_linewidth,
+                    res_trim_window,
+                    tail_trim_window,
+                    mean_points,
+                )
+            ):
+                lw_col = (
+                    name_enums[0].COUPLING_LINEWIDTH.value
+                    if clw
+                    else name_enums[0].LINEWIDTH.value
+                )
                 if mm is None or bb is None:
-                    _, tail_prefix = self.res_trim(col_name=lw_col, prefix=pre, mag_prefix=mag_pre, 
-                                window=tail_win, mean_points=mean_point, 
-                                invert = False,
-                                include=include, exclude = exclude, recalc=recalc)
+                    _, tail_prefix = self.res_trim(
+                        col_name=lw_col,
+                        prefix=pre,
+                        mag_prefix=mag_pre,
+                        window=tail_win,
+                        mean_points=mean_point,
+                        invert=False,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                    )
 
-                    _, res_prefix = self.res_trim(col_name=lw_col, prefix=tail_prefix, mag_prefix=mag_pre, 
-                                window=res_win, mean_points=mean_point, 
-                                invert=True, 
-                                include=include, exclude=exclude, recalc=recalc)
+                    _, res_prefix = self.res_trim(
+                        col_name=lw_col,
+                        prefix=tail_prefix,
+                        mag_prefix=mag_pre,
+                        window=res_win,
+                        mean_points=mean_point,
+                        invert=True,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                    )
 
-                    _, fit_prefix = self.linear_fit(x_col_name=f_col, 
-                                    y_col_name=lw_col,
-                                    y_prefix=res_prefix,
-                                    include=include, exclude=exclude, recalc=recalc,
-                                    max_workers=max_workers, ex=ex)
+                    _, fit_prefix = self.linear_fit(
+                        x_col_name=f_col,
+                        y_col_name=lw_col,
+                        y_prefix=res_prefix,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                        max_workers=max_workers,
+                        ex=ex,
+                    )
 
-                    mm, bb = self.get_properties(col_name = ["_".join([fit_prefix, name_enums[0].LINEAR_FIT_SLOPE.value]),
-                                                             "_".join([fit_prefix, name_enums[0].LINEAR_FIT_INTERCEPT.value])],
-                                                include=include, exclude=exclude, strict=True).to_numpy().T[1:]
-                
+                    mm, bb = (
+                        self.get_properties(
+                            col_name=[
+                                "_".join(
+                                    [fit_prefix, name_enums[0].LINEAR_FIT_SLOPE.value]
+                                ),
+                                "_".join(
+                                    [
+                                        fit_prefix,
+                                        name_enums[0].LINEAR_FIT_INTERCEPT.value,
+                                    ]
+                                ),
+                            ],
+                            include=include,
+                            exclude=exclude,
+                            strict=True,
+                        )
+                        .to_numpy()
+                        .T[1:]
+                    )
+
                 ms[i], bs[i] = mm, bb
-                y_0 = [-1*(mmm*f + bbb) for f, mmm, bbb in zip(self.get_data(f_col, include=include, exclude=exclude, strict=True).to_numpy().T, mm, bb)]
-                shift_dfs[i], shift_pres[i] = self.shift(col_name=lw_col, prefix=pre, 
-                                                         shift=y_0, name=prefix_enums[0].LINEAR.value, 
-                                                         include=include, exclude=exclude, recalc=recalc)
+                y_0 = [
+                    -1 * (mmm * f + bbb)
+                    for f, mmm, bbb in zip(
+                        self.get_data(
+                            f_col, include=include, exclude=exclude, strict=True
+                        )
+                        .to_numpy()
+                        .T,
+                        mm,
+                        bb,
+                    )
+                ]
+                shift_dfs[i], shift_pres[i] = self.shift(
+                    col_name=lw_col,
+                    prefix=pre,
+                    shift=y_0,
+                    name=prefix_enums[0].LINEAR.value,
+                    include=include,
+                    exclude=exclude,
+                    recalc=recalc,
+                )
 
             ret_df, ret_pre = shift_dfs, shift_pres
-            if len(ret_pre) == 1: ret_pre = ret_pre[0]
+            if len(ret_pre) == 1:
+                ret_pre = ret_pre[0]
 
             if return_fit_params:
-                return ret_df, ms, bs, ret_pre if ret_prefix else ret_df, ms, bs    
+                return ret_df, ms, bs, ret_pre if ret_prefix else ret_df, ms, bs
             else:
-                return ret_df, ret_pre if ret_prefix else ret_df    
-    
+                return ret_df, ret_pre if ret_prefix else ret_df
+
     # ======= #
     # Fitting #
     # ======= #
@@ -538,18 +811,34 @@ class Target(Sweep):
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex=None,
+        ex: concurrent.futures.Executor | None = None,
     ) -> pl.DataFrame:
-        """
-        Fit target sweep using complex forward transmission data (*z = I + iQ*)
+        """Fit target sweep using complex forward transmission data (*z = I + iQ*).
 
         Args:
-            nonlinear (bool, optional): Whether to perform a nonlinear fit. Defaults to *False*
-            asymm (bool, optional): Whether to perform a asymmetric fit. Defaults to *False*
-            fix_cable (bool, optional): Whether to vary cable parameters for fit. Defaults to *False*: parameters are varied
-            fix_thetaQ (bool, optional): Whether to vary impedance mismatch angle and coupling quality factor for fit. Defaults to *False*: parameters are varied
+            prefix (str | list[str], optional): Prefix of the |I| and |Q|
+                columns to fit.  Defaults to ``''``.
+            nonlinear (bool | list[bool], optional): Perform a nonlinear
+                resonator fit.  Defaults to *False*.
+            asymm (bool | list[bool], optional): Perform an asymmetric
+                resonator fit.  Defaults to *False*.
+            fix_cable (bool | list[bool], optional): Hold cable parameters
+                fixed during the fit.  Defaults to *False* (parameters are
+                varied).
+            fix_thetaQ (bool | list[bool], optional): Hold the impedance
+                mismatch angle and coupling quality factor fixed.  Defaults
+                to *False* (parameters are varied).
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+            max_workers (int, optional): Number of parallel fit workers.
+                Defaults to 1.
+            ex (concurrent.futures.Executor | None, optional): Pre-existing
+                executor to reuse.  Defaults to *None*.
         Returns:
-            return (pl.DataFrame): Polars DataFrame with fit I and Q data
+            pl.DataFrame: *Polars* DataFrame with fit |I| and |Q| columns.
         """
 
         if self.fit_dir not in sys.path:
@@ -669,9 +958,7 @@ class Target(Sweep):
                 .collect()
             )
 
-        self.data = ccat_df.unnest(
-            self, [f"struct_{name}" for name in col_names]
-        )
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
         return self.get_data(
             col_name=col_names,
             include=include,
@@ -685,21 +972,54 @@ class Target(Sweep):
         | list[str] = "mismatch_rotate_origin_shift_origin_rotate_unwind_rotate",
         circle_fit_prefix: str = "circle_fit_unwind_rotate",
         nonlinear: bool = False,
-        normalized = False,
+        normalized: bool | list[bool] = False,
         method: str = "least_squares",
         params: lmfit.Parameters = None,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex=None,
-    ) -> pl.DataFrame:
-        """
-        Fit target sweep using phase data (*arctan(Q/I)*)
+        ex: concurrent.futures.Executor | None = None,
+    ) -> tuple[pl.DataFrame, str]:
+        """Fit the target sweep using the resonator phase response (*arctan(Q/I)*).
 
+        Requires a prior IQ circle fit to supply the circle radius.  The fit
+        extracts resonant frequency, total quality factor, and optionally
+        kinetic-inductance nonlinearity via the ``beta`` parameter.  Derived
+        quantities (coupling and internal quality factors, nonlinearity
+        amplitude) are computed and stored in ``properties``.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of the processed |I|
+                and |Q| columns to fit.  Defaults to
+                ``'mismatch_rotate_origin_shift_origin_rotate_unwind_rotate'``.
+            circle_fit_prefix (str, optional): Prefix under which the IQ
+                circle fit radius is stored in ``properties``.  Defaults to
+                ``'circle_fit_unwind_rotate'``.
+            nonlinear (bool, optional): Include a kinetic-inductance
+                nonlinearity term in the model.  Defaults to *False*.
+            normalized (bool | list[bool], optional): Use normalised
+                coordinates (ppm scale factor).  Defaults to *False*.
+            method (str, optional): *lmfit* minimisation method.  Defaults
+                to ``'least_squares'``.
+            params (lmfit.Parameters, optional): Initial parameter set;
+                *None* uses defaults.  Defaults to *None*.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+            max_workers (int, optional): Number of parallel fit workers.
+                Defaults to 1.
+            ex (concurrent.futures.Executor | None, optional): Pre-existing
+                executor to reuse.  Defaults to *None*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of fitted phase columns and
+            the output prefix string.
         """
 
-        if isinstance(prefix, str): prefix = [prefix]
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             [
                 "frequency",
@@ -711,13 +1031,13 @@ class Target(Sweep):
                 "coupling_quality_factor",
                 "total_quality_factor",
                 "phase_fit_beta",
-                #"phase_fit_gamma",
-                #"phase_fit_delta",
+                # "phase_fit_gamma",
+                # "phase_fit_delta",
                 "phase_fit_theta",
                 "fit_result",
                 "resonant_frequency",
                 "ki_nonlinearity_parameter",
-                #"qp_nonlinearity_parameter",
+                # "qp_nonlinearity_parameter",
             ],
             prefix,
             ["phase_fit"],
@@ -815,7 +1135,7 @@ class Target(Sweep):
                         ).alias(
                             f"{prefix_enum.PHASE_FIT.value}_{name_enum.KI_NONLINEARITY_PARAMETER.value}"
                         ),
-                        #(
+                        # (
                         #    1e6
                         #    * (
                         #        pl.col(
@@ -837,9 +1157,9 @@ class Target(Sweep):
                         #            f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
                         #        )
                         #    )
-                        #).alias(
+                        # ).alias(
                         #    f"{prefix_enum.PHASE_FIT.value}_{name_enum.QP_NONLINEARITY_PARAMETER.value}"
-                        #),
+                        # ),
                         (
                             pl.col(
                                 f"{prefix_enum.PHASE_FIT.value}_{name_enum.TOTAL_QUALITY_FACTOR.value}"
@@ -883,38 +1203,70 @@ class Target(Sweep):
                 .collect()
             )
 
-        self.data = ccat_df.unnest(
-            self, [f"struct_{name}" for name in col_names]
-        )
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
         ret_df = self.get_data(
             col_name=col_names,
             include=include,
             exclude=exclude,
         )
 
-        ret_pre = [f"{prefix_enum.PHASE_FIT.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            f"{prefix_enum.PHASE_FIT.value}{'_' if pre else ''}{pre}"
+            for pre, prefix_enum in zip(prefix, prefix_enums)
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
     def IQ_circle_fit(
         self,
         prefix: str | list[str] = "unwind_rotate",
-        bounds=None,
+        bounds: tuple | None = None,
         loss: str = "soft_l1",
         f_scale: float = 1,
         method: str = "trf",
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
-        max_workers=1,
-        ex=None,
-    ) -> pl.DataFrame:
-        """
-        Fit the target sweep circle in the IQ plane
+        max_workers: int = 1,
+        ex: concurrent.futures.Executor | None = None,
+    ) -> tuple[pl.DataFrame, str]:
+        """Fit the |KID| response circle in the IQ plane.
 
+        Uses ``scipy.optimize.least_squares`` to fit a circle to the |I|
+        and |Q| sweep data.  The fitted circle centre and radius are stored
+        in ``properties``; the fitted circle points are added to ``data``.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of the |I| and |Q|
+                columns to fit.  Defaults to ``'unwind_rotate'``.
+            bounds (tuple | None, optional): Parameter bounds passed to
+                ``scipy.optimize.least_squares``.  Defaults to *None*.
+            loss (str, optional): Loss function passed to
+                ``scipy.optimize.least_squares``.  Defaults to
+                ``'soft_l1'``.
+            f_scale (float, optional): Soft-loss scale parameter.  Defaults
+                to 1.
+            method (str, optional): Optimisation method (``'trf'``,
+                ``'dogbox'``, or ``'lm'``).  Defaults to ``'trf'``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+            max_workers (int, optional): Number of parallel fit workers.
+                Defaults to 1.
+            ex (concurrent.futures.Executor | None, optional): Pre-existing
+                executor to reuse.  Defaults to *None*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of fitted IQ circle columns
+            and the output prefix string.
         """
-        if isinstance(prefix, str): prefix = [prefix]
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "IQ_circle_radius", "IQ_circle_center"],
             prefix,
@@ -957,38 +1309,70 @@ class Target(Sweep):
                 f"{prefix_enum.IQ_CIRCLE_FIT.value}_{name_enum.QUADRATURE.value}",
             ]
 
-        self.data = ccat_df.unnest(
-            self, [f"struct_{name}" for name in col_names]
-        )
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
         ret_df = self.get_data(
             col_name=col_names,
             include=include,
             exclude=exclude,
         )
 
-        ret_pre = [f"{prefix_enum.IQ_CIRCLE_FIT.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            f"{prefix_enum.IQ_CIRCLE_FIT.value}{'_' if pre else ''}{pre}"
+            for pre, prefix_enum in zip(prefix, prefix_enums)
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df        
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
     def linewidth_fit(
         self,
         lw_prefix: str = "",
         lw_shift_prefix: str = "",
         method: str = "least_squares",
-        coupling_linewidth = True,
+        coupling_linewidth: bool | list[bool] = True,
         params: lmfit.Parameters = None,
         include: int | list[int] | None = None,
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex=None,
-    ) -> pl.DataFrame:
-        """
-        Fit target sweep using phase data (*arctan(Q/I)*)
+        ex: concurrent.futures.Executor | None = None,
+    ) -> tuple[pl.DataFrame, str]:
+        """Fit the |KID| linewidth versus readout power using a two-component model.
 
+        Models the linewidth as a sum of kinetic-inductance and quasiparticle
+        contributions plus a constant offset.  Fit parameters are stored in
+        ``properties``; the best-fit curve is added to ``data``.
+
+        Args:
+            lw_prefix (str, optional): Prefix of the raw linewidth column.
+                Defaults to ``''``.
+            lw_shift_prefix (str, optional): Prefix of the background-
+                subtracted linewidth column.  Defaults to ``''``.
+            method (str, optional): *lmfit* minimisation method.  Defaults
+                to ``'least_squares'``.
+            coupling_linewidth (bool | list[bool], optional): Fit the
+                coupling linewidth instead of the total linewidth.  Defaults
+                to *True*.
+            params (lmfit.Parameters, optional): Initial parameter set;
+                *None* uses defaults.  Defaults to *None*.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+            max_workers (int, optional): Number of parallel fit workers.
+                Defaults to 1.
+            ex (concurrent.futures.Executor | None, optional): Pre-existing
+                executor to reuse.  Defaults to *None*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of fitted linewidth columns
+            and the output prefix string.
         """
-        if isinstance(lw_shift_prefix, str): lw_shift_prefix = [lw_shift_prefix]
+        if isinstance(lw_shift_prefix, str):
+            lw_shift_prefix = [lw_shift_prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
             [
                 "linewidth",
@@ -999,7 +1383,7 @@ class Target(Sweep):
                 "linewidth_fit_offset",
                 "linewidth_fit_y_ki",
                 "linewidth_fit_y_qp",
-                "linewidth_fit_exponent"
+                "linewidth_fit_exponent",
             ],
             lw_shift_prefix,
             ["linear", "translate", "linewidth_fit", "coupling_linewidth_fit"],
@@ -1016,15 +1400,17 @@ class Target(Sweep):
         args = [
             [
                 self,
-                lw_pre, 
+                lw_pre,
                 lw_shift_pre,
-                clw, 
+                clw,
                 meth,
                 param,
                 ccat_mp.check_max_workers(max_workers),
                 ex,
             ]
-            for lw_pre, lw_shift_pre, clw, param, meth in zip(lw_prefix, lw_shift_prefix, coupling_linewidth, params, method)
+            for lw_pre, lw_shift_pre, clw, param, meth in zip(
+                lw_prefix, lw_shift_prefix, coupling_linewidth, params, method
+            )
         ]
         self.transform(
             [Target._calc_linewidth_fit] * num_prefix,
@@ -1035,58 +1421,135 @@ class Target(Sweep):
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        
+
         col_names = []
-        for clw, prefix_enum, name_enum, lw_shift_pre in zip(coupling_linewidth, prefix_enums, name_enums, lw_shift_prefix):
-            lw_fit_pre = prefix_enum.COUPLING_LINEWIDTH_FIT.value if clw else prefix_enum.LINEWIDTH_FIT.value
+        for clw, prefix_enum, name_enum, lw_shift_pre in zip(
+            coupling_linewidth, prefix_enums, name_enums, lw_shift_prefix
+        ):
+            lw_fit_pre = (
+                prefix_enum.COUPLING_LINEWIDTH_FIT.value
+                if clw
+                else prefix_enum.LINEWIDTH_FIT.value
+            )
             col_names += [
-                "_".join([lw_fit_pre, lw_shift_pre, name_enum.COUPLING_LINEWIDTH.value if clw else name_enum.LINEWIDTH.value])
+                "_".join(
+                    [
+                        lw_fit_pre,
+                        lw_shift_pre,
+                        name_enum.COUPLING_LINEWIDTH.value
+                        if clw
+                        else name_enum.LINEWIDTH.value,
+                    ]
+                )
             ]
 
-            a_col, b_col, y_a_col, y_b_col, y_off_col, y_exp_col = ("_".join([lw_fit_pre, name_enum.KI_NONLINEARITY_PARAMETER.value]), 
-                                                                    "_".join([lw_fit_pre, name_enum.QP_NONLINEARITY_PARAMETER.value]),
-                                                                    "_".join([lw_fit_pre, name_enum.LINEWIDTH_FIT_Y_KI.value]),
-                                                                    "_".join([lw_fit_pre, name_enum.LINEWIDTH_FIT_Y_QP.value]),
-                                                                    "_".join([lw_fit_pre, name_enum.LINEWIDTH_FIT_OFFSET.value]),
-                                                                    "_".join([lw_fit_pre, name_enum.LINEWIDTH_FIT_EXPONENT.value]))
-
-            self._properties_df = (
-                self.properties
-                .with_columns((pl.col(y_off_col) + pl.col(a_col)/(1 + pl.col(y_a_col)**2) - pl.col(b_col)/(1 + (-1*pl.col(y_b_col))**pl.col(y_exp_col))).alias('a_eff'))
+            a_col, b_col, y_a_col, y_b_col, y_off_col, y_exp_col = (
+                "_".join([lw_fit_pre, name_enum.KI_NONLINEARITY_PARAMETER.value]),
+                "_".join([lw_fit_pre, name_enum.QP_NONLINEARITY_PARAMETER.value]),
+                "_".join([lw_fit_pre, name_enum.LINEWIDTH_FIT_Y_KI.value]),
+                "_".join([lw_fit_pre, name_enum.LINEWIDTH_FIT_Y_QP.value]),
+                "_".join([lw_fit_pre, name_enum.LINEWIDTH_FIT_OFFSET.value]),
+                "_".join([lw_fit_pre, name_enum.LINEWIDTH_FIT_EXPONENT.value]),
             )
 
-        self.data = ccat_df.unnest(
-            self, [f"struct_{name}" for name in col_names]
-        )
-        ret_df =  self.get_data(
+            self._properties_df = self.properties.with_columns(
+                (
+                    pl.col(y_off_col)
+                    + pl.col(a_col) / (1 + pl.col(y_a_col) ** 2)
+                    - pl.col(b_col) / (1 + (-1 * pl.col(y_b_col)) ** pl.col(y_exp_col))
+                ).alias("a_eff")
+            )
+
+        self.data = ccat_df.unnest(self, [f"struct_{name}" for name in col_names])
+        ret_df = self.get_data(
             col_name=col_names,
             include=include,
             exclude=exclude,
         )
 
-        ret_pre = [f"{prefix_enum.COUPLING_LINEWIDTH_FIT.value if clw else prefix_enum.LINEWIDTH_FIT.value}{'_' if pre else ''}{pre}" for clw, pre, prefix_enum in zip(coupling_linewidth, lw_shift_prefix, prefix_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            f"{prefix_enum.COUPLING_LINEWIDTH_FIT.value if clw else prefix_enum.LINEWIDTH_FIT.value}{'_' if pre else ''}{pre}"
+            for clw, pre, prefix_enum in zip(
+                coupling_linewidth, lw_shift_prefix, prefix_enums
+            )
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
- 
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
+
     # ========== #
     # Properties #
     # ========== #
 
-    def cable_delay(self, prefix="", window = 5, mean_points = 10, mag_prefix = "", include=None, exclude=None, recalc=False, stitch_workers=1, linear_fit_workers=1, ex=None):
-        '''
-        '''
+    def cable_delay(
+        self,
+        prefix: str = "",
+        window: float = 5,
+        mean_points: int = 10,
+        mag_prefix: str = "",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        stitch_workers: int = 1,
+        linear_fit_workers: int = 1,
+        ex: concurrent.futures.Executor | None = None,
+    ) -> tuple[pl.DataFrame, str]:
+        """Estimate the cable electrical delay from the off-resonance phase slope.
+
+        Stitches the phase response, trims the on-resonance region, fits a
+        line to the off-resonance phase versus frequency, and converts the
+        slope to a cable delay in nanoseconds.  The result is stored in the
+        ``properties`` DataFrame under the ``targ_cable_delay`` column.
+
+        Args:
+            prefix (str, optional): Prefix of the |I| and |Q| columns used
+                to compute the phase.  Defaults to ``''``.
+            window (float, optional): Number of linewidths to exclude around
+                the resonance when fitting.  Defaults to 5.
+            mean_points (int, optional): Points averaged to estimate the
+                half-maximum magnitude for trimming.  Defaults to 10.
+            mag_prefix (str, optional): Prefix of the magnitude column used
+                for trimming.  Defaults to ``''``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+            stitch_workers (int, optional): Parallel workers for phase
+                stitching.  Defaults to 1.
+            linear_fit_workers (int, optional): Parallel workers for the
+                linear fit.  Defaults to 1.
+            ex (concurrent.futures.Executor | None, optional): Pre-existing
+                executor to reuse.  Defaults to *None*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame with cable delay values (ns)
+            and the output prefix string.
+        """
 
         name_enums, prefix_enums = ccat_df.create_enums(
-            ["frequency", "phase", "linear_fit_slope", "linear_fit_intercept", "cable_delay"],
+            [
+                "frequency",
+                "phase",
+                "linear_fit_slope",
+                "linear_fit_intercept",
+                "cable_delay",
+            ],
             prefix,
             ["stitch", "trim", "trim_resonance", "linear_fit"],
             self.analysis_cfg,
-            no_prefix=["frequency", "phase", "linear_fit_slope", "linear_fit_intercept"],
+            no_prefix=[
+                "frequency",
+                "phase",
+                "linear_fit_slope",
+                "linear_fit_intercept",
+            ],
         )
-        
+
         name_enum, prefix_enum = name_enums[0], prefix_enums[0]
-        cable_col = "_".join(['targ', name_enum.CABLE_DELAY.value])
+        cable_col = "_".join(["targ", name_enum.CABLE_DELAY.value])
 
         include_subset = ccat_df.check_properties(
             self,
@@ -1097,49 +1560,75 @@ class Target(Sweep):
         )
 
         with return_prefix(self.analysis_cfg) as ret_prefix:
-            if not len(include_subset) == 0: 
-                self.phase(prefix=prefix, include=include, exclude=exclude, recalc=recalc)
-                with ccat_mp.optional_executor(max_workers=max(linear_fit_workers, stitch_workers), ex=ex) as ex:
+            if not len(include_subset) == 0:
+                self.phase(
+                    prefix=prefix, include=include, exclude=exclude, recalc=recalc
+                )
+                with ccat_mp.optional_executor(
+                    max_workers=max(linear_fit_workers, stitch_workers), ex=ex
+                ) as ex:
                     # Stitch discontinuities in phase
-                    _, stitch_prefix = self.stitch_phase(prefix=prefix, 
-                                    include=include, 
-                                    exclude=exclude, 
-                                    recalc=recalc, 
-                                    max_workers = stitch_workers, 
-                                    ex = ex)
+                    _, stitch_prefix = self.stitch_phase(
+                        prefix=prefix,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                        max_workers=stitch_workers,
+                        ex=ex,
+                    )
 
                     # Trim on-resonance data
-                    _, trim_prefix = self.res_trim(col_name=name_enum.PHASE.value,
-                            prefix=stitch_prefix,
-                            window=window,
-                            mag_prefix=mag_prefix,
-                            invert=True,
-                            include=include,
-                            exclude=exclude,
-                            recalc=recalc,
-                            )
+                    _, trim_prefix = self.res_trim(
+                        col_name=name_enum.PHASE.value,
+                        prefix=stitch_prefix,
+                        window=window,
+                        mag_prefix=mag_prefix,
+                        invert=True,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                    )
 
                     # Fit line to off-resonance data
-                    _, fit_prefix = self.linear_fit(x_col_name=name_enum.FREQUENCY.value,
-                                    y_col_name=name_enum.PHASE.value,
-                                    x_prefix="",
-                                    y_prefix=trim_prefix,
-                                    include=include,
-                                    exclude=exclude,
-                                    recalc=recalc,
-                                    max_workers=linear_fit_workers,
-                                    ex=ex)
+                    _, fit_prefix = self.linear_fit(
+                        x_col_name=name_enum.FREQUENCY.value,
+                        y_col_name=name_enum.PHASE.value,
+                        x_prefix="",
+                        y_prefix=trim_prefix,
+                        include=include,
+                        exclude=exclude,
+                        recalc=recalc,
+                        max_workers=linear_fit_workers,
+                        ex=ex,
+                    )
 
-                slope_col = "_".join([fit_prefix, name_enum.PHASE.value, name_enum.LINEAR_FIT_SLOPE.value])
-                slope_df = self.get_properties(slope_col, include=include, exclude=exclude, strict=True)            
-                shared_cols = [cable_col] if cable_col in self._properties_df.schema else []
+                slope_col = "_".join(
+                    [
+                        fit_prefix,
+                        name_enum.PHASE.value,
+                        name_enum.LINEAR_FIT_SLOPE.value,
+                    ]
+                )
+                slope_df = self.get_properties(
+                    slope_col, include=include, exclude=exclude, strict=True
+                )
+                shared_cols = (
+                    [cable_col] if cable_col in self._properties_df.schema else []
+                )
                 self._properties_df = ccat_df.coalesce_join(
                     self._properties_df,
-                    slope_df.select(["det", (pl.col(slope_col) * pl.lit(1e9/(2*np.pi))).alias(cable_col)]),
+                    slope_df.select(
+                        [
+                            "det",
+                            (pl.col(slope_col) * pl.lit(1e9 / (2 * np.pi))).alias(
+                                cable_col
+                            ),
+                        ]
+                    ),
                     "det",
                     shared_cols,
                 )
-            
+
             ret_df = self.get_properties(
                 cable_col,
                 include=include,
@@ -1147,43 +1636,112 @@ class Target(Sweep):
                 strict=True,
             )
 
-            return ret_df, slope_col[:-1] if ret_prefix else ret_df    
+            return ret_df, slope_col[:-1] if ret_prefix else ret_df
 
-    def cable_gain(self, prefix= "", window = 5, mean_points = 10, mag_prefix="", err_fill = 1, include=None, exclude=None, recalc=False, linear_fit_workers=1, ex=None):
-        '''
-        '''
+    def cable_gain(
+        self,
+        prefix: str = "",
+        window: float = 5,
+        mean_points: int = 10,
+        mag_prefix: str = "",
+        err_fill: float = 1,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+        linear_fit_workers: int = 1,
+        ex: concurrent.futures.Executor | None = None,
+    ) -> tuple[pl.DataFrame, str]:
+        """Estimate the cable gain from the off-resonance magnitude slope.
+
+        Computes the magnitude, trims the on-resonance region, and fits a
+        line to the off-resonance magnitude versus frequency.  The slope and
+        intercept characterise the cable gain across the band.
+
+        Args:
+            prefix (str, optional): Prefix of the |I| and |Q| columns used
+                to compute the magnitude.  Defaults to ``''``.
+            window (float, optional): Number of linewidths to exclude around
+                the resonance when fitting.  Defaults to 5.
+            mean_points (int, optional): Points averaged to estimate the
+                half-maximum magnitude for trimming.  Defaults to 10.
+            mag_prefix (str, optional): Prefix of the magnitude column used
+                for trimming.  Defaults to ``''``.
+            err_fill (float, optional): Fill value for missing magnitude
+                uncertainties.  Defaults to 1.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+            linear_fit_workers (int, optional): Parallel workers for the
+                linear fit.  Defaults to 1.
+            ex (concurrent.futures.Executor | None, optional): Pre-existing
+                executor to reuse.  Defaults to *None*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of linear fit parameters and
+            the output prefix string.
+        """
         name_dict, prefix_dict = (
             self.analysis_cfg["convention"]["name"],
             self.analysis_cfg["convention"]["prefix"],
         )
-        
+
         with return_prefix(self.analysis_cfg) as ret_prefix:
             self.mag(prefix=prefix, include=include, exclude=exclude, recalc=recalc)
-            _, trim_prefix = self.res_trim(col_name=name_dict['magnitude'],
-                        prefix=prefix,
-                        mag_prefix=mag_prefix,
-                        window=window,
-                        mean_points=mean_points,
-                        invert=True,
-                        include=include,
-                        exclude=exclude,
-                        recalc=recalc,
-                        )
+            _, trim_prefix = self.res_trim(
+                col_name=name_dict["magnitude"],
+                prefix=prefix,
+                mag_prefix=mag_prefix,
+                window=window,
+                mean_points=mean_points,
+                invert=True,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+            )
             # Fit line to off-resonance data
-            return self.linear_fit(x_col_name=name_dict['frequency'],
-                                   y_col_name=name_dict['magnitude'],
-                                   x_prefix="",
-                                   err_fill = err_fill,
-                                   y_prefix=trim_prefix,
-                                   include=include,
-                                   exclude=exclude,
-                                   recalc=recalc,
-                                   max_workers=linear_fit_workers,
-                                   ex=ex)
+            return self.linear_fit(
+                x_col_name=name_dict["frequency"],
+                y_col_name=name_dict["magnitude"],
+                x_prefix="",
+                err_fill=err_fill,
+                y_prefix=trim_prefix,
+                include=include,
+                exclude=exclude,
+                recalc=recalc,
+                max_workers=linear_fit_workers,
+                ex=ex,
+            )
 
-    def mismatch_angle(self, prefix="", mean_points=10, include=None, exclude=None, recalc=False):
-        '''
-        '''
+    def mismatch_angle(
+        self,
+        prefix: str = "",
+        mean_points: int = 10,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> tuple[pl.DataFrame, str]:
+        """Estimate the impedance-mismatch rotation angle from the IQ endpoints.
+
+        Averages the first and last ``mean_points`` samples of the |I| and
+        |Q| sweep to estimate the cable direction, then computes the angle
+        required to rotate the loop so it lies symmetrically about the real
+        axis.  The result is stored in ``properties``.
+
+        Args:
+            prefix (str, optional): Prefix of the |I| and |Q| columns.
+                Defaults to ``''``.
+            mean_points (int, optional): Number of endpoint samples averaged
+                to estimate the mismatch angle.  Defaults to 10.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of mismatch angle values and
+            the output prefix string.
+        """
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "phase"],
             prefix,
@@ -1248,17 +1806,45 @@ class Target(Sweep):
                 .collect()
             )
             ccat_df.add_data_to_properties(self, mismatch_df, mismatch_col_name)
-        
-        ret_df =  self.get_properties(
+
+        ret_df = self.get_properties(
             mismatch_col_name, include=include, exclude=exclude, strict=True
         )
 
         ret_pre = f"{prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value}{'_' if prefix else ''}{prefix}"
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
-    def mismatch_dist(self, prefix="", mean_points=10, include=None, exclude=None, recalc=False):
-        '''
-        '''
+    def mismatch_dist(
+        self,
+        prefix: str = "",
+        mean_points: int = 10,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> tuple[pl.DataFrame, str]:
+        """Estimate the impedance-mismatch distance from the IQ endpoints.
+
+        Averages the magnitude of the first and last ``mean_points`` samples
+        of the IQ loop to estimate the off-resonance transmission level,
+        which characterises the geometric distance from the origin to the
+        loop.  The result is stored in ``properties``.
+
+        Args:
+            prefix (str, optional): Prefix of the |I| and |Q| columns.
+                Defaults to ``''``.
+            mean_points (int, optional): Number of endpoint samples averaged
+                to estimate the mismatch distance.  Defaults to 10.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of mismatch distance values
+            and the output prefix string.
+        """
         name_enums, prefix_enums = ccat_df.create_enums(
             ["in_phase", "quadrature", "magnitude"],
             prefix,
@@ -1302,12 +1888,13 @@ class Target(Sweep):
                     [
                         (
                             (
-                                (pl.col(f"first_{Q_col}")**2
-                                + pl.col(f"first_{I_col}")**2).sqrt()
-                                
+                                (
+                                    pl.col(f"first_{Q_col}") ** 2
+                                    + pl.col(f"first_{I_col}") ** 2
+                                ).sqrt()
                                 + (
-                                    pl.col(f"last_{Q_col}")**2
-                                    +pl.col(f"last_{I_col}")**2
+                                    pl.col(f"last_{Q_col}") ** 2
+                                    + pl.col(f"last_{I_col}") ** 2
                                 ).sqrt()
                             )
                             / 2
@@ -1318,16 +1905,49 @@ class Target(Sweep):
                 .collect()
             )
             ccat_df.add_data_to_properties(self, mismatch_df, mismatch_col_name)
-        ret_df =  self.get_properties(
+        ret_df = self.get_properties(
             mismatch_col_name, include=include, exclude=exclude, strict=True
         )
 
         ret_pre = f"{prefix_enum.REMOVE_IMPEDANCE_MISMATCH.value}{'_' if prefix else ''}{prefix}"
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
- 
-    def fwhm(self, mag_prefix="", mean_points=10, peak=False, include=None, exclude=None, recalc=False):
-        '''
-        '''
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
+
+    def fwhm(
+        self,
+        mag_prefix: str = "",
+        mean_points: int = 10,
+        peak: bool = False,
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> tuple[pl.DataFrame, tuple[str, str, str]]:
+        """Locate the full-width at half-maximum (FWHM) of the magnitude resonance.
+
+        Finds the sample indices and frequencies corresponding to the low-
+        frequency half-maximum, the magnitude minimum (or maximum when
+        ``peak=True``), and the high-frequency half-maximum for each |tone|.
+        Results are stored in ``properties``.
+
+        Args:
+            mag_prefix (str, optional): Prefix of the magnitude column.
+                Defaults to ``''``.
+            mean_points (int, optional): Number of samples averaged to
+                estimate the off-resonance half-maximum level on each side.
+                Defaults to 10.
+            peak (bool, optional): Locate the magnitude maximum rather than
+                the minimum (for peaked responses).  Defaults to *False*.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+        Returns:
+            tuple[pl.DataFrame, tuple[str, str, str]]: DataFrame of FWHM
+            sample and frequency columns, and a tuple of three prefix strings
+            for the low-frequency, mid-frequency, and high-frequency sides.
+        """
 
         "TODO: Use min/max values of phase instead potentially. Should be accurate as long as no large impedance mismatch"
         name_enums, prefix_enums = ccat_df.create_enums(
@@ -1340,20 +1960,22 @@ class Target(Sweep):
             mag_prefix,
             ["low_frequency_side", "middle_frequency_point", "high_frequency_side"],
             self.analysis_cfg,
-            no_prefix=["sample", 'frequency'],
+            no_prefix=["sample", "frequency"],
         )
 
         name_enum, prefix_enum = name_enums[0], prefix_enums[0]
-        low_prefix, mid_prefix, high_prefix = (f"{prefix_enum.LOW_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}", 
-                                               f"{prefix_enum.MIDDLE_FREQUENCY_POINT.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}", 
-                                               f"{prefix_enum.HIGH_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}")
+        low_prefix, mid_prefix, high_prefix = (
+            f"{prefix_enum.LOW_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}",
+            f"{prefix_enum.MIDDLE_FREQUENCY_POINT.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}",
+            f"{prefix_enum.HIGH_FREQUENCY_SIDE.value}_{name_enum.FULL_WIDTH_HALF_MAX.value}",
+        )
 
         low_sample, mid_sample, high_sample, low_f, mid_f, high_f = (
-            "_".join([low_prefix,  name_enum.SAMPLE.value]),
-            "_".join([mid_prefix,  name_enum.SAMPLE.value]),
+            "_".join([low_prefix, name_enum.SAMPLE.value]),
+            "_".join([mid_prefix, name_enum.SAMPLE.value]),
             "_".join([high_prefix, name_enum.SAMPLE.value]),
-            "_".join([low_prefix,  name_enum.FREQUENCY.value]),
-            "_".join([mid_prefix,  name_enum.FREQUENCY.value]),
+            "_".join([low_prefix, name_enum.FREQUENCY.value]),
+            "_".join([mid_prefix, name_enum.FREQUENCY.value]),
             "_".join([high_prefix, name_enum.FREQUENCY.value]),
         )
 
@@ -1361,22 +1983,37 @@ class Target(Sweep):
             self, mid_sample, include=include, exclude=exclude, recalc=recalc
         )
         if not len(include_subset) == 0:
-            sample_col, mag_col, f_col = name_enum.SAMPLE.value, name_enum.MAGNITUDE.value, name_enum.FREQUENCY.value
+            sample_col, mag_col, f_col = (
+                name_enum.SAMPLE.value,
+                name_enum.MAGNITUDE.value,
+                name_enum.FREQUENCY.value,
+            )
             # Get detector magnitudes and sample numbers and unpivot DataFrame from wide to long format
-            mag_df = (self.get_data(col_name=[sample_col, mag_col], strict=True, include=include_subset)
-                        .unpivot(
-                            index=sample_col,
-                            variable_name="det",
-                            value_name=mag_col,
-                                )
-                            .with_columns(pl.col("det").str.strip_prefix(f"{mag_col}_").cast(pl.Int32))
+            mag_df = (
+                self.get_data(
+                    col_name=[sample_col, mag_col], strict=True, include=include_subset
+                )
+                .unpivot(
+                    index=sample_col,
+                    variable_name="det",
+                    value_name=mag_col,
+                )
+                .with_columns(
+                    pl.col("det").str.strip_prefix(f"{mag_col}_").cast(pl.Int32)
+                )
             )
 
-            f_df = (self.get_data(col_name=f_col, strict=True, include=include_subset)
-                        .unpivot(variable_name='tmp', value_name=f_col)
-                        .drop('tmp'))
+            f_df = (
+                self.get_data(col_name=f_col, strict=True, include=include_subset)
+                .unpivot(variable_name="tmp", value_name=f_col)
+                .drop("tmp")
+            )
 
-            mag_df = pl.concat([mag_df, f_df], how='horizontal').lazy().sort(mag_col, descending=not peak)
+            mag_df = (
+                pl.concat([mag_df, f_df], how="horizontal")
+                .lazy()
+                .sort(mag_col, descending=not peak)
+            )
 
             # Get minimum magnitude values for each detector and corresponding sample numbers
             expr = pl.col(mag_col).max() if peak else pl.col(mag_col).min()
@@ -1391,10 +2028,18 @@ class Target(Sweep):
                 )
                 .collect()
             )
-            shared_cols = [mid_sample, mid_f] if mid_sample in self._properties_df.schema else []
+            shared_cols = (
+                [mid_sample, mid_f] if mid_sample in self._properties_df.schema else []
+            )
             self._properties_df = ccat_df.coalesce_join(
                 self._properties_df,
-                min_df.select(["det", pl.col(f"min_{sample_col}").alias(mid_sample), pl.col(f"min_{f_col}").alias(mid_f)]),
+                min_df.select(
+                    [
+                        "det",
+                        pl.col(f"min_{sample_col}").alias(mid_sample),
+                        pl.col(f"min_{f_col}").alias(mid_f),
+                    ]
+                ),
                 "det",
                 shared_cols,
             )
@@ -1417,7 +2062,10 @@ class Target(Sweep):
             )
 
             missing_col = None
-            rename_mapping = {"true": f"max_{mag_col}_low", "false": f"max_{mag_col}_high"}
+            rename_mapping = {
+                "true": f"max_{mag_col}_low",
+                "false": f"max_{mag_col}_high",
+            }
             for k, v in rename_mapping.items():
                 if k in max_df.columns:
                     max_df = max_df.rename({k: v})
@@ -1425,7 +2073,9 @@ class Target(Sweep):
                     missing_col = k
             if missing_col is not None:
                 v = rename_mapping.pop(missing_col)
-                max_df = max_df.with_columns(pl.col(list(rename_mapping.values())[0]).alias(v))
+                max_df = max_df.with_columns(
+                    pl.col(list(rename_mapping.values())[0]).alias(v)
+                )
 
             min_max_df = (
                 mag_min_df.collect()
@@ -1436,28 +2086,43 @@ class Target(Sweep):
                         (
                             pl.col(mag_col)
                             - (
-                                (pl.col(f"min_{mag_col}") + pl.col(f"max_{mag_col}_{side}"))
+                                (
+                                    pl.col(f"min_{mag_col}")
+                                    + pl.col(f"max_{mag_col}_{side}")
+                                )
                                 / 2
                             )
                         )
                         .abs()
                         .alias(name)
-                        for side, name in zip(["low", "high"], [low_sample, high_sample])
+                        for side, name in zip(
+                            ["low", "high"], [low_sample, high_sample]
+                        )
                     ]
                 )
             )
             # Get the samples corresponding to the half max on the low and high frequency sides of each detector
-            for side, sample_name, f_name in zip(["low", "high"], [low_sample, high_sample], [low_f, high_f]):
+            for side, sample_name, f_name in zip(
+                ["low", "high"], [low_sample, high_sample], [low_f, high_f]
+            ):
                 HM_df = (
                     min_max_df.filter(pl.col("low") == ("low" == pl.lit(side)))
                     .sort(sample_name)
-                    .select("det", pl.col(sample_col).first().over("det"), pl.col(f_col).first().over('det'))
+                    .select(
+                        "det",
+                        pl.col(sample_col).first().over("det"),
+                        pl.col(f_col).first().over("det"),
+                    )
                     .unique()
                     .sort("det")
                     .rename({sample_col: sample_name, f_col: f_name})
                     .collect()
                 )
-                shared_cols = [sample_name, f_name] if sample_name in self._properties_df.schema else []
+                shared_cols = (
+                    [sample_name, f_name]
+                    if sample_name in self._properties_df.schema
+                    else []
+                )
                 self._properties_df = ccat_df.coalesce_join(
                     self._properties_df, HM_df, "det", shared_cols
                 )
@@ -1467,16 +2132,42 @@ class Target(Sweep):
             exclude=exclude,
             strict=True,
         )
-        return ret_df, (low_prefix, mid_prefix, high_prefix) if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+        return ret_df, (low_prefix, mid_prefix, high_prefix) if self.analysis_cfg[
+            "runtime"
+        ]["return_prefix"] else ret_df
 
-    def IQ_circle_diameter(self,
-                           prefix: str | list[str] = "",
-                           include: int | list[int] | None = None,
-                           exclude: int | list[int] | None = None,
-                           recalc: bool = False,):
-        if isinstance(prefix, str): prefix = [prefix]
+    def IQ_circle_diameter(
+        self,
+        prefix: str | list[str] = "",
+        include: int | list[int] | None = None,
+        exclude: int | list[int] | None = None,
+        recalc: bool = False,
+    ) -> tuple[pl.DataFrame, str]:
+        """Compute the IQ circle diameter from |I| and |Q| sweep data.
+
+        The diameter column is defined as :math:`I \\cdot (1 + (Q/I)^2)` for
+        each |tone|, which equals the |I|-axis chord length of the resonance
+        circle.
+
+        Args:
+            prefix (str | list[str], optional): Prefix of the |I| and |Q|
+                columns.  Defaults to ``''``.
+            include (int | list[int] | None, optional): |tone| indices to
+                include.  Defaults to *None* (all tones).
+            exclude (int | list[int] | None, optional): |tone| indices to
+                exclude.  Defaults to *None*.
+            recalc (bool, optional): Force recomputation.  Defaults to *False*.
+        Returns:
+            tuple[pl.DataFrame, str]: DataFrame of IQ circle diameter columns
+            and the output prefix string.
+        """
+        if isinstance(prefix, str):
+            prefix = [prefix]
         name_enums, prefix_enums = ccat_df.create_enums(
-            ["in_phase", "quadrature", "IQ_circle_diameter"], prefix, [], self.analysis_cfg
+            ["in_phase", "quadrature", "IQ_circle_diameter"],
+            prefix,
+            [],
+            self.analysis_cfg,
         )
 
         self.transform(
@@ -1487,7 +2178,7 @@ class Target(Sweep):
             col_enum=name_enums,
             prefix_enum=prefix_enums,
         )
-        
+
         ret_df = self.get_data(
             col_name=[name_enum.IQ_CIRCLE_DIAMETER.value for name_enum in name_enums],
             include=include,
@@ -1495,13 +2186,19 @@ class Target(Sweep):
             strict=True,
         )
 
-        ret_pre = [f"{prefix_enum.IQ_CIRCLE_DIAMETER.value}{'_' if pre else ''}{pre}" for pre, prefix_enum in zip(prefix, prefix_enums)] 
-        if len(ret_pre) == 1: ret_pre = ret_pre[0]
+        ret_pre = [
+            f"{prefix_enum.IQ_CIRCLE_DIAMETER.value}{'_' if pre else ''}{pre}"
+            for pre, prefix_enum in zip(prefix, prefix_enums)
+        ]
+        if len(ret_pre) == 1:
+            ret_pre = ret_pre[0]
 
-        return ret_df, ret_pre if self.analysis_cfg['runtime']['return_prefix'] else ret_df    
+        return ret_df, ret_pre if self.analysis_cfg["runtime"][
+            "return_prefix"
+        ] else ret_df
 
     # ================ #
-    # Analysis Methods # 
+    # Analysis Methods #
     # ================ #
 
     @staticmethod
@@ -1512,8 +2209,12 @@ class Target(Sweep):
         padding: int = 4,
         recalc: bool = False,
         col_enum=None,
-        prefix_enum=None,):
+        prefix_enum=None,
+    ):
+        """Generate *Polars* expressions for phase stitching via ``numpy.unwrap``."""
+
         def _stitch_phase(df):
+            """Process phase stitching for a batch of tones."""
             data = ccat_mp.struct_batches(df, 1, batch_len, max_workers)
 
             results_dict = {}
@@ -1523,7 +2224,7 @@ class Target(Sweep):
                         ccat_mp.process_batches,
                         np.unwrap,
                         data[i][0],
-                        period = threshold[inds],
+                        period=threshold[inds],
                     ): all_tones[inds]
                     for i, inds in enumerate(calc_ind)
                 }
@@ -1539,16 +2240,14 @@ class Target(Sweep):
                                 tone,
                                 stitch_col,
                             )
-                            stitch_data = (
-                                np.full(df.len(), np.nan),
-                            )
+                            stitch_data = (np.full(df.len(), np.nan),)
                         else:
                             stitch_data = stitch_col
 
                         results_dict[ccat_df.add_tone(return_col[0], tone, padding)] = (
                             stitch_data
                         )
-                        
+
             return ccat_mp.package_results(results_dict)
 
         if not len(args) == 3:
@@ -1618,7 +2317,7 @@ class Target(Sweep):
                     ccat_df.add_tone(Q_col, tone, padding),
                 )
                 exprs.append(
-                    (pl.col(Q_tone_col)/(-2*pl.col(I_tone_col))).alias(
+                    (pl.col(Q_tone_col) / (-2 * pl.col(I_tone_col))).alias(
                         linewidth_tone_col
                     )
                 )
@@ -1657,9 +2356,10 @@ class Target(Sweep):
                     ccat_df.add_tone(Q_col, tone, padding),
                 )
                 exprs.append(
-                    ((1 + (pl.col(Q_tone_col)/pl.col(I_tone_col))**2)*pl.col(I_tone_col)).alias(
-                        diameter_tone_col
-                    )
+                    (
+                        (1 + (pl.col(Q_tone_col) / pl.col(I_tone_col)) ** 2)
+                        * pl.col(I_tone_col)
+                    ).alias(diameter_tone_col)
                 )
         return exprs
 
@@ -1696,13 +2396,11 @@ class Target(Sweep):
                     ccat_df.add_tone(diameter_col, tone, padding),
                 )
                 exprs.append(
-                    (pl.col(linewidth_tone_col)/pl.col(diameter_tone_col)).alias(
+                    (pl.col(linewidth_tone_col) / pl.col(diameter_tone_col)).alias(
                         coupling_tone_col
                     )
                 )
         return exprs
-      
-
 
     @staticmethod
     def _calc_complex_fit(
@@ -1717,6 +2415,7 @@ class Target(Sweep):
         """Fit using resonator_model_v3"""
 
         def _complex_fit(df):
+            """Process complex-model fitting for a batch of tones."""
             data = ccat_mp.struct_batches(df, 3, batch_len, max_workers)
 
             results_dict = {}
@@ -1731,7 +2430,7 @@ class Target(Sweep):
                         nonlinear=nonlinear[inds],
                         asymm=asymm[inds],
                         fix_cable=fix_cable[inds],
-                        #fix_thetaQ=fix_thetaQ[inds],
+                        # fix_thetaQ=fix_thetaQ[inds],
                     ): (i, all_tones[inds])
                     for i, inds in enumerate(calc_ind)
                 }
@@ -1822,7 +2521,10 @@ class Target(Sweep):
         col_enum=None,
         prefix_enum=None,
     ):
+        """Generate *Polars* expressions for phase-based resonator fitting."""
+
         def _phase_fit(df):
+            """Process phase fitting for a batch of tones."""
             data = ccat_mp.struct_batches(df, 4, batch_len, max_workers)
 
             results_dict = {}
@@ -1844,7 +2546,9 @@ class Target(Sweep):
                     for i, inds in enumerate(calc_ind)
                 }
 
-                fit_result = targ.fit_result.get(f"{fit_name_col}_{fit_result_col}", [None]*targ.num_tones)
+                fit_result = targ.fit_result.get(
+                    f"{fit_name_col}_{fit_result_col}", [None] * targ.num_tones
+                )
                 for future in concurrent.futures.as_completed(future_to_batch):
                     tones = future_to_batch[future]
                     fit_cols = future.result()
@@ -1920,7 +2624,7 @@ class Target(Sweep):
             col_enum.QUADRATURE.value,
             col_enum.PHASE.value,
             prefix_enum.PHASE_FIT.value,
-            col_enum.FIT_RESULT.value
+            col_enum.FIT_RESULT.value,
         )
 
         param_names = {
@@ -1928,8 +2632,8 @@ class Target(Sweep):
             "Qr": col_enum.TOTAL_QUALITY_FACTOR.value,
             "theta_0": col_enum.PHASE_FIT_THETA.value,
             "beta": col_enum.PHASE_FIT_BETA.value,
-            #"gamma": col_enum.PHASE_FIT_GAMMA.value,
-            #"delta": col_enum.PHASE_FIT_DELTA.value,
+            # "gamma": col_enum.PHASE_FIT_GAMMA.value,
+            # "delta": col_enum.PHASE_FIT_DELTA.value,
             "R": col_enum.IQ_CIRCLE_RADIUS.value,
         }
 
@@ -1957,7 +2661,10 @@ class Target(Sweep):
         col_enum=None,
         prefix_enum=None,
     ):
+        """Generate *Polars* expressions for IQ-plane circle fitting."""
+
         def _circle_fit(df):
+            """Process IQ circle fitting for a batch of tones."""
             data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
 
             angles = np.linspace(0, 2 * np.pi, df.len())
@@ -2057,7 +2764,6 @@ class Target(Sweep):
         )
         return expr
 
-
     @staticmethod
     def _calc_linewidth_fit(
         schema,
@@ -2068,7 +2774,10 @@ class Target(Sweep):
         col_enum=None,
         prefix_enum=None,
     ):
+        """Generate *Polars* expressions for linewidth model fitting."""
+
         def _linewidth_fit(df):
+            """Process linewidth fitting for a batch of tones."""
             data = ccat_mp.struct_batches(df, 2, batch_len, max_workers)
 
             results_dict = {}
@@ -2085,7 +2794,9 @@ class Target(Sweep):
                     for i, inds in enumerate(calc_ind)
                 }
 
-                fit_result = targ.fit_result.get(f"{fit_name_col}_{fit_result_col}", [None]*targ.num_tones)
+                fit_result = targ.fit_result.get(
+                    f"{fit_name_col}_{fit_result_col}", [None] * targ.num_tones
+                )
                 for future in concurrent.futures.as_completed(future_to_batch):
                     tones = future_to_batch[future]
                     fit_cols = future.result()
@@ -2154,9 +2865,13 @@ class Target(Sweep):
         all_tones = np.array(tones)
 
         linewidth_name, fit_name_col, fit_result_col = (
-            col_enum.COUPLING_LINEWIDTH.value if coupling_linewidth else col_enum.LINEWIDTH.value,
-            prefix_enum.COUPLING_LINEWIDTH_FIT.value if coupling_linewidth else prefix_enum.LINEWIDTH_FIT.value,
-            col_enum.FIT_RESULT.value
+            col_enum.COUPLING_LINEWIDTH.value
+            if coupling_linewidth
+            else col_enum.LINEWIDTH.value,
+            prefix_enum.COUPLING_LINEWIDTH_FIT.value
+            if coupling_linewidth
+            else prefix_enum.LINEWIDTH_FIT.value,
+            col_enum.FIT_RESULT.value,
         )
 
         linewidth_col = "_".join([lw_prefix, linewidth_name])
@@ -2171,7 +2886,10 @@ class Target(Sweep):
             "y_exp": col_enum.LINEWIDTH_FIT_EXPONENT.value,
         }
 
-        return_col, return_type = ["_".join([fit_name_col, linewidth_shift_col])], [pl.Float64]
+        return_col, return_type = (
+            ["_".join([fit_name_col, linewidth_shift_col])],
+            [pl.Float64],
+        )
         expr, calc_ind, batch_len = ccat_mp.create_batches(
             _linewidth_fit,
             tones,
@@ -2189,7 +2907,21 @@ class Target(Sweep):
     # Concatenation #
     # ============= #
 
-    def join(self, other, in_place=False):
+    def join(self, other: "Target", in_place: bool = False) -> "Target":
+        """Join this ``Target`` with another, concatenating their properties tables.
+
+        Delegates data concatenation to the parent ``Sweep.join`` method and
+        then merges the two ``properties`` DataFrames diagonally, reassigning
+        ``det`` indices from the combined tone list.
+
+        Args:
+            other (Target): Another ``Target`` instance to join with.
+            in_place (bool, optional): Modify this object in place instead of
+                returning a new instance.  Defaults to *False*.
+        Returns:
+            Target: A ``Target`` instance with the combined data and
+            properties of both inputs.
+        """
         new_data = super().join(other, in_place=in_place)
         left_prop, right_prop = self.properties, other.properties
         new_data._properties_df = pl.concat(
@@ -2202,6 +2934,7 @@ class Target(Sweep):
     # ================ #
 
     def __getstate__(self):
+        """Serialise state, writing the properties DataFrame to Parquet if configured."""
         state = super().__getstate__()
         if not self.analysis_cfg["io"]["pickle"]["pickle_dataframes"] and state.get(
             "_data", True
@@ -2220,6 +2953,7 @@ class Target(Sweep):
         return state
 
     def __setstate__(self, state):
+        """Restore state, loading the properties DataFrame from Parquet if configured."""
         super().__setstate__(state)
 
         if (
@@ -2238,10 +2972,22 @@ class Target(Sweep):
                 Path(self.pickle_dir) / "dataframe" / f"{file_name}.parquet"
             )
 
-def stitch_phase(phase, threshold: float = 1.9 * np.pi):
-    '''
-    Stitch discontinuities in phase from crossing the negative real axis. 
-    '''
+
+def stitch_phase(phase: np.ndarray, threshold: float = 1.9 * np.pi) -> np.ndarray:
+    """Stitch discontinuities in phase from crossing the negative real axis.
+
+    Iterates over the phase array in-place and applies a running shift
+    whenever a jump larger than ``threshold`` is detected, ensuring the
+    output is a continuously varying phase signal.
+
+    Args:
+        phase (numpy.ndarray): 1-D array of phase values in radians.
+            Modified in-place.
+        threshold (float, optional): Minimum absolute jump that triggers a
+            ±2π correction.  Defaults to ``1.9*numpy.pi``.
+    Returns:
+        numpy.ndarray: The phase array with discontinuities removed.
+    """
 
     curr_shift = 0
     for i in range(len(phase) - 1):

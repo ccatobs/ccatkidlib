@@ -1,3 +1,12 @@
+"""
+Helper functions for segmenting, pickling, and reloading *ccatkidlib* ``Network`` objects.
+
+Supports splitting large ``Network`` objects across multiple pickle files and merging them
+back on load, with optional per-segment transformation hooks.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
 import pickle
 import polars as pl
 import ccatkidlib.analysis.utils.pair as pair
@@ -73,7 +82,28 @@ def multi_load(
     root_data_dir: str = "/",
     transform: Callable[Network, Network] | None = None,
 ) -> Network:
-    """ """
+    """Load and merge a segmented ``Network`` from multiple pickle files.
+
+    Locates all pickle files whose names match ``pickle_name`` (ignoring any trailing numeric
+    segment) in the expected pickle directory for the given |drone| and session, loads each,
+    applies ``transform`` if provided, and concatenates the ``data`` DataFrames and
+    ``det_dict`` mappings into a single ``Network``.
+
+    Args:
+        com_to (str): |drone| that took the data. In form ``'Board.Drone'``
+        pickle_name (str): Name of the pickle file (with or without ``.pickle`` extension and
+            trailing segment number, e.g., ``'my_network'`` or ``'my_network_1.pickle'``)
+        sess_id (str): *ccatkidlib* session ID of the data
+        data_dir (str, optional): Directory where data is stored. Defaults to wildcard ``'**'``
+        date (str, optional): Date data was taken. Defaults to wildcard ``'**'``
+        root_data_dir (str, optional): Root directory where data is stored. Defaults to ``'/'``
+        transform (Callable[[Network], Network] | None, optional): Function applied to each
+            loaded segment before merging. Must accept and return a ``Network``. Defaults to **None**.
+    Returns:
+        Network: Merged ``Network`` object with all segments combined.
+    Raises:
+        TypeError: If ``transform`` is provided but is not callable.
+    """
 
     if transform is not None and not callable(transform):
         raise TypeError("'transform' argument must be a function!")
@@ -88,7 +118,7 @@ def multi_load(
     # Remove '.pickle' and pickle file number from name if included (e.g., convert 'pickle_test_1.pickle' into 'pickle_test')
     name_parts = pickle_name.split(".")[0].split("_")
     try:
-        _ = int(name_parts[-1]) # Check if last segment of name is an int
+        _ = int(name_parts[-1])  # Check if last segment of name is an int
         name_parts = name_parts[:-1]
     except ValueError:
         pass

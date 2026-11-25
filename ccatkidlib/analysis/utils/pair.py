@@ -20,8 +20,21 @@ import ccatkidlib.log as log
 
 
 def get_sess_dir(
-    sess_id, data_dir: str = "**", date: str = "**", root_data_dir: str = "/"
+    sess_id: str,
+    data_dir: str = "**",
+    date: str = "**",
+    root_data_dir: str = "/",
 ) -> str:
+    """Get the session directory for a *ccatkidlib* session.
+
+    Args:
+        sess_id (str): *ccatkidlib* session ID
+        data_dir (str, optional): Directory where data is stored. Defaults to wildcard ``'**'``
+        date (str, optional): Date data was taken. Defaults to wildcard ``'**'``
+        root_data_dir (str, optional): Root directory where data is stored. Defaults to ``'/'``
+    Returns:
+        str: Path of found session directory. Returns ``'invalid/path'`` if directory not found.
+    """
     root_data_dir = Path(root_data_dir)
 
     file_tree = Path(data_dir) / date / sess_id
@@ -32,6 +45,7 @@ def get_sess_dir(
     except StopIteration:
         sess_dir = "invalid/path"
     return sess_dir
+
 
 def get_data_file(
     com_to: str,
@@ -140,7 +154,20 @@ def get_config(path: str | pathlib.PosixPath, all_cfg: bool = False) -> list[str
         return []
 
 
-def get_sweep(path: str | pathlib.PosixPath, **kwargs):
+def get_sweep(
+    path: str | pathlib.PosixPath,
+    **kwargs,
+) -> tuple[str, str]:
+    """Get the most recent VNA and target sweep files associated with a data file.
+
+    Args:
+        path (str | pathlib.PosixPath): Path of data file (timestream or target sweep)
+        **kwargs: Additional keyword arguments (unused; reserved for future use)
+    Returns:
+        tuple[str, str]: ``(vna_path, targ_path)`` — paths of the most recent VNA sweep and
+        target sweep associated with the given data file. Returns ``'invalid/path'`` for
+        either element if the corresponding sweep file cannot be found.
+    """
     timestamp = io.get_timestamp(path)  # Get timestamp of data file
 
     if not timestamp == -1:  # Make sure a valid data file is passed
@@ -201,7 +228,7 @@ def replace_root(path: str | pathlib.PosixPath, old_root: str, new_root: str):
         old_root (str): Old root directory of file path to be replaced
         new_root (str): New root directory to replace the old root
     Returns:
-        return (str): New file path with the root directory replaced. If the new file path does not exist, returns the original path.
+        str: New file path with the root directory replaced. If the new file path does not exist, returns the original path.
     """
     path = str(path).strip()
     new_path = path.replace(old_root, new_root)
