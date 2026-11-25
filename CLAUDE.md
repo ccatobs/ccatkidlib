@@ -175,3 +175,55 @@ def get_data_file(
         list[str]: Path of found data file. Returns ``'invalid/path'`` if data file not found.
     """
 ```
+
+### Analysis Library Notes
+
+#### Analysis class types — `TYPE_CHECKING` guards
+
+Never substitute `Any` for a known analysis class. For files that cannot import
+an analysis class at runtime (to avoid circular imports), use
+`from __future__ import annotations` together with a `TYPE_CHECKING` guard:
+
+```python
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ccatkidlib.analysis.core.detector import Detector
+
+def some_routine(det: Detector, ...) -> pl.DataFrame: ...
+```
+
+`from __future__ import annotations` defers annotation evaluation so the
+guarded import never runs at import time. The `ProcessPoolExecutor` (`ex`)
+parameter is a stdlib type with no circular risk — import it directly:
+
+```python
+from concurrent.futures import ProcessPoolExecutor
+```
+
+Known circular import constraint: `analysis/routines/properties.py` cannot import
+`Detector` even under `TYPE_CHECKING` because `detector.py` imports `properties.py`
+at the module level. Use `Target` instead (which is what `targ` actually is), since
+`target.py` does not import `properties.py`.
+
+#### Numba-decorated functions — no Python type annotations
+
+`@guvectorize` and module-level `@njit` functions cannot carry Python type
+annotations. Numba injects its own type system through the decorator; Python
+annotations are silently ignored for gufuncs and can raise `TypeError` for njit.
+Leave them unannotated by design. Nested `@njit` helpers inside Python functions
+are also left unannotated. Affected files: `analysis/core/vna.py`, `analysis/fit/fit.py`.
+
+#### LaTeX math in docstrings — always use raw strings
+
+Python raises `SyntaxWarning: invalid escape sequence` for `\letter` in a normal
+string. Any docstring containing `:math:` with backslash LaTeX (`\arctan`, `\pi`,
+`\sqrt`, etc.) **must** use `r"""` not `"""`. The `:math:` raw-string note in
+§"Additional RST conventions" above applies to every such docstring without exception.
+
+#### `fit/kid_phase_fit/` — excluded from documentation
+
+`analysis/fit/kid_phase_fit/` contains ported Gao-thesis code with `import *`
+and backslash-continued function signatures. Do not add docstrings or annotations
+to `fit_single_det.py`, `phase_fit.py`, or `utils.py`.
