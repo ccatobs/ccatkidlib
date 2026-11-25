@@ -4,12 +4,17 @@ Helper functions for constructing and manipulating *Polars* DataFrames used thro
 .. codeauthor:: Darshan Patel <dp649@cornell.edu>
 """
 
+from __future__ import annotations
+
 import polars as pl
 import ccatkidlib.log as log
 
 from enum import Enum
 from collections.abc import Iterable
-from typing import Callable, TypeAlias, Any
+from typing import Callable, TypeAlias, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ccatkidlib.analysis.core.data import Data
 
 ExprFunction: TypeAlias = Callable[[list[int], Any], list[pl.Expr]]
 
@@ -150,7 +155,7 @@ def parse_tones(
         return func_all(*args)
 
 
-def unnest(data_obj: Any, col_names: str | list[str]) -> pl.DataFrame:
+def unnest(data_obj: Data, col_names: str | list[str]) -> pl.DataFrame:
     """Unnest struct columns matching ``col_names`` from a data object's ``data`` DataFrame.
 
     Struct columns whose names contain any of the specified ``col_names`` are unnested in-place
@@ -214,7 +219,7 @@ def coalesce_join(
 
 
 def get_properties(
-    obj: Any,
+    obj: Data,
     col_name: str | list[str] = ".*",
     include: int | list[int] | None = None,
     exclude: int | list[int] | None = None,
@@ -279,7 +284,7 @@ def get_properties(
 
 
 def check_properties(
-    obj: Any,
+    obj: Data,
     col_name: str,
     include: int | list[int] | None = None,
     exclude: int | list[int] | None = None,
@@ -307,7 +312,7 @@ def check_properties(
     return tones
 
 
-def add_data_to_properties(obj: Any, df: pl.DataFrame, col_name: str) -> pl.DataFrame:
+def add_data_to_properties(obj: Data, df: pl.DataFrame, col_name: str) -> pl.DataFrame:
     """Add a quantity to a data object's ``properties`` DataFrame.
 
     Pivots ``df`` from wide to long format, then coalesce-joins the result into

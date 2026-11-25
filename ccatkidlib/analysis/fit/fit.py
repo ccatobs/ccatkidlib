@@ -1,16 +1,3 @@
-import numpy as np
-import scipy
-
-from typing import Any
-from lmfit import Model, Parameters
-from scipy.optimize import least_squares, root_scalar
-from scipy.interpolate import make_interp_spline, PchipInterpolator
-from numba import njit, guvectorize, float64, prange
-
-import warnings
-
-warnings.filterwarnings("ignore")
-
 """
 Resonator model fitting and interpolation utilities for KID analysis.
 
@@ -20,6 +7,19 @@ conversion and fitting quality assessment.
 
 .. codeauthor:: Darshan Patel <dp649@cornell.edu>
 """
+
+import numpy as np
+import scipy
+
+from lmfit import Model, Parameters
+from lmfit.model import ModelResult
+from scipy.optimize import least_squares, root_scalar, OptimizeResult
+from scipy.interpolate import make_interp_spline, PchipInterpolator
+from numba import njit, guvectorize, float64, prange
+
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
 # =================#
@@ -63,7 +63,7 @@ def circle_fit(
     loss: str = "soft_l1",
     f_scale: float = 1,
     method: str = "trf",
-) -> tuple[float, float, float] | tuple[float, float, float, Any]:
+) -> tuple[float, float, float] | tuple[float, float, float, OptimizeResult]:
     """Fit a circle to |I||Q| data using constrained nonlinear least squares.
 
     Uses an iterative fitting approach based on the conic section method from
@@ -369,7 +369,7 @@ def phase_fit(
     nonlinear: bool = False,
     normalized: bool = False,
     method: str = "least_squares",
-) -> Any:
+) -> ModelResult:
     """Fit |KID| phase response to resonator model.
 
     Fits phase data to either a linear or nonlinear resonator model using *lmfit*.

@@ -12,7 +12,7 @@ import holoviews as hv
 import time
 
 from collections.abc import Iterable
-from typing import Any
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from tqdm import tqdm
 from holoviews import opts
@@ -265,7 +265,10 @@ class Network:
         return pickle_dir
 
     def add_columns(
-        self, data_cols: str | list[str], max_workers: int = 1, ex: Any = None
+        self,
+        data_cols: str | list[str],
+        max_workers: int = 1,
+        ex: ProcessPoolExecutor | None = None,
     ) -> pl.dataframe.frame.DataFrame:
         """Add columns to the ``Network.data`` DataFrame using fields from the ext_cfg or drone_cfg.
 

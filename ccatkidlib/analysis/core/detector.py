@@ -14,6 +14,7 @@ import concurrent.futures
 import lmfit
 
 from collections.abc import Iterable
+from concurrent.futures import ProcessPoolExecutor
 from typing import Any, TypeAlias, Literal
 from pathlib import Path
 from functools import cached_property
@@ -313,7 +314,7 @@ class Detector:
         recalc: bool = False,
         stitch_workers: int = 1,
         linear_fit_workers: int = 1,
-        ex: Any | None = None,
+        ex: ProcessPoolExecutor | None = None,
     ) -> pl.DataFrame:
         """Calculate the cable delay of the detector network.
 
@@ -1090,7 +1091,7 @@ class Detector:
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex: Any | None = None,
+        ex: ProcessPoolExecutor | None = None,
         **kwargs,
     ) -> pl.DataFrame:
         """Apply dissipation correction to origin-centred |IQ| circle data.
@@ -1197,7 +1198,7 @@ class Detector:
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex: Any | None = None,
+        ex: ProcessPoolExecutor | None = None,
         **kwargs,
     ) -> pl.DataFrame:
         """Interpolate target-sweep phase vs. frequency and store splines in ``properties``.
@@ -1306,7 +1307,7 @@ class Detector:
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex: Any | None = None,
+        ex: ProcessPoolExecutor | None = None,
         **kwargs,
     ) -> pl.DataFrame:
         """Convert timestream phase data to frequency via a target-sweep spline.
@@ -1515,7 +1516,7 @@ class Detector:
         exclude: int | list[int] | None = None,
         recalc: bool = False,
         max_workers: int = 1,
-        ex: Any | None = None,
+        ex: ProcessPoolExecutor | None = None,
         **kwargs,
     ) -> pl.DataFrame:
         r"""Estimate fractional frequency shift linearly from origin-centred |IQ| position.

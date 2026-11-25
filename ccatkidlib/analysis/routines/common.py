@@ -5,9 +5,13 @@ single convenience functions.
 .. codeauthor:: Darshan Patel <dp649@cornell.edu>
 """
 
+from __future__ import annotations
+
 import polars as pl
 import numpy as np
 
+from concurrent.futures import ProcessPoolExecutor
+from typing import TYPE_CHECKING, Literal
 
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
@@ -15,11 +19,12 @@ import ccatkidlib.analysis.routines.properties as properties_routines
 
 from ccatkidlib.analysis.utils.config import return_prefix
 
-from typing import Any, Literal
+if TYPE_CHECKING:
+    from ccatkidlib.analysis.core.detector import Detector
 
 
 def IQ_circle_origin(
-    det: Any,
+    det: Detector,
     data: Literal["targ", "timestream", "both"] = "both",
     cable_delay: Literal["vna", "targ"] = "vna",
     normalize: bool = False,
@@ -36,7 +41,7 @@ def IQ_circle_origin(
     circle_fit_workers: int = 1,
     stitch_workers: int = 1,
     linear_fit_workers: int = 1,
-    ex: Any = None,
+    ex: ProcessPoolExecutor | None = None,
 ) -> pl.DataFrame:
     """Remove cable delay and impedance mismatch from |KID| |I|/|Q| data, centering the |IQ| circle at the origin.
 
@@ -233,7 +238,7 @@ def IQ_circle_origin(
 
 
 def phase_to_ff(
-    det: Any,
+    det: Detector,
     prefix: str | list[str] = "",
     spline_prefix: str = "",
     spline_bounds: float = 1,
@@ -244,7 +249,7 @@ def phase_to_ff(
     include: int | list[int] | None = None,
     exclude: int | list[int] | None = None,
     recalc: bool = False,
-    ex: Any = None,
+    ex: ProcessPoolExecutor | None = None,
 ) -> pl.DataFrame:
     """Convert |KID| phase timestream data to fractional frequency.
 
@@ -352,7 +357,7 @@ def phase_to_ff(
 
 
 def IQ_noise(
-    det: Any,
+    det: Detector,
     prefix: str | list[str] = "mismatch_rotate_origin_shift_origin_rotate",
     use_noise_tones: bool = False,
     include: int | list[int] | None = None,

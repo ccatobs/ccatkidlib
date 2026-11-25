@@ -1,5 +1,16 @@
+"""
+Detector tuning routines for optimizing tone power and frequency settings.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
+from __future__ import annotations
+
 import polars as pl
 import numpy as np
+
+from concurrent.futures import ProcessPoolExecutor
+from typing import TYPE_CHECKING
 
 import ccatkidlib.analysis.utils.multiprocess as ccat_mp
 import ccatkidlib.analysis.utils.dataframe as ccat_df
@@ -7,11 +18,8 @@ import ccatkidlib.analysis.utils.dataframe as ccat_df
 from ccatkidlib.analysis.core.network import Network
 from ccatkidlib.analysis.routines.common import IQ_circle_origin
 
-"""
-Detector tuning routines for optimizing tone power and frequency settings.
-
-.. codeauthor:: Darshan Patel <dp649@cornell.edu>
-"""
+if TYPE_CHECKING:
+    from ccatkidlib.analysis.core.detector import Detector
 
 
 # Tone Power Tuning
@@ -43,7 +51,7 @@ class TonePowerNetwork(Network):
 
 
 def max_linewidth_dist_f(
-    det,
+    det: Detector,
     prefix: str = "",
     Q_col: str = "",
     trim_mag_prefix: str = "",
@@ -55,7 +63,7 @@ def max_linewidth_dist_f(
     exclude: list[int] | None = None,
     recalc: bool = False,
     max_workers: int = 1,
-    ex=None,
+    ex: ProcessPoolExecutor | None = None,
 ) -> None:
     """Find frequency with maximum linewidth variation on each side of resonance.
 
@@ -280,7 +288,7 @@ def max_linewidth_dist_f(
 
 
 def max_IQ_dist_f(
-    det,
+    det: Detector,
     trim_window: int = 2,
     trim_savgol_window: int = 9,
     diff_savgol_window: int = 21,
@@ -290,7 +298,7 @@ def max_IQ_dist_f(
     exclude: list[int] | None = None,
     recalc: bool = False,
     max_workers: int = 1,
-    ex=None,
+    ex: ProcessPoolExecutor | None = None,
 ) -> None:
     """Find frequency of maximum |IQ| distance (steepest phase gradient).
 

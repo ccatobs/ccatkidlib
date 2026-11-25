@@ -7,26 +7,29 @@ Higher-level analysis routines for detector bifurcation detection and characteri
 import polars as pl
 import numpy as np
 
+from concurrent.futures import ProcessPoolExecutor
+
 import ccatkidlib.analysis.utils.dataframe as ccat_df
 import ccatkidlib.log as log
 
+from ccatkidlib.analysis.core.target import Target
 from ccatkidlib.analysis.core.timestream import Timestream
 
 
 def is_bifurcated(
-    targ,
-    prefix="",
-    bifurcation_threshold=60,
-    qifurcation_threshold=50,
+    targ: Target,
+    prefix: str = "",
+    bifurcation_threshold: float = 60,
+    qifurcation_threshold: float = 50,
     trim_window: int = 2,
     trim_savgol_window: int = 9,
     trim_savgol_k: int = 1,
-    include=None,
-    exclude=None,
-    recalc=False,
-    max_workers=1,
-    ex=None,
-):
+    include: list[int] | None = None,
+    exclude: list[int] | None = None,
+    recalc: bool = False,
+    max_workers: int = 1,
+    ex: ProcessPoolExecutor | None = None,
+) -> pl.DataFrame:
     """Determine if a detector is bifurcated or has high quasiparticle nonlinearity.
 
     Analyzes the angle of maximally separated points in |I||Q| space to classify detectors
