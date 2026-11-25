@@ -1,3 +1,9 @@
+"""
+Higher-level analysis routines for detector bifurcation detection and characterization.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
 import polars as pl
 import numpy as np
 
@@ -21,10 +27,33 @@ def is_bifurcated(
     max_workers=1,
     ex=None,
 ):
-    """
-    Determine if a detector is bifurcated or has a high quasiparticle nonlinearity using the angle of the maximally seperated points in IQ space
+    """Determine if a detector is bifurcated or has high quasiparticle nonlinearity.
 
+    Analyzes the angle of maximally separated points in |I||Q| space to classify detectors
+    as bifurcated or exhibiting quasiparticle-induced nonlinearity. Performs impedance
+    mismatch correction, IQ circle fitting, and calculates angular metrics on the fitted circle.
 
+    Args:
+        targ: Target detector object with phase/magnitude data and fitting methods.
+        prefix (str, optional): Column prefix for analysis outputs. Defaults to ``''``.
+        bifurcation_threshold (float, optional): Minimum angle (degrees) for bifurcation
+            classification. Defaults to ``60``.
+        qifurcation_threshold (float, optional): Minimum angle (degrees) for
+            quasiparticle nonlinearity classification. Defaults to ``50``.
+        trim_window (int, optional): Window size for |IQ| trimming. Defaults to ``2``.
+        trim_savgol_window (int, optional): Savitzky-Golay window for trimming. Defaults to ``9``.
+        trim_savgol_k (int, optional): Savitzky-Golay polynomial order. Defaults to ``1``.
+        include (list[int] | None, optional): Detector indices to include. Defaults to **None**.
+        exclude (list[int] | None, optional): Detector indices to exclude. Defaults to **None**.
+        recalc (bool, optional): Recalculate even if columns exist. Defaults to **False**.
+        max_workers (int, optional): Number of parallel workers. Defaults to ``1``.
+        ex (ProcessPoolExecutor | None, optional): Executor for parallelism. Defaults to **None**.
+    Returns:
+        pl.DataFrame: Properties frame with ``bifurcated`` and ``qifurcated`` boolean columns
+            plus derived angle metrics.
+    Note:
+        This function's implementation is currently incomplete and references undefined variables.
+        It describes the intended analysis workflow but should not be called in production.
     """
 
     name_enums, prefix_enums = ccat_df.create_enums(

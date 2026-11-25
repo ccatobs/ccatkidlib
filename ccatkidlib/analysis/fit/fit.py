@@ -1,6 +1,7 @@
 import numpy as np
 import scipy
 
+from typing import Any
 from lmfit import Model, Parameters
 from scipy.optimize import least_squares, root_scalar
 from scipy.interpolate import make_interp_spline, PchipInterpolator
@@ -10,20 +11,35 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+"""
+Resonator model fitting and interpolation utilities for KID analysis.
+
+Provides methods for fitting circle models to |I||Q| data, phase fitting with
+linear and nonlinear KID models, and spline/interpolation tools for frequency
+conversion and fitting quality assessment.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
+
 # =================#
 # General Fitting #
 # =================#
 
 
 @njit(parallel=True, cache=True)
-def linear_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    """Calculate 2D linear regression using least squares
+def linear_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float, np.ndarray]:
+    """Calculate 2D linear regression using least squares.
+
+    Fits a linear model ``y = mx + b`` to the input data using least squares,
+    automatically masking NaN values.
 
     Args:
-        x (np.ndarray): Array of independent variable data
-        y (np.ndarray): Array of dependent variable data
+        x (np.ndarray): Array of independent variable data.
+        y (np.ndarray): Array of dependent variable data.
     Returns:
-        tuple[float, float]: Slope, intercept
+        tuple[float, float, np.ndarray]: ``(slope, intercept, fitted_y)`` — the fit parameters
+            and the predicted *y* values at the given *x* points.
     """
 
     mask = ~np.isnan(x) & ~np.isnan(y)
@@ -42,12 +58,33 @@ def linear_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
 def circle_fit(
     x: np.ndarray,
     y: np.ndarray,
-    bounds: tuple[list[float], list[float]] = None,
+    bounds: tuple[list[float], list[float]] | None = None,
     full_output: bool = False,
     loss: str = "soft_l1",
     f_scale: float = 1,
     method: str = "trf",
-):
+) -> tuple[float, float, float] | tuple[float, float, float, Any]:
+    """Fit a circle to |I||Q| data using constrained nonlinear least squares.
+
+    Uses an iterative fitting approach based on the conic section method from
+    https://doi.org/10.48550/arXiv.cs/0301001 to minimize algebraic distance.
+    Automatically handles singularities near the origin by shifting data and
+    switching fit branch if needed.
+
+    Args:
+        x (np.ndarray): Array of *I* (in-phase) coordinates.
+        y (np.ndarray): Array of *Q* (quadrature) coordinates.
+        bounds (tuple[list[float], list[float]] | None, optional): Bounds on fitting parameters
+            ``(A, D, theta)`` as ``(lower_bounds, upper_bounds)``. Defaults to **None**.
+        full_output (bool, optional): If **True**, return full fitting result object. Defaults to **False**.
+        loss (str, optional): Loss function for ``scipy.optimize.least_squares``. Defaults to ``'soft_l1'``.
+        f_scale (float, optional): Soft margin scaling. Defaults to ``1``.
+        method (str, optional): Optimization method. Defaults to ``'trf'``.
+    Returns:
+        tuple[float, float, float]: Center *x*, center *y*, radius when ``full_output=False``.
+        tuple[float, float, float, Any]: Center *x*, center *y*, radius, result object when ``full_output=True``.
+    """
+
     @njit(cache=True)
     def _res_jac(
         A: float, D: float, theta: float, x: np.ndarray, y: np.ndarray
@@ -171,7 +208,19 @@ def circle_fit(
         return x_c - shift_x, y_c - shift_y, R
 
 
-def init_circle_fit(x, y):
+def init_circle_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float]:
+    """Compute initial circle fit using algebraic method.
+
+    Solves the generalized eigenvalue problem for circle fitting to provide
+    stable initial guesses for nonlinear refinement.
+
+    Args:
+        x (np.ndarray): Array of *I* (in-phase) coordinates.
+        y (np.ndarray): Array of *Q* (quadrature) coordinates.
+    Returns:
+        tuple[float, float, float]: Center *x*, center *y*, radius.
+    """
+
     @njit(cache=True)
     def _moments(x, y):
         z = x**2 + y**2
@@ -215,15 +264,28 @@ def init_circle_fit(x, y):
 
 
 def y_to_x_spline(
-    x: np.ndarray, y: np.ndarray, k: int = 3, y_low=None, y_up=None
-) -> tuple[None | scipy.interpolate.BSpline, scipy.interpolate.BSpline | None]:
-    """
+    x: np.ndarray,
+    y: np.ndarray,
+    k: int = 3,
+    y_low: float | None = None,
+    y_up: float | None = None,
+) -> tuple[scipy.interpolate.BSpline | None, scipy.interpolate.BSpline | None]:
+    """Construct B-spline interpolant for frequency conversion.
+
+    Attempts to fit a *y*-to-*x* spline; if *y* is not monotonically increasing,
+    falls back to fitting an *x*-to-*y* spline instead. Optionally clips *y*
+    values to a specified range before fitting.
+
     Args:
-        x (np.ndarray): Array of independent variables
-        y (np.ndarray): Array of dependent variables
-        k (int): Degree of polynomials to interpolate with. Defaults to degree 3.
+        x (np.ndarray): Array of independent variable values.
+        y (np.ndarray): Array of dependent variable values.
+        k (int, optional): Degree of B-spline polynomials. Defaults to ``3``.
+        y_low (float | None, optional): Lower bound for *y* clipping. Defaults to **None**.
+        y_up (float | None, optional): Upper bound for *y* clipping. Defaults to **None**.
     Returns:
-        tuple[None | scipy.interpolate.BSpline, scipy.interpolate.BSpline | None]: y to x BSpline, x to y BSpline. Only returns one BSpline, the other will be None
+        tuple[scipy.interpolate.BSpline | None, scipy.interpolate.BSpline | None]:
+            ``(y_to_x_spline, x_to_y_spline)`` — one will be **None**. Use the non-**None**
+            spline with ``y_to_x_interp`` to convert frequencies.
     """
 
     if y_low is not None:
@@ -253,7 +315,26 @@ def y_to_x_spline(
         return None, x_to_y_spline
 
 
-def y_to_x_interp(ys, y_to_x_spline=None, x_to_y_spline=None):
+def y_to_x_interp(
+    ys: list[float] | np.ndarray,
+    y_to_x_spline: scipy.interpolate.BSpline | None = None,
+    x_to_y_spline: scipy.interpolate.BSpline | None = None,
+) -> list[float | None]:
+    """Convert *y* values to *x* using the provided spline interpolant.
+
+    If ``y_to_x_spline`` is available, applies it directly. Otherwise uses
+    ``x_to_y_spline`` with a root-finder to invert the relationship.
+
+    Args:
+        ys (list[float] | np.ndarray): Target *y* values to convert.
+        y_to_x_spline (scipy.interpolate.BSpline | None, optional): Forward spline
+            from ``y_to_x_spline``. Defaults to **None**.
+        x_to_y_spline (scipy.interpolate.BSpline | None, optional): Inverse spline
+            from ``y_to_x_spline``. Defaults to **None**.
+    Returns:
+        list[float | None]: Corresponding *x* values, or **None** for entries that
+            could not be computed.
+    """
     if y_to_x_spline is not None:
         xs = y_to_x_spline(ys)
     elif x_to_y_spline is not None:
@@ -283,25 +364,41 @@ def phase_fit(
     Q: np.ndarray | None = None,
     R: float | None = None,
     window: float | None = None,
-    unwrap_threshold=1.9 * np.pi,
+    unwrap_threshold: float = 1.9 * np.pi,
     params: Parameters | None = None,
     nonlinear: bool = False,
     normalized: bool = False,
     method: str = "least_squares",
-):
-    """Method for fitting to the phase of a kinetic inductance detector (KID)
+) -> Any:
+    """Fit |KID| phase response to resonator model.
 
-    Notes:
-        Using method from https://doi.org/10.1117/12.3019161.
+    Fits phase data to either a linear or nonlinear resonator model using *lmfit*.
+    Automatically unwraps phase and estimates initial parameters if not provided.
+    For nonlinear fits, requires |I| and |Q| components and optionally scales
+    kinetic inductance nonlinearity coefficient.
 
     Args:
-        f (np.ndarray): Array of frequencies (in Hz)
-        phase (np.ndarray): Array of phases (in rad)
-        I (np.ndarray, optional): Array of in-phase components of complex transmission. Required for nonlinear fit
-        Q (np.ndarray, optional): Array of quadrature components of complex transmission. Required for nonlinear fit
-        params (lmfit.Parameters, optional): lmfit Parameters object to use as initial guess for fit
-        R (float, optional): Radius of the IQ circle. Only required for nonlinear fit and if not passed as a lmfit.Parameter in params
-        nonlinear (bool, optional): Whether to use nonlinear fit. Defaults to False
+        f (np.ndarray): Array of frequencies (Hz).
+        phase (np.ndarray): Array of phase values (radians).
+        I (np.ndarray | None, optional): |I| (in-phase) components. Required for nonlinear fits.
+            Defaults to **None**.
+        Q (np.ndarray | None, optional): |Q| (quadrature) components. Required for nonlinear fits.
+            Defaults to **None**.
+        R (float | None, optional): Radius of |IQ| circle. Required for nonlinear fit if not
+            in ``params``. Defaults to **None**.
+        window (float | None, optional): Unused; reserved for future use. Defaults to **None**.
+        unwrap_threshold (float, optional): Phase jump threshold for unwrapping. Defaults to ``1.9π``.
+        params (lmfit.Parameters | None, optional): Initial parameter guesses. If **None**, estimates
+            automatically. Defaults to **None**.
+        nonlinear (bool, optional): If **True**, fit nonlinear model with kinetic inductance
+            correction. Defaults to **False**.
+        normalized (bool, optional): Scaling factor for nonlinear coefficient. Defaults to **False**.
+        method (str, optional): Fitting algorithm. Defaults to ``'least_squares'``.
+    Returns:
+        lmfit.model.ModelResult: Fit result with parameters, residuals, and goodness-of-fit metrics.
+    Note:
+        This function uses *lmfit*; a faster ``scipy.optimize.curve_fit`` implementation
+        may be preferable for large datasets.
     """
     # TODO: Should switch out lmfit for curve_fit for faster fitting and don't really need lmfit features, Also don't want data trimming in this function since can just use IQ_trim instead
 

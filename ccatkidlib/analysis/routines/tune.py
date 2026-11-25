@@ -7,37 +7,79 @@ import ccatkidlib.analysis.utils.dataframe as ccat_df
 from ccatkidlib.analysis.core.network import Network
 from ccatkidlib.analysis.routines.common import IQ_circle_origin
 
+"""
+Detector tuning routines for optimizing tone power and frequency settings.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
+
 # Tone Power Tuning
 # -----------------
 
 
 class TonePowerNetwork(Network):
-    def __init__(self, com_to, **kwargs):
-        super.__init__(com_to, **kwargs)
+    """Network subclass for tone power tuning workflows.
 
-    def drive_to_power():
-        """
-        Convert drive attenuations to RFSoC tone powers
-        """
+    Extends |Network| with methods to optimize RFSoC tone power settings based on
+    detector response characteristics.
+    """
 
-        return
+    def __init__(self, com_to: str, **kwargs) -> None:
+        """Initialize a TonePowerNetwork for the given |drone|.
+
+        Args:
+            com_to (str): |drone| identifier in form ``'Board.Drone'``.
+            **kwargs: Additional keyword arguments passed to parent ``Network.__init__``.
+        """
+        super().__init__(com_to, **kwargs)
+
+    def drive_to_power(self) -> None:
+        """Convert RFSoC drive attenuations to tone power values.
+
+        Transforms raw attenuation settings into corresponding tone power levels
+        across all detectors in this network.
+        """
 
 
 def max_linewidth_dist_f(
     det,
-    prefix="",
-    Q_col="",
-    trim_mag_prefix="",
-    trim_window=2,
-    mean_points=10,
+    prefix: str = "",
+    Q_col: str = "",
+    trim_mag_prefix: str = "",
+    trim_window: int = 2,
+    mean_points: int = 10,
     savgol_window: int = 21,
     savgol_k: int = 1,
-    include=None,
-    exclude=None,
-    recalc=False,
-    max_workers=1,
+    include: list[int] | None = None,
+    exclude: list[int] | None = None,
+    recalc: bool = False,
+    max_workers: int = 1,
     ex=None,
-):
+) -> None:
+    """Find frequency with maximum linewidth variation on each side of resonance.
+
+    Computes linewidth across the frequency sweep, applies optional scaling/filtering,
+    and identifies frequencies where linewidth reaches local maxima on the low and high
+    frequency sides of resonance.
+
+    Args:
+        det: Detector object with target sweep and analysis configuration.
+        prefix (str, optional): Column prefix for intermediate results. Defaults to ``''``.
+        Q_col (str, optional): Column name for quality factor (Q) scaling. Defaults to ``''``.
+        trim_mag_prefix (str, optional): Prefix for magnitude data used in trimming. Defaults to ``''``.
+        trim_window (int, optional): Window size for |IQ| trimming. Defaults to ``2``.
+        mean_points (int, optional): Number of points for averaging. Defaults to ``10``.
+        savgol_window (int, optional): Savitzky-Golay window size. Defaults to ``21``.
+        savgol_k (int, optional): Savitzky-Golay polynomial order. Defaults to ``1``.
+        include (list[int] | None, optional): Detector indices to include. Defaults to **None**.
+        exclude (list[int] | None, optional): Detector indices to exclude. Defaults to **None**.
+        recalc (bool, optional): Recalculate even if columns exist. Defaults to **False**.
+        max_workers (int, optional): Number of parallel workers. Defaults to ``1``.
+        ex: ProcessPoolExecutor or **None** for internal executor. Defaults to **None**.
+    Returns:
+        pl.DataFrame: Subset of target properties with low/high linewidth columns.
+    """
 
     name_dict, prefix_dict = (
         det.targ.analysis_cfg["convention"]["name"],
@@ -244,14 +286,31 @@ def max_IQ_dist_f(
     diff_savgol_window: int = 21,
     trim_savgol_k: int = 1,
     diff_savgol_k: int = 1,
-    include=None,
-    exclude=None,
-    recalc=False,
+    include: list[int] | None = None,
+    exclude: list[int] | None = None,
+    recalc: bool = False,
     max_workers: int = 1,
     ex=None,
-):
-    """
-    Get the frequency corresponding to the max geometric distance between adjacent points in IQ space
+) -> None:
+    """Find frequency of maximum |IQ| distance (steepest phase gradient).
+
+    Identifies the frequency at which adjacent points in |I||Q| space are most separated,
+    corresponding to the steepest phase gradient and optimal frequency lock point.
+
+    Args:
+        det: Detector object with target sweep, VNA data, and cable delay information.
+        trim_window (int, optional): Window size for |IQ| trimming. Defaults to ``2``.
+        trim_savgol_window (int, optional): Savitzky-Golay window for trimming. Defaults to ``9``.
+        diff_savgol_window (int, optional): Savitzky-Goyal window for derivatives. Defaults to ``21``.
+        trim_savgol_k (int, optional): Savitzky-Golay polynomial order (trimming). Defaults to ``1``.
+        diff_savgol_k (int, optional): Savitzky-Golay polynomial order (derivatives). Defaults to ``1``.
+        include (list[int] | None, optional): Detector indices to include. Defaults to **None**.
+        exclude (list[int] | None, optional): Detector indices to exclude. Defaults to **None**.
+        recalc (bool, optional): Recalculate even if columns exist. Defaults to **False**.
+        max_workers (int, optional): Number of parallel workers. Defaults to ``1``.
+        ex: ProcessPoolExecutor or **None** for internal executor. Defaults to **None**.
+    Returns:
+        pl.DataFrame: Target properties with max |IQ| distance frequency columns.
     """
     trim_savgol, diff_savgol = trim_savgol_window > 1, diff_savgol_window > 1
 
