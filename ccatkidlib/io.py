@@ -16,7 +16,7 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 from typing import Any, Literal
-from fabric import Connection, Config
+from fabric import Connection
 from jinja2 import Environment, FileSystemLoader
 
 import ccatkidlib.utils as utils
@@ -257,13 +257,13 @@ def save_config(cfg_path: str, cfg: dict, save: bool = True) -> dict:
     return cfg
 
 
-def edit_config(cfg: dict, key: str, value: Any, append: bool = False) -> bool:
+def edit_config(cfg: dict, key: str | list[str], value: Any, append: bool = False) -> bool:
     """
     Update ``key`` in ``cfg`` configuration file with the specified ``value``.
 
     Args:
         cfg: Configuration file to update
-        key: Key that should be updated
+        key (str | list[str]): Key that should be updated
         value: Value with which to update ``key``
         append: Whether to add a new ``key``, ``value`` pair to configuration file if ``key`` is not found
     Returns:
@@ -302,7 +302,7 @@ def get_most_recent_file(
     time_past: float = 60 * 60,
     time_ref: float | None = None,
     ccatkidlib_file: bool = False,
-) -> str:
+) -> Path:
     """
     Fetch the most recent file in the ``dir`` directory
 
@@ -428,7 +428,7 @@ def get_array(
     action: Literal["cp", "mv"] = "cp",
     load: bool = True,
     timestamp: bool = False,
-) -> np.ndarray | str | None:
+) -> np.ndarray | list | str | None:
     """
     Copy or move a *NumPy* array and load its contents
 
@@ -483,7 +483,7 @@ def get_array(
 
 def increment_file(
     dir: str, file_prefix: str, file_suffix: str, overwrite: bool = False
-) -> tuple[str, int | None]:
+) -> tuple[Path, int | None]:
     """
     Increment the file count in a file name. Used when saving files to prevent overwriting files with duplicate names.
 
@@ -657,7 +657,7 @@ def get_array_board(
 
 def save_array_board(
     ip: str, ssh_key: str, path: str, array: np.ndarray, tmp_dir: str
-) -> str | None:
+) -> subprocess.CompletedProcess | None:
     """
     Save *NumPy* array to |RFSoC| board
 
@@ -668,7 +668,7 @@ def save_array_board(
         array: *NumPy* array to save to |RFSoC| board
         tmp_dir: Temporary directory where *NumPy* array is saved on local machine before copying to |RFSoC| board
     Returns:
-        Returns output string of *rsync* command if successful, otherwise returns **None**
+        subprocess.CompletedProcess: The completed rsync subprocess, or **None** if not saved
     """
 
     save_path = Path(tmp_dir) / Path(path).name

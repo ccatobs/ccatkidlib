@@ -18,6 +18,7 @@ import multiprocessing as mp
 from math import floor
 from pathlib import Path
 from invoke import Responder
+from typing import Any
 from collections.abc import Callable, Iterable
 
 # Import local modules
@@ -1357,7 +1358,7 @@ class R:
 
     @header
     @log.method_timer
-    def take_timestream(self, t_sec: float, **kwargs) -> list[str]:
+    def take_timestream(self, t_sec: float, **kwargs) -> list[str] | None:
         """
         Take timestream data with a specified set of tones
 
@@ -3193,7 +3194,7 @@ class R:
         parallel_boards: int | None = None,
         parallel_drones: int | None = None,
         **kwargs,
-    ) -> list[any]:
+    ) -> list[Any]:
         """Run the specified function ``func`` with drones specified by ``com_to`` in parallel.
 
         Args:

@@ -189,7 +189,7 @@ def wait(t: float, desc: str = "", interval: float = 0.01) -> None:
         pbar.update(t - pbar.n)
 
 
-def header(method: Callable) -> Any:
+def header(method: Callable) -> Callable[..., Any]:
     """
     Decorator that logs **HEADER** and **FOOTER** messages and implements error handling for the wrapped method
 
@@ -227,7 +227,7 @@ def header(method: Callable) -> Any:
     return _wrapper
 
 
-def method_timer(method: Callable) -> Any:
+def method_timer(method: Callable) -> Callable[..., Any]:
     """
     Decorator that logs method execution time
 
@@ -255,7 +255,7 @@ def method_timer(method: Callable) -> Any:
     return _wrapper
 
 
-def function_timer(func: Callable) -> Any:
+def function_timer(func: Callable) -> Callable[..., Any]:
     """
     Decorator that logs function execution time
 
@@ -325,6 +325,7 @@ class Style:
     # Style Properties
     LONGEST_DESC: int = 8
 
+    @staticmethod
     def style_level(level: str) -> str:
         """
         Apply style to specified log ``level``
@@ -337,6 +338,7 @@ class Style:
 
         return f"{getattr(Style, level)}{level:>{Style.LONGEST_DESC}} {Style.DEFAULT}|"
 
+    @staticmethod
     def style_name(name: str) -> str:
         """
         Apply italics style to specified function/method ``name``
