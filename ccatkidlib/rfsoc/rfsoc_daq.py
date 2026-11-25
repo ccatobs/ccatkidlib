@@ -277,7 +277,7 @@ class R:
             influx_output (bool | None, optional): Whether to save measurement name and description to InfluxDB database. Defaults to None.
 
         Returns:
-            return (tuple[str, str] | None): New name and description if update successful else None
+            tuple[str, str] | None: New name and description if update successful else None
         """
 
         influx_output = (
@@ -303,7 +303,7 @@ class R:
         Load the system (IO & external) and drone configuration files and setup file directory structure for saving data.
 
         Args:
-            cfg_path (str): Path to system configuration file.
+            cfg_path (str | None, optional): Path to system configuration file.
         """
 
         # Load system configuration file
@@ -551,7 +551,7 @@ class R:
             kwargs. See below:
             com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
         Returns:
-            return (list[float]): Set NCLOs
+            list[float]: Set NCLOs
         """
 
         def _set_NCLO(com: str, *args, **kwargs):
@@ -563,7 +563,7 @@ class R:
                 *args: NCLO frequency passed as a positional argument
 
             Returns:
-                (ocs.OCSReply): OCS Reply object for RFSoC OCS agent setNCLO command
+                ocs.OCSReply: OCS Reply object for RFSoC OCS agent setNCLO command
             """
             NCLO = args[0]
             rtn = self.rfsoc.setNCLO(
@@ -646,7 +646,7 @@ class R:
             kwargs. See below:
             com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
         Returns:
-            return (tuple[list[float], list[float]]): Current drive and sense attenuations
+            tuple[list[float], list[float]]: Current drive and sense attenuations
         """
 
         def _set_direction(
@@ -655,12 +655,12 @@ class R:
             """
             Internal function for setting drone attenuations of a specific direction ('drive' or 'sense')
 
-            Parameters:
+            Args:
                 com_to (str | list[str]) : List of drones
                 direction (str): Which attenuators to set. Must be one of {'drive', 'sense'}.
                 atten (float | list[float] | None) : List of attenuation values. Attenuation must be between 0 and 31.75. Defaults to attenuation in drone configuration files
             Returns:
-                return (list[float] | None) : The set attenuations. None if invalid attenuations were used
+                list[float] | None: The set attenuations. None if invalid attenuations were used
             """
 
             def _set_atten(com: str, *args, **kwargs):
@@ -672,7 +672,7 @@ class R:
                     *args: Attenuator direction and attenuation value passed as positional arguments
 
                 Returns:
-                    return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent setAtten2025 command
+                    ocs.OCSReply: OCS Reply object for RFSoC OCS agent setAtten2025 command
                 """
                 direction, att = args[0], args[1]
                 rtn = self.rfsoc.setAtten2025(
@@ -819,7 +819,7 @@ class R:
             kwargs. See below:
             com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
         Returns:
-            return tuple[list[float], tuple[list[float], list[float]], list[float]]: Stoarge space, temperatures, and RMS power at ADCs
+            tuple[list[float], tuple[list[float], list[float]], list[float]]: Storage space, temperatures, and RMS power at ADCs
 
         """
 
@@ -851,7 +851,7 @@ class R:
             kwargs. See below:
             com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
         Returns:
-            return (list[float]) : ADC RMS values (sorted by drone)
+            list[float]: ADC RMS values (sorted by drone)
         """
 
         def _getSnapData(com: str, *args, **kwargs) -> dict:
@@ -862,7 +862,7 @@ class R:
                 com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
 
             Returns:
-                return (dict): Data dictionary returned by RFSoC OCS Agent ``getSnapData`` method
+                dict: Data dictionary returned by RFSoC OCS Agent ``getSnapData`` method
             """
             rtn = self.rfsoc.getSnapData(com_to=com, mux_sel=0, silent=False).session
             log.log("PCS", f"{rtn}")
@@ -918,7 +918,7 @@ class R:
             olderThanDaysAgo (int | str): Number of days old a file must be in order to be deleted by automatic cleaning
             ftype (str): Type of file to be deleted by automatic cleaning
         Returns:
-            return (list[float]): Available space left on each board (sorted by board)
+            list[float]: Available space left on each board (sorted by board)
         """
         # Import clean_io from primecam_readout
         import clean_io
@@ -931,7 +931,7 @@ class R:
                 bids (list[str]): List of boards
 
             Returns:
-                return (list[float]): Available storage space left on boards
+                list[float]: Available storage space left on boards
             """
             avail_spaces = []
             session_data = self.rfsoc.feedMonitor.status().session["data"]
@@ -1016,7 +1016,7 @@ class R:
             kwargs. See below:
             com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
         Returns:
-            return (tuple[list[float], list[float]]): Processor and fabric temperatures of RFSoCs
+            tuple[list[float], list[float]]: Processor and fabric temperatures of RFSoCs
         """
 
         def _get_temps(bids: list[str], loc: str) -> list[float]:
@@ -1027,7 +1027,7 @@ class R:
                 bids (list[str]): List of boards
                 loc (str): Location of thermometer. Must be one of {'ps', 'pl'}
             Returns:
-                return (list[float]): List of temperatures
+                list[float]: List of temperatures
             """
             temps = []
             for bid in bids:
@@ -1066,18 +1066,18 @@ class R:
             kwargs. See below:
             com_to (str | list[str], optional): List of drones. Defaults to drone list in IO configuration file
         Returns:
-            return (tuple[list[float], list[float]]): Current drive and sense attenuations
+            tuple[list[float], list[float]]: Current drive and sense attenuations
         """
 
         def _get_direction(com_to: str | list[str], direction: str) -> list[float]:
             """
             Internal function for getting drone attenuations of a specific direction ('drive' or 'sense')
 
-            Parameters:
+            Args:
                 com_to (str | list[str]) : List of drones
                 direction (str): Which attenuator values to get. Must be one of {'drive', 'sense'}.
             Returns:
-                return (list[float] | None) : The current attenuations
+                list[float] | None: The current attenuations
             """
 
             def _get_atten(com: str, *args, **kwargs):
@@ -1089,7 +1089,7 @@ class R:
                     *args: Attenuator direction passed as a positional argument
 
                 Returns:
-                    return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent getAtten command
+                    ocs.OCSReply: OCS Reply object for RFSoC OCS agent getAtten command
                 """
 
                 direction = args[0]
@@ -1171,7 +1171,7 @@ class R:
             sweep_steps (int | list[int], optional): Number of steps each tone should take during sweep. Defaults to value in drone configuration files
 
         Returns:
-            return (list[str]): List of VNA sweep file paths
+            list[str]: List of VNA sweep file paths
         """
 
         @log.function_timer
@@ -1183,7 +1183,7 @@ class R:
                 com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
 
             Returns:
-                return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent writeNewVnaComb command
+                ocs.OCSReply: OCS Reply object for RFSoC OCS agent writeNewVnaComb command
             """
             rtn = self.rfsoc.writeNewVnaComb(com_to=com, silent=False)
             log.log("PCS", f"{rtn.session}")
@@ -1199,7 +1199,7 @@ class R:
                 args: sweep_steps passed as a positional argument
 
             Returns:
-                return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent vnaSweep command
+                ocs.OCSReply: OCS Reply object for RFSoC OCS agent vnaSweep command
             """
             sweep_steps = args[0]
             rtn = self.rfsoc.vnaSweep(com_to=com, sweep_steps=sweep_steps, silent=False)
@@ -1280,7 +1280,7 @@ class R:
             write_comb (bool, optional): Whether to write a new target sweep comb. Defaults to True if any of ``tone_freqs``, ``tone_powers``, or ``tone_phis`` is specified
 
         Returns:
-            return (list[str]): List of target sweep file paths
+            list[str]: List of target sweep file paths
         """
 
         def _take_targ_sweep(com: str, *args, **kwargs):
@@ -1292,7 +1292,7 @@ class R:
                 args: sweep_steps and chan_bw passed as positional arguments
 
             Returns:
-                return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent targetSweep command
+                ocs.OCSReply: OCS Reply object for RFSoC OCS agent targetSweep command
             """
             sweep_steps, chan_bw = args
             rtn = self.rfsoc.targetSweep(
@@ -1378,7 +1378,7 @@ class R:
             tone_phis (str | list[str] | float | list[float] | list[list[float]], optional): Tone phases in radians. Use 'gen' to generate phases
             write_comb (bool, optional): Whether to write a new target sweep comb. Defaults to True if any of ``tone_freqs``, ``tone_powers``, or ``tone_phis`` is specified
         Returns:
-            return (list[str] | None): List of timestream file paths or None if ``save_data`` is False
+            list[str] | None: List of timestream file paths or None if ``save_data`` is False
         """
 
         def _take_timestream_numpy(com: list[str], *args, **kwargs) -> list[str]:
@@ -1397,6 +1397,7 @@ class R:
             def _save_timestream_numpy(
                 com_to, start_time, time_diff, packet_data, tstream_seg, tstream_outs
             ):
+                """Parse, sort by |drone|, and save a batch of captured timestream packets."""
                 packs, addrs = zip(*packet_data)
                 packs = [bytearray(pack) for pack in packs]
                 ips = np.array([list(addr) for addr in addrs])[:, 0]
@@ -1574,7 +1575,7 @@ class R:
                 *args: Length of timestream in seconds passed as a positional argument
 
             Returns:
-                return (ocs.OCSReply): OCS Reply object for RFSoC OCS agent getAtten command
+                ocs.OCSReply: OCS Reply object for RFSoC OCS agent getAtten command
             """
             t_sec = args[0]
             rtn = self.rfsoc.timestreamOn(com_to=com, on=True, silent=True)
@@ -1594,7 +1595,7 @@ class R:
                 com_to (list[str]): List of drones
 
             Returns:
-                return (list[str]): List of file paths of timestream txt files
+                list[str]: List of file paths of timestream txt files
             """
             date = self.timestamp[0:5]
 
@@ -1740,7 +1741,7 @@ class R:
             rescale_power (bool | list[bool]): Whether to rescale tone powers if DAC maximum power is exceeded. Defaults to value in drone configuration files
             gen_attempts (int | list[int]): Number of attempts to randomize phases so that the resulting comb does not exceed DAC maximum power. Defaults to value in drone configuration files
         Returns:
-            return (list[ocs.OCSReply]): List of OCSReply objects for RFSoC OCS agent writeTargCombFromCustomList command
+            list[ocs.OCSReply]: List of OCSReply objects for RFSoC OCS agent writeTargCombFromCustomList command
         """
 
         def _write_targ_comb(com, *args, **kwargs):
@@ -1750,7 +1751,7 @@ class R:
             Args:
                 com (str): List of drones as string (e.g, "['1.2', '2.3', '2.4']")
             Returns:
-                return (ocs.OCSReply): OCSReply object of RFSoC OCS agent for writeTargCombFromCustomList command
+                ocs.OCSReply: OCSReply object of RFSoC OCS agent for writeTargCombFromCustomList command
             """
             rtn = self.rfsoc.writeTargCombFromCustomList(com_to=com, silent=False)
             log.log("PCS", f"{rtn.session}")
@@ -1852,17 +1853,19 @@ class R:
             continuum_wn (int | list[int], optional): Continuum filter cutoff frequency in Hz. Defaults to value in drone configuration files
             remove_noise (bool | list[bool], optional): Whether to subtract noise. Defaults to value in drone configuration files
             noise_wn (int | list[int], optional): Noise filter cutoff frequency in Hz. Defaults to value in drone configuration files
+        Returns:
+            tuple[list[int | None], list[Path | None]]: Number of found detectors and VNA
+                file paths for each |drone|.
         """
 
         def _write_targ_comb(com, *args, **kwargs):
             """
             Internal function for writing target comb using resonators found from VNA sweep.
 
-            Parameters:
+            Args:
                 com (str) : Drone for which target comb should be written
             Returns:
-                rtn1 : OCS reply object from writeTargCombFromVnaSweep function
-                rtn2 : OCS reply object from createCustomCombFilesFromCurrentComb function
+                ocs.OCSReply: OCS reply object from ``writeTargCombFromVnaSweep``
             """
             # Write target comb using found resonators
             rtn1 = self.rfsoc.writeTargCombFromVnaSweep(com_to=com, silent=False)
@@ -1871,7 +1874,7 @@ class R:
             return rtn1
 
         def _write_filtered_comb(com_to, vna_files, save_files, filter_wn):
-            """ """
+            """Filter out fake resonators then write a new target comb using the surviving frequencies."""
             num_drones = len(com_to)
 
             found_nums = num_drones * [None]
@@ -2129,10 +2132,11 @@ class R:
             write_comb (bool, optional): Whether to write a new target sweep comb. Defaults to True if any of ``tone_freqs``, ``tone_powers``, or ``tone_phis`` is specified
 
         Returns:
-            output (arr of floats): Returns an array of the found detector frequencies
+            list[Path | None]: Target sweep file paths used for tuning, one per |drone|.
         """
 
         def _place_min(com_to, com_inds):
+            """Find resonators at |tone| minima via ``primecam_readout`` ``findTargResonators``."""
             # TODO: Group stitch_bw args and run in parallel
             log.log(
                 "INFO", f"Finding resonators from target sweep for drones {com_to}!"
@@ -2154,6 +2158,7 @@ class R:
             return [[]] * len(com_to)
 
         def _place_grad(com_to, com_inds):
+            """Find resonators via maximum |I|/|Q| gradient distance."""
             num_drones = len(com_to)
 
             found_freqs = num_drones * [[]]
@@ -2223,11 +2228,10 @@ class R:
             """
             Internal function for writing target comb using resonators found from target sweep.
 
-            Parameters:
+            Args:
                 com (str) : Drone for which target comb should be written
             Returns:
-                rtn1 : OCS reply object from writeTargCombFromTargSweep function
-                rtn2 : OCS reply object from createCustomCombFilesFromCurrentComb function
+                ocs.OCSReply: OCS reply object from ``writeTargCombFromTargSweep``
             """
             # Write target comb using found resonators
             rtn = self.rfsoc.writeTargCombFromTargSweep(com_to=com, silent=False)
@@ -2413,7 +2417,12 @@ class R:
             self.save_cfg = True
         return targ_files
 
-    def tune_tone_power(self, **kwargs):
+    def tune_tone_power(self, **kwargs) -> None:
+        """Tune |tone| powers (not yet implemented).
+
+        Args:
+            **kwargs: Reserved for future implementation.
+        """
         return None
 
     ################
@@ -2421,17 +2430,15 @@ class R:
     ################
 
     def _save_sweep(self, com_to, sweep, dirs):
-        """
-        Internal function for saving VNA and target sweep files.
+        """Internal function for saving VNA and target sweep files.
 
-        Parameters:
-            com_to (list of str) : List of drones
-            sweep          (str) : Type of sweep: 'vna' or 'targ'
-            dirs   (list of str) : List of file paths where the sweeps should be saved
+        Args:
+            com_to (list[str]): |drone| identifiers to save sweeps for.
+            sweep (str): Type of sweep: ``'vna'`` or ``'targ'``.
+            dirs (list[str]): Per-|drone| directories where sweeps should be saved.
         Returns:
-            files (list of str)  : List of sweep file paths on RFSoC board(s)
-            paths (list of str)  : List of file paths where sweeps were saved
-
+            tuple[list[str], list[str]]: File paths on the |RFSoC| board(s) and
+                paths where the sweeps were saved locally.
         """
 
         # Save sweep(s)
@@ -2521,7 +2528,18 @@ class R:
         return files, paths
 
     def _save_resonators(self, com_to, timestamps, sweep):
+        """Retrieve resonator frequency files from the |RFSoC| and save them locally.
 
+        Args:
+            com_to (list[str]): |drone| identifiers to save resonator files for.
+            timestamps (list[str | int]): Per-|drone| timestamps of the sweep that
+                produced the resonator files.
+            sweep (str): Type of sweep that found the resonators: ``'vna'`` or ``'targ'``.
+        Returns:
+            tuple[list[int | None], list[np.ndarray], list[Path]]: Number of found
+                resonators, their frequency arrays, and the per-|drone| saved config
+                file paths.
+        """
         found_nums = []
         found_freqs = []
         save_files = []
@@ -2603,26 +2621,33 @@ class R:
     #########################
 
     def _write_custom_comb(self, com, rescale_power=True, gen_attempts=5, **kwargs):
-        """
-        Write custom tone power(s), frequency(ies), and/or phase(s) of tones.
-        Parameters:
-            tone_freqs  (float | list of float | str) : Custom tone frequencies
-            tone_powers (float | list of float | str) : Custom tone powers
-            tone_phis   (float | list of float | str) : Custom tone phases
+        """Write custom |tone| frequencies, powers, and/or phases to a |drone|'s comb files.
+
+        Args:
+            com (str): |drone| identifier in ``'Board.Drone'`` form.
+            rescale_power (bool, optional): Whether to rescale powers when the comb
+                exceeds the maximum DAC output. Defaults to ``True``.
+            gen_attempts (int, optional): Number of random phase draws when generating
+                phases. Defaults to 5.
+            **kwargs: Accepts ``tone_freqs`` (``float | list[float] | str``),
+                ``tone_powers`` (``float | list[float] | str``), and ``tone_phis``
+                (``float | list[float] | str``). Pass ``'gen'`` for a value to
+                auto-generate it.
         Returns:
-            tone_freqs  (list of float) : Comb frequencies used in written comb
-            tone_powers (list of float) : Comb tone powers used in written comb
-            tone_phis   (list of float) : Comb phases used in written comb
+            tuple[list[float], list[float], list[float]]: The |tone| frequencies,
+                powers, and phases written to the comb.
         """
 
         import alcove_base
 
         def _arr_to_list(arr):
+            """Convert a NumPy array to a Python list; pass lists through unchanged."""
             if isinstance(arr, np.ndarray):
                 arr = arr.tolist()
             return arr
 
         def _check_comb(key, value):
+            """Validate and clip a comb array; return ``None`` if the values are out of range."""
             # Check if the tone frequencies are within the bandwidth of the RFSoC
             if len(value) > 1024:
                 value = value[:1024]
@@ -2650,6 +2675,7 @@ class R:
             return value
 
         def _reset_comb(ip, ssh_key, comb_dict):
+            """Restore all comb files on the board to their pre-call values and return them."""
             for key, value in comb_dict.items():
                 io.save_array_board(
                     ip,
@@ -2675,6 +2701,7 @@ class R:
             return np.max(np.abs(x.real + 1j * x.imag))
 
         def _write_new_comb(ip, ssh_key, comb_dict, key, comb):
+            """Write a comb array to the board and record it in ``comb_dict``."""
             comb_dict[key]["num_tones"] = len(comb)
             io.save_array_board(
                 ip, ssh_key, comb_dict[key]["path"], _arr_to_list(comb), self.tmp_dir
@@ -2957,20 +2984,21 @@ class R:
         return tone_freqs, tone_powers, tone_phis
 
     def _get_curr_comb(self, com, **kwargs):
-        """
-        Get the current comb of RFSoC drone
+        """Get the current |tone| comb of an |RFSoC| |drone|.
 
-        Parameters:
-            com      (str) : Drone bid.drid
-            c (Connection) : Fabric connection object to RFSoC board
-            load    (bool) : Whether to load the comb files
+        Args:
+            com (str): |drone| identifier in ``'Board.Drone'`` form.
+            **kwargs: Accepts ``c`` (a Fabric ``Connection`` to the board) and
+                ``load`` (``bool``, whether to load the comb arrays; defaults to
+                ``True``).
         Returns:
-            comb_freq (list of float) : Current comb frequencies
-            comb_amp  (list of float) : Current comb tone powers
-            comp_phi  (list of float) : Current comb phases
+            tuple[list[float], list[float], list[float]]: Current comb frequencies,
+                |tone| powers, and phases. When ``load=False``, returns file paths
+                instead of loaded arrays.
         """
 
         def _get_id(file):
+            """Return the trailing ID suffix from a comb file stem."""
             file = Path(file).stem
             return file.split("_")[-1]
 
@@ -3058,13 +3086,13 @@ class R:
 
     # @log.method_timer
     def _save_curr_comb(self, com, name, **kwargs):
-        """
-        Save current comb files to data directory and add their file paths to drone config files.
+        """Save current comb files to the data directory and record their paths in the |drone| config.
 
-        Parameters:
-            com (str)  : Drone to save comb of
-            name (str) : File name to use
-            c (Connection) : Fabric connection object to RFSoC board
+        Args:
+            com (str): |drone| identifier in ``'Board.Drone'`` form.
+            name (str | None): File name prefix to use when saving. Pass ``None``
+                to copy files to the tmp directory without timestamping.
+            **kwargs: Accepts ``c`` (a Fabric ``Connection`` to the board).
         """
         bid, drid = com.split(".")
         ind = self.drone_list.index(com)
@@ -3178,7 +3206,7 @@ class R:
             com_to (str | list[str]): List drones to run ``func`` with
 
         Returns:
-            return (list[any]): List of return values from ``func``
+            list[Any]: List of return values from ``func``
         """
 
         # Parse key word arguments

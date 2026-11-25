@@ -1,20 +1,31 @@
+"""UDP packet capture for |RFSoC| |KID| timestreams.
+
+Defines the ``Streamer`` class, which binds a UDP socket and captures/parses the
+time-ordered |I|/|Q| packets emitted by an |RFSoC| board.
+
+.. codeauthor:: Darshan Patel <dp649@cornell.edu>
+"""
+
 import numpy as np
 import socket
 import time
 
 
 class Streamer:
-    """
-    Class for capturing UDP packets of timestreams taken with a radio frequency system on a chip (RFSoC).
+    """Captures UDP packets of |KID| timestreams from an |RFSoC| board.
+
+    Attributes:
+        timestamp (float): UNIX time at which the ``Streamer`` was created.
+        sock (socket.socket): Bound UDP socket packets are read from.
     """
 
-    def __init__(self, udp_ip, udp_port, timeout=1):
-        """
-        Initialize Streamer object by creating udp_ip, udp_port, and timestamp attributes.
+    def __init__(self, udp_ip: str, udp_port: int, timeout: float = 1) -> None:
+        """Bind a UDP socket for timestream capture.
 
-        Parameters:
-            udp_ip (str): UDP IP address
-            udp_port (int): UPD port
+        Args:
+            udp_ip (str): UDP IP address to bind to.
+            udp_port (int): UDP port to bind to.
+            timeout (float, optional): Socket receive timeout in seconds. Defaults to 1.
         """
         # Save global timestamp attribute
         self.timestamp = time.time()
@@ -30,17 +41,26 @@ class Streamer:
 
         self.sock.settimeout(timeout)
 
-    def capture_packets(self, t_sec, buffer_size=9000, q=None):
-        """
-        Capture N UDP packets from the timestream.
+    def capture_packets(
+        self,
+        t_sec: int,
+        buffer_size: int = 9000,
+        q=None,
+    ) -> tuple[list[bytearray], np.ndarray, np.ndarray] | None:
+        """Capture UDP packets from the timestream.
 
-        Parameters:
-            N (int): Number of packages to capture
-            buffer_size (int): Maximum buffer size of each packet
+        Flushes any stale packets, then either streams packets into ``q`` indefinitely
+        or collects a fixed number of packets and returns them.
+
+        Args:
+            t_sec (int): Number of packets to capture when ``q`` is ``None``.
+            buffer_size (int, optional): Maximum bytes read per packet. Defaults to 9000.
+            q (optional): If given, a queue each captured packet is pushed onto; the
+                call then streams indefinitely and does not return. Defaults to ``None``.
         Returns:
-            packs: Packet data (as a bytearray) of each captured packet
-            ips: Source IP of each captured packet
-            ports: Source port of each captured packet
+            tuple[list[bytearray], np.ndarray, np.ndarray] | None: When ``q`` is
+                ``None``, the captured packet bytearrays, their source IPs, and their
+                source ports. Returns nothing when streaming into ``q``.
         """
         sock = self.sock
 
@@ -74,15 +94,24 @@ class Streamer:
 
             return packs, ips, ports
 
-    def parse_packets(self, packets, timestamp=None, time_diff=None):
-        """
-        Parse the bytearray data contents of UPD packets.
+    def parse_packets(
+        self,
+        packets: list[bytearray],
+        timestamp: float | None = None,
+        time_diff: float | None = None,
+    ) -> tuple[list[np.ndarray], list[list], float]:
+        """Parse the bytearray contents of captured UDP packets.
 
-        Parameters:
-            packets: Array of packet bytearray data
+        Args:
+            packets (list[bytearray]): Raw packet bytearrays to parse.
+            timestamp (float | None, optional): Reference UNIX time used to compute the
+                PTP time offset. Defaults to the ``Streamer`` creation time.
+            time_diff (float | None, optional): Precomputed offset between the packet PTP
+                timestamp and wall-clock time. Defaults to computing it from the first packet.
         Returns:
-            data: Array of timestream I and Q (main data)
-            aux: Array of auxiliary data: packet info, channel count, packet count, and packet PTP timestamp
+            tuple[list[np.ndarray], list[list], float]: The per-packet timestream |I|/|Q|
+                data, the per-packet auxiliary data (packet info, channel count, packet
+                count, PTP timestamp in ns), and the PTP-to-wall-clock time offset.
         """
 
         data, aux = [], []
@@ -118,20 +147,20 @@ class Streamer:
             aux.append([info, chan_count, pack_count, np.int64(1e9 * tstamp)])
         return data, aux, time_diff
 
-    def take_timestream(self, t_sec, offset=10):
-        """
-        Take a timestream of N packets.
+    def take_timestream(
+        self,
+        t_sec: int,
+        offset: int = 10,
+    ) -> tuple[list, list, np.ndarray, np.ndarray]:
+        """Capture and parse a timestream, dropping leading warm-up packets.
 
-        Parameters:
-            N (int): Number of packets to capture
-
+        Args:
+            t_sec (int): Number of packets to capture.
+            offset (int, optional): Number of leading packets to drop. Defaults to 10.
         Returns:
-            I: Timestream I data
-            Q: Timstream Q data
-            aux: Auxiliary data: packet info, channel count, packet count, and packet PTP timestamp
-            ips: Packet source IP addresses
-            ports: Packet sourc ports
-            offset: Number of packets to drop from beginning of timestream
+            tuple[list, list, np.ndarray, np.ndarray]: The timestream data, auxiliary
+                data, source IPs, and source ports, each with the first ``offset``
+                packets removed.
         """
 
         # Capture N packets
@@ -146,15 +175,14 @@ class Streamer:
     # Helper Functions #
     ####################
 
-    def get_utc(self, d, offset=0):
-        """
-        Convert PTP timestamp stored as three 4 byte integers into UTC.
+    def get_utc(self, d: np.ndarray, offset: int = 0) -> float:
+        """Convert a PTP timestamp stored as three 4-byte integers into UTC seconds.
 
-        Parameters:
-            d: Array of three 4 byte integers storing PTP timestamp
-            offset: Offset between TAI and UTC
+        Args:
+            d (np.ndarray): Three 4-byte integers holding the PTP timestamp.
+            offset (int, optional): TAI-to-UTC offset in seconds. Defaults to 0.
         Returns:
-            UTC: PTP timestamp in UTC
+            float: The PTP timestamp in UTC seconds.
         """
         # offset from TAI to UTC is currently -37 seconds
         return (
